@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, time, timedelta
 from functools import cache
@@ -22,7 +23,9 @@ from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
 STATIC_DIR = Path(__file__).parent / "static"
 
 INGRESS_HEADER = b"x-ingress-path"
-INGRESS_PATH_PREFIX = "/api/hassio_ingress/"
+# HA ingress base paths are /api/hassio_ingress/<token>; tokens are URL-safe
+# base64-ish. Everything else (traversal, markup, extra segments) is rejected.
+INGRESS_PATH_PATTERN = re.compile(r"^/api/hassio_ingress/[A-Za-z0-9_-]+$")
 
 # HA ingress proxy plus localhost for the container-internal healthcheck.
 DEFAULT_ALLOWED_CLIENT_IPS = "172.30.32.2,127.0.0.1"
@@ -38,15 +41,11 @@ def _is_valid_ingress_path(value: str) -> bool:
     """Accept only plausible HA ingress base paths.
 
     The value becomes the ASGI root_path and thus ends up in generated URLs,
-    so reject anything that does not look like /api/hassio_ingress/<token>:
-    no scheme separators, no whitespace, no control characters.
+    so accept strictly /api/hassio_ingress/<token> with a URL-safe token —
+    no traversal, no whitespace or control characters, no markup, no
+    additional path segments.
     """
-    if not value.startswith(INGRESS_PATH_PREFIX):
-        return False
-    if "://" in value:
-        return False
-    # ord < 33 covers space and ASCII control characters, 127 is DEL.
-    return all(32 < ord(char) != 127 for char in value)
+    return INGRESS_PATH_PATTERN.fullmatch(value) is not None
 
 
 class ClientIPAllowlistMiddleware:
@@ -100,10 +99,12 @@ class IngressPathMiddleware:
                         path = scope.get("path", "")
                         if not path.startswith(ingress_path):
                             scope["path"] = ingress_path + path
-                        raw_path = scope.get("raw_path")
-                        ingress_raw = ingress_path.encode("latin-1")
-                        if raw_path is not None and not raw_path.startswith(ingress_raw):
-                            scope["raw_path"] = ingress_raw + raw_path
+                            # raw_path mirrors path and must stay consistent
+                            # with it, so it is prefixed exactly when path
+                            # was prefixed — never based on its own content.
+                            raw_path = scope.get("raw_path")
+                            if raw_path is not None:
+                                scope["raw_path"] = ingress_path.encode("latin-1") + raw_path
                     break
         await self.app(scope, receive, send)
 

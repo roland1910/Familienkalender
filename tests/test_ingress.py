@@ -126,6 +126,15 @@ async def test_valid_ingress_header_is_accepted() -> None:
         "/api/hassio_ingress/token\twith-tab",
         "/api/hassio_ingress/token with-space",
         "",
+        # Tokens are [A-Za-z0-9_-]+ only: no traversal, markup or separators.
+        "/api/hassio_ingress/../secret",
+        "/api/hassio_ingress/tok<en",
+        '/api/hassio_ingress/tok"en',
+        "/api/hassio_ingress/token/extra",
+        "/api/hassio_ingress/token/",
+        "/api/hassio_ingress/",
+        "/api/hassio_ingress/tok%2Fen",
+        "/api/hassio_ingress/tok.en",
     ],
 )
 async def test_invalid_ingress_header_is_ignored(header_value: str) -> None:
