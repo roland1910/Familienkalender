@@ -1,0 +1,1 @@
+"""Familienkalender add-on backend."""

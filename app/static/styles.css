@@ -1,0 +1,42 @@
+/* Placeholder styling for the first ingress page (German UI). */
+
+:root {
+  --bg: #f5f3ef;
+  --fg: #2b2b2b;
+  --accent: #c2564b;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.hero {
+  text-align: center;
+  padding: 2rem;
+}
+
+.hero h1 {
+  font-size: 2.5rem;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+}
+
+.hero p {
+  font-size: 1.15rem;
+  line-height: 1.5;
+}
+
+.status {
+  margin-top: 1.5rem;
+  opacity: 0.7;
+}
