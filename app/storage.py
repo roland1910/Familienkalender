@@ -174,6 +174,62 @@ class Storage:
             rows = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
         return [_row_to_source(row) for row in rows]
 
+    def get_source(self, source_id: int) -> Source | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+        return _row_to_source(row) if row else None
+
+    def update_source(
+        self,
+        source_id: int,
+        *,
+        name: str | None = None,
+        config: dict | None = None,
+        enabled: bool | None = None,
+        display_mode: str | None = None,
+    ) -> bool:
+        """Partially update a source; returns False if it does not exist."""
+        if display_mode is not None and display_mode not in DISPLAY_MODES:
+            raise ValueError(f"unknown display mode: {display_mode!r}")
+        assignments: list[str] = []
+        values: list = []
+        if name is not None:
+            assignments.append("name = ?")
+            values.append(name)
+        if config is not None:
+            assignments.append("config = ?")
+            values.append(json.dumps(config))
+        if enabled is not None:
+            assignments.append("enabled = ?")
+            values.append(int(enabled))
+        if display_mode is not None:
+            assignments.append("display_mode = ?")
+            values.append(display_mode)
+        if not assignments:
+            return self.get_source(source_id) is not None
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE sources SET {', '.join(assignments)} WHERE id = ?",
+                (*values, source_id),
+            )
+            return cursor.rowcount > 0
+
+    def delete_source(self, source_id: int) -> bool:
+        """Delete a source and (via FK cascade) all its events."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+            return cursor.rowcount > 0
+
+    def count_events_by_source(self) -> dict[int, int]:
+        """Stored event count per source id (0 for sources without events)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT s.id AS id, COUNT(e.id) AS n"
+                " FROM sources s LEFT JOIN events e ON e.source_id = s.id"
+                " GROUP BY s.id"
+            ).fetchall()
+        return {row["id"]: row["n"] for row in rows}
+
     def update_sync_status(
         self, source_id: int, *, synced_at: datetime, error: str | None
     ) -> None:

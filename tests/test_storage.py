@@ -111,6 +111,74 @@ class TestSources:
         assert source.last_sync_error == "HTTP 500"
 
 
+class TestSourceCrud:
+    def test_get_source_returns_the_source(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="google", name="Marina", config={"a": 1})
+        source = storage.get_source(source_id)
+        assert source is not None
+        assert source.name == "Marina"
+        assert source.config == {"a": 1}
+
+    def test_get_missing_source_returns_none(self, tmp_path: Path) -> None:
+        assert make_storage(tmp_path).get_source(99) is None
+
+    def test_update_source_changes_only_given_fields(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={"url": "https://a"}, display_mode="filtered"
+        )
+        assert storage.update_source(source_id, name="Firma neu", enabled=False) is True
+        source = storage.get_source(source_id)
+        assert source.name == "Firma neu"
+        assert source.enabled is False
+        assert source.display_mode == "filtered"
+        assert source.config == {"url": "https://a"}
+
+    def test_update_source_config_and_display_mode(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        storage.update_source(source_id, config={"url": "https://b"}, display_mode="filtered")
+        source = storage.get_source(source_id)
+        assert source.config == {"url": "https://b"}
+        assert source.display_mode == "filtered"
+
+    def test_update_source_rejects_invalid_display_mode(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        with pytest.raises(ValueError):
+            storage.update_source(source_id, display_mode="partial")
+
+    def test_update_missing_source_returns_false(self, tmp_path: Path) -> None:
+        assert make_storage(tmp_path).update_source(99, name="X") is False
+
+    def test_delete_source_removes_source_and_events(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="google", name="Marina", config={})
+        storage.sync_events(
+            source_id, [timed_event()], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        assert storage.delete_source(source_id) is True
+        assert storage.list_sources() == []
+        assert storage.get_events(WINDOW_START, WINDOW_END) == []
+
+    def test_delete_missing_source_returns_false(self, tmp_path: Path) -> None:
+        assert make_storage(tmp_path).delete_source(99) is False
+
+    def test_count_events_by_source(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        first = storage.add_source(type="google", name="Marina", config={})
+        second = storage.add_source(type="caldav", name="Firma", config={})
+        storage.sync_events(
+            first,
+            [timed_event(uid="a"), timed_event(uid="b")],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        assert storage.count_events_by_source() == {first: 2, second: 0}
+
+
 class TestEvents:
     def test_sync_events_inserts_and_reads_back(self, tmp_path: Path) -> None:
         storage = make_storage(tmp_path)
