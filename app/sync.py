@@ -10,6 +10,7 @@ import logging
 from datetime import UTC, datetime, time, timedelta
 
 from app.models import LOCAL_TZ, Source
+from app.sanitize import sanitize_error
 from app.sources import caldav, google
 from app.storage import Storage
 
@@ -77,9 +78,10 @@ async def _sync_all_locked(
             storage.update_sync_status(source.id, synced_at=synced_at, error=None)
             results[source.id] = None
         except Exception as exc:
-            logger.warning("Sync failed for source %s (%s): %s", source.id, source.name, exc)
-            storage.update_sync_status(source.id, synced_at=synced_at, error=str(exc))
-            results[source.id] = str(exc)
+            error = sanitize_error(str(exc))
+            logger.warning("Sync failed for source %s (%s): %s", source.id, source.name, error)
+            storage.update_sync_status(source.id, synced_at=synced_at, error=error)
+            results[source.id] = error
     return results
 
 

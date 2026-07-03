@@ -157,6 +157,35 @@ class TestSyncAll:
 
 
 @pytest.mark.anyio
+class TestErrorSanitizing:
+    async def test_credentials_in_error_reach_neither_db_nor_log(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+
+        async def leaking_fetch(*args, **kwargs):
+            raise RuntimeError(
+                "REPORT https://roland:super-geheim@cloud.example.com/dav/ failed"
+            )
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", leaking_fetch)
+
+        with caplog.at_level("WARNING", logger="app.sync"):
+            results = await sync_all(storage, now=FIXED_NOW)
+
+        stored_error = storage.list_sources()[0].last_sync_error
+        assert stored_error is not None
+        assert "super-geheim" not in stored_error
+        assert "cloud.example.com" in stored_error
+        assert all("super-geheim" not in r.getMessage() for r in caplog.records)
+        assert all("super-geheim" not in error for error in results.values() if error)
+
+
+@pytest.mark.anyio
 class TestSyncLock:
     async def test_sync_all_holds_the_module_lock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
