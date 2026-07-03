@@ -1,6 +1,10 @@
 # Secrets — niemals committen
 secrets.local.json
 *.token.json
+.env
+*.pem
+*.key
+client_secret*.json
 
 # Python
 __pycache__/
