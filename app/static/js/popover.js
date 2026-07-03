@@ -34,9 +34,10 @@ export function openDayPopover(day, events) {
   for (const event of events) {
     const item = el("li", "popover-item");
     item.style.setProperty("--source-color", colorForSource(event.source_id));
-    const time = spansFullDays(event) || !isSameDay(event.startDay, day)
-      ? "ganztägig"
-      : `${formatTime(event.start)}–${formatTime(event.end)}`;
+    const time =
+      spansFullDays(event) || !isSameDay(event.startDay, day)
+        ? "ganztägig"
+        : `${formatTime(event.start)}–${formatTime(event.end)}`;
     item.append(el("span", "popover-time", time));
     const text = el("span", "popover-text");
     text.append(el("span", "popover-event-title", event.title));

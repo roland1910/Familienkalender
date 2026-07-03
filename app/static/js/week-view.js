@@ -41,7 +41,7 @@ function assignLanes(bars) {
   return laneEnds.length;
 }
 
-function buildAllDaySection(events, start, end) {
+function buildAllDaySection(events, start) {
   const section = el("div", "week-allday");
   const bars = events
     .filter(spansFullDays)
@@ -150,10 +150,10 @@ function buildHeader(start, today) {
 }
 
 export function renderWeekView(container, anchor, events, today) {
-  const { start, end } = weekRange(anchor);
+  const { start } = weekRange(anchor);
   const view = el("div", "week-view");
   view.append(buildHeader(start, today));
-  view.append(buildAllDaySection(events, start, end));
+  view.append(buildAllDaySection(events, start));
 
   const scroll = el("div", "week-scroll");
   const grid = el("div", "week-grid");
@@ -178,10 +178,7 @@ export function renderWeekView(container, anchor, events, today) {
   for (let index = 0; index < 7; index += 1) {
     const day = addDays(start, index);
     const dayEvents = events.filter(
-      (event) =>
-        !spansFullDays(event) &&
-        event.startDay <= day &&
-        event.endDayInclusive >= day,
+      (event) => !spansFullDays(event) && event.startDay <= day && event.endDayInclusive >= day,
     );
     grid.append(buildDayColumn(day, dayEvents, today));
   }

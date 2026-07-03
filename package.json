@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "description": "Dev-Tooling für das Frontend (JS-Lint). Kein Build-Schritt — die ES-Module in app/static/js laufen direkt im Browser.",
+  "scripts": {
+    "lint": "biome check app/static"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.2"
+  }
+}

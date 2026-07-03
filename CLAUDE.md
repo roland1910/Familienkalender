@@ -38,5 +38,15 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 
 ## Kommandos
 
-- Tests: `pytest`
-- Lint: `ruff check .`
+- Tests (Unit, schnell): `pytest`
+- E2E-Tests (Browser, Playwright): `pytest -m e2e` — einmalig vorher `python -m playwright install chromium`
+- Integrationstests: `pytest -m integration` (brauchen `secrets.local.json`)
+- Lint Backend: `ruff check .`
+- Lint Frontend: `npm run lint` (Biome; einmalig vorher `npm install`)
+- Demo-Daten für lokale Entwicklung: `python scripts/seed_demo.py` (legt Quellen + Events in DATA_DIR bzw. `./data` an)
+
+## Frontend
+
+- Vanilla-ES-Module in `app/static/js/` (api, state, dates, events, colors, dom, popover, month-view, week-view, gestures, main), CSS in `app/static/css/`. **Kein Build-Schritt** — die Module laufen direkt im Browser.
+- JS-Lint/-Format: **Biome** (einzelne Dev-Dependency in `package.json`, `biome.json` als Konfiguration). `npx biome check --write app/static` formatiert.
+- Alle URLs im Frontend sind relativ (Ingress!). Fremde Strings (Titel, Ort) ausschließlich via `textContent` — abgesichert durch `tests/test_frontend_static.py` (verbietet HTML-Injection-Sinks) und den XSS-E2E-Test.

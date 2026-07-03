@@ -56,9 +56,8 @@ export function groupEventsByDay(events, rangeStart, rangeEndInclusive) {
   const byDay = new Map();
   for (const event of events) {
     const firstDay = event.startDay < rangeStart ? rangeStart : event.startDay;
-    const lastDay = event.endDayInclusive > rangeEndInclusive
-      ? rangeEndInclusive
-      : event.endDayInclusive;
+    const lastDay =
+      event.endDayInclusive > rangeEndInclusive ? rangeEndInclusive : event.endDayInclusive;
     for (let day = firstDay; day <= lastDay; day = addDays(day, 1)) {
       const key = toISODate(day);
       if (!byDay.has(key)) byDay.set(key, []);

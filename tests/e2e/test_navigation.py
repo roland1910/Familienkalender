@@ -8,8 +8,8 @@ from playwright.sync_api import Page, expect
 
 from tests.e2e.helpers import (
     goto_calendar,
-    month_title,
     monday_of_week,
+    month_title,
     swipe_horizontally,
 )
 
