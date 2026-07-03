@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings — CRLF breaks the shebang inside the
+# Linux container when the working tree is synced to the Pi.
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
