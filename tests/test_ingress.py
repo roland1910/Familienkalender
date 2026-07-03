@@ -132,6 +132,18 @@ async def test_ingress_header_with_newline_is_rejected_or_ignored() -> None:
     assert captured["root_path"] == ""
 
 
+def test_unknown_path_behind_ingress_returns_404_without_redirect() -> None:
+    response = client.get("/does-not-exist", headers={"X-Ingress-Path": INGRESS_PATH})
+    assert response.status_code == 404
+    assert "location" not in response.headers
+
+
+def test_unknown_static_file_behind_ingress_returns_404_without_redirect() -> None:
+    response = client.get("/static/missing.css", headers={"X-Ingress-Path": INGRESS_PATH})
+    assert response.status_code == 404
+    assert "location" not in response.headers
+
+
 def test_invalid_ingress_header_does_not_crash_the_app() -> None:
     response = client.get("/", headers={"X-Ingress-Path": "https://evil.example"})
     assert response.status_code == 200
