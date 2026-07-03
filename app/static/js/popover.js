@@ -5,6 +5,10 @@ import { formatDayMonth, formatTime, isSameDay, WEEKDAY_NAMES_SHORT } from "./da
 import { el } from "./dom.js";
 import { spansFullDays } from "./events.js";
 
+// Cap against event floods from foreign calendars; everything beyond this
+// collapses into one "… und N weitere" line.
+const MAX_POPOVER_ITEMS = 100;
+
 function backdrop() {
   return document.getElementById("day-popover");
 }
@@ -31,7 +35,8 @@ export function openDayPopover(day, events) {
   panel.append(header);
 
   const list = el("ul", "popover-list");
-  for (const event of events) {
+  const shown = events.slice(0, MAX_POPOVER_ITEMS);
+  for (const event of shown) {
     const item = el("li", "popover-item");
     item.style.setProperty("--source-color", colorForSource(event.source_id));
     const time =
@@ -46,6 +51,10 @@ export function openDayPopover(day, events) {
     }
     item.append(text);
     list.append(item);
+  }
+  if (events.length > shown.length) {
+    // el() renders via textContent — no HTML sink even for hostile counts.
+    list.append(el("li", "popover-more", `… und ${events.length - shown.length} weitere`));
   }
   panel.append(list);
   node.append(panel);

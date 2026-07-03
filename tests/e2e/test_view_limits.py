@@ -116,3 +116,22 @@ def test_week_timed_events_per_day_are_capped_with_hint(page: Page, server_url: 
     popover = page.locator("#day-popover")
     expect(popover).to_be_visible()
     expect(popover).to_contain_text("Zeit-Termin 35")
+
+
+def test_day_popover_list_is_capped_at_100_entries(page: Page, server_url: str) -> None:
+    """The popover renders at most 100 entries plus an '… und N weitere' line."""
+    monday = _monday()
+    events = [
+        _timed_event(f"flood-{index}", f"Flut-Termin {index}", monday, 6, index % 60)
+        for index in range(1, 151)  # 150 events on one day
+    ]
+    _serve_events(page, events)
+    page.goto(server_url)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
+
+    cell = page.locator(f'.day-cell[data-date="{monday.isoformat()}"]')
+    cell.locator(".more-button").click()
+    popover = page.locator("#day-popover")
+    expect(popover).to_be_visible()
+    expect(popover.locator(".popover-item")).to_have_count(100)
+    expect(popover.locator(".popover-more")).to_have_text("… und 50 weitere")

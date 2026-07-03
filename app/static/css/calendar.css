@@ -321,6 +321,11 @@ body {
   border-radius: 6px;
 }
 
+.popover-more {
+  padding: 6px 10px;
+  color: var(--text-muted);
+}
+
 .popover-time {
   flex: none;
   width: 110px;
