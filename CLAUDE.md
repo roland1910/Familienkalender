@@ -26,7 +26,7 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 1. **TDD:** Erst Test schreiben, dann implementieren. Keine Etappe ist fertig ohne grüne Tests (`pytest`).
 2. **Commits:** Jeder abgeschlossene Schritt wird **einzeln committet und gepusht** — direkt auf `main` (`git@github.com:roland1910/Familienkalender.git`).
 3. **Quality-Gate:** `ruff check` (und Frontend-Lint, sobald vorhanden) muss vor jedem Commit sauber sein. Code gut lesbar und wartbar halten; nach jedem größeren Arbeitspaket läuft ein separater Quality-Review-Agent.
-4. **Security:** Keine Secrets im Repo, in Commits oder im Chat. Credentials kommen zur Laufzeit aus der Admin-UI/HA-Optionen; für lokale Entwicklung aus `secrets.local.json` (gitignored). Security-Review bei jedem Meilenstein, der Credentials, Netzwerk oder Nutzereingaben berührt.
+4. **Security:** Keine Secrets im Repo, in Commits oder im Chat. Credentials kommen zur Laufzeit aus der Admin-UI/HA-Optionen; für lokale Entwicklung aus `secrets.local.json` (gitignored). Security-Review bei jedem Meilenstein, der Credentials, Netzwerk oder Nutzereingaben berührt. **Frontend/Stored-XSS:** Event-Titel und -Location stammen aus fremden Kalendern/Einladungen — sie werden im Frontend ausschließlich via `textContent` gerendert, niemals via `innerHTML`.
 5. **Sprache:** UI-Texte und Nutzer-Doku Deutsch; Code, Bezeichner und Kommentare Englisch.
 6. **Deployment** auf den Pi macht ausschließlich der Orchestrator (Hauptsession), nicht Implementierungs-Agenten. Erprobte Prozedur:
    ```
