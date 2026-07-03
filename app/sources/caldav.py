@@ -22,6 +22,7 @@ import icalendar
 import recurring_ical_events
 
 from app.models import LOCAL_TZ, CalendarEvent
+from app.sources import limits
 
 DAV_NS = "DAV:"
 CALDAV_NS = "urn:ietf:params:xml:ns:caldav"
@@ -122,17 +123,18 @@ async def fetch_events(
     if client is None:
         async with httpx.AsyncClient(timeout=30) as own_client:
             return await fetch_events(config, window_start, window_end, client=own_client)
-    response = await client.request(
+    request = client.build_request(
         "REPORT",
         config["calendar_url"],
         content=body.encode(),
         headers={"Depth": "1", "Content-Type": "application/xml; charset=utf-8"},
-        auth=_auth(config),
     )
+    response, content = await limits.send_limited(client, request, auth=_auth(config))
     response.raise_for_status()
     events: list[CalendarEvent] = []
-    for ics_text in _calendar_data_texts(response.content):
+    for ics_text in _calendar_data_texts(content):
         events.extend(_extract_events(ics_text, window_start, window_end))
+        limits.check_event_count(len(events))
     return events
 
 
@@ -159,15 +161,15 @@ async def list_calendars(
         async with httpx.AsyncClient(timeout=30) as own_client:
             return await list_calendars(config, client=own_client)
     home_url = _calendar_home_url(config)
-    response = await client.request(
+    request = client.build_request(
         "PROPFIND",
         home_url,
         content=_PROPFIND_CALENDARS.encode(),
         headers={"Depth": "1", "Content-Type": "application/xml; charset=utf-8"},
-        auth=_auth(config),
     )
+    response, content = await limits.send_limited(client, request, auth=_auth(config))
     response.raise_for_status()
-    root = ET.fromstring(response.content)
+    root = ET.fromstring(content)
     calendars = []
     for response_el in root.iter(f"{{{DAV_NS}}}response"):
         prop = response_el.find(f"{{{DAV_NS}}}propstat/{{{DAV_NS}}}prop")

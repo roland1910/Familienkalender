@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app.sources.google import fetch_events, load_tokens, save_tokens, token_path
+from app.sources import limits
+from app.sources.google import MAX_PAGES, fetch_events, load_tokens, save_tokens, token_path
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -176,6 +177,56 @@ class TestFetchEvents:
 
         assert {event.uid for event in events} == {"evt-timed", "evt-allday"}
         assert dict(captured[1].url.params)["pageToken"] == "page-2"
+
+
+@pytest.mark.anyio
+class TestFetchLimits:
+    async def test_pagination_is_capped(self, tmp_path: Path) -> None:
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(200, json={"items": [], "nextPageToken": "more"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(limits.SyncLimitExceededError, match=str(MAX_PAGES)):
+                await fetch_events(
+                    CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+                )
+        assert len(captured) == MAX_PAGES
+
+    async def test_declared_content_length_over_limit_aborts(self, tmp_path: Path) -> None:
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"Content-Length": str(limits.MAX_RESPONSE_BYTES + 1)},
+                content=b"",
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(limits.SyncLimitExceededError):
+                await fetch_events(
+                    CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+                )
+
+    async def test_event_cap_aborts_with_clear_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("app.sources.limits.MAX_EVENTS_PER_SOURCE", 1)
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        captured: list[httpx.Request] = []
+        pages = [{"items": [TIMED_ITEM, ALL_DAY_ITEM]}]
+        async with make_client(captured, pages=pages) as client:
+            with pytest.raises(limits.SyncLimitExceededError, match="1"):
+                await fetch_events(
+                    CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+                )
 
 
 @pytest.mark.anyio

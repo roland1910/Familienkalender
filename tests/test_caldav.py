@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
+from app.sources import limits
 from app.sources.caldav import fetch_events, list_calendars
 
 FIXTURES = Path(__file__).parent / "fixtures" / "caldav"
@@ -155,6 +156,58 @@ class TestFetchEvents:
         async with make_client("kaputt", captured, status_code=500) as client:
             with pytest.raises(httpx.HTTPStatusError):
                 await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+
+@pytest.mark.anyio
+class TestFetchLimits:
+    async def test_declared_content_length_over_limit_aborts(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                207,
+                headers={"Content-Length": str(limits.MAX_RESPONSE_BYTES + 1)},
+                content=b"",
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(limits.SyncLimitExceededError, match="10"):
+                await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+    async def test_streamed_body_over_limit_aborts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("app.sources.limits.MAX_RESPONSE_BYTES", 1024)
+
+        class ChunkStream(httpx.AsyncByteStream):
+            """Chunked body without a Content-Length header."""
+
+            async def __aiter__(self):
+                for _ in range(8):
+                    yield b"X" * 512
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(207, stream=ChunkStream())
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(limits.SyncLimitExceededError):
+                await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+    async def test_occurrence_cap_aborts_with_clear_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # recurring.ics expands to 4 occurrences inside the window.
+        monkeypatch.setattr("app.sources.limits.MAX_EVENTS_PER_SOURCE", 3)
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(fixture("recurring.ics"))
+        async with make_client(xml, captured) as client:
+            with pytest.raises(limits.SyncLimitExceededError, match="3"):
+                await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+    async def test_events_below_caps_are_unaffected(self) -> None:
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(fixture("simple.ics"))
+        async with make_client(xml, captured) as client:
+            events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+        assert len(events) == 1
 
 
 PROPFIND_MULTISTATUS = """<?xml version="1.0"?>

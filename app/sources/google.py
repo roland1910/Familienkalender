@@ -24,6 +24,7 @@ from urllib.parse import quote
 import httpx
 
 from app.models import CalendarEvent
+from app.sources import limits
 from app.storage import resolve_data_dir
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -31,6 +32,11 @@ EVENTS_URL_TEMPLATE = "https://www.googleapis.com/calendar/v3/calendars/{calenda
 
 # Refresh slightly early so a token never expires mid-request.
 _EXPIRY_MARGIN = timedelta(seconds=60)
+
+# 20 pages x 2500 maxResults = 50000 items — far beyond any family
+# calendar (realistically < 2000 events in the sync window). More pages
+# mean a broken or hostile server keeping us in the pagination loop.
+MAX_PAGES = 20
 
 
 def token_path(source_id: int) -> Path:
@@ -108,7 +114,7 @@ async def _list_events_page(
     window_end: datetime,
     page_token: str | None,
     client: httpx.AsyncClient,
-) -> httpx.Response:
+) -> tuple[httpx.Response, bytes]:
     params: dict[str, str] = {
         "singleEvents": "true",
         "timeMin": window_start.astimezone(UTC).isoformat(),
@@ -118,9 +124,10 @@ async def _list_events_page(
     if page_token:
         params["pageToken"] = page_token
     url = EVENTS_URL_TEMPLATE.format(calendar_id=quote(calendar_id, safe=""))
-    return await client.get(
-        url, params=params, headers={"Authorization": f"Bearer {access_token}"}
+    request = client.build_request(
+        "GET", url, params=params, headers={"Authorization": f"Bearer {access_token}"}
     )
+    return await limits.send_limited(client, request)
 
 
 async def fetch_events(
@@ -151,8 +158,14 @@ async def fetch_events(
     events: list[CalendarEvent] = []
     page_token: str | None = None
     refreshed_after_401 = False
+    pages_fetched = 0
     while True:
-        response = await _list_events_page(
+        if pages_fetched >= MAX_PAGES:
+            raise limits.SyncLimitExceededError(
+                f"Google-Kalender liefert mehr als {MAX_PAGES} Ergebnisseiten"
+                " — Abbruch (Schutzlimit)"
+            )
+        response, body = await _list_events_page(
             calendar_id, tokens["access_token"], window_start, window_end, page_token, client
         )
         if response.status_code == 401 and not refreshed_after_401:
@@ -160,12 +173,14 @@ async def fetch_events(
             tokens = await _refresh_access_token(tokens, token_file, client)
             continue
         response.raise_for_status()
-        payload = response.json()
+        pages_fetched += 1
+        payload = json.loads(body)
         events.extend(
             _item_to_event(item)
             for item in payload.get("items", [])
             if item.get("status") != "cancelled"
         )
+        limits.check_event_count(len(events))
         page_token = payload.get("nextPageToken")
         if not page_token:
             return events
