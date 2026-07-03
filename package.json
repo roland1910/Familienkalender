@@ -1,8 +1,10 @@
 {
   "private": true,
-  "description": "Dev-Tooling für das Frontend (JS-Lint). Kein Build-Schritt — die ES-Module in app/static/js laufen direkt im Browser.",
+  "description": "Dev-Tooling für das Frontend (JS-Lint und -Tests). Kein Build-Schritt — die ES-Module in app/static/js laufen direkt im Browser.",
+  "type": "module",
   "scripts": {
-    "lint": "biome check app/static"
+    "lint": "biome check app/static",
+    "test:js": "node --test \"tests/js/**/*.test.mjs\""
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2"

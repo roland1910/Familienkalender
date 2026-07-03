@@ -43,6 +43,7 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 - Integrationstests: `pytest -m integration` (brauchen `secrets.local.json`)
 - Lint Backend: `ruff check .`
 - Lint Frontend: `npm run lint` (Biome; einmalig vorher `npm install`)
+- JS-Unit-Tests: `npm run test:js` (node --test gegen die ES-Module, Tests in `tests/js/`)
 - Demo-Daten für lokale Entwicklung: `python scripts/seed_demo.py` (legt Quellen + Events in DATA_DIR bzw. `./data` an)
 
 ## Frontend
