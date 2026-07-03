@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 
 from app.models import CalendarEvent
@@ -134,6 +135,35 @@ class TestSyncAll:
         assert sources[broken_id].last_sync_error == "Server unreachable"
         assert sources[ok_id].last_sync_error is None
         # The healthy source's events were stored despite the broken one.
+        window = sync_window(FIXED_NOW)
+        assert [item.event.uid for item in storage.get_events(*window)] == ["from-google"]
+
+    async def test_network_timeout_is_isolated_like_any_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Real httpx exception type: error isolation must also hold for
+        # network-level failures, not only for plain RuntimeErrors.
+        storage = Storage(tmp_path / "test.db")
+        timeout_id = storage.add_source(type="caldav", name="Firma", config={})
+        ok_id = storage.add_source(
+            type="google", name="Marina", config={"calendar_id": "m@example.com"}
+        )
+
+        async def timeout_fetch(*args, **kwargs):
+            raise httpx.ConnectTimeout("Connection to cloud.example.com timed out")
+
+        async def ok_fetch(config, window_start, window_end, *, token_file, client=None):
+            return [make_event(uid="from-google")]
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", timeout_fetch)
+        monkeypatch.setattr("app.sources.google.fetch_events", ok_fetch)
+
+        results = await sync_all(storage, now=FIXED_NOW)
+
+        assert "timed out" in (results[timeout_id] or "")
+        assert results[ok_id] is None
+        sources = {source.id: source for source in storage.list_sources()}
+        assert "timed out" in (sources[timeout_id].last_sync_error or "")
         window = sync_window(FIXED_NOW)
         assert [item.event.uid for item in storage.get_events(*window)] == ["from-google"]
 

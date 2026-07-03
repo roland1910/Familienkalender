@@ -231,6 +231,31 @@ class TestEvents:
         stored = storage.get_events(WINDOW_START, wide_end)
         assert [item.event.uid for item in stored] == ["outside"]
 
+    def test_event_moved_to_new_start_replaces_old_instance(self, tmp_path: Path) -> None:
+        # Moving an event changes its start — part of the upsert key
+        # (source_id, uid, start). The old row must be deleted, not kept
+        # alongside the new one as a duplicate.
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        original = timed_event(
+            uid="moved",
+            start=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+            end=datetime(2026, 7, 10, 9, 0, tzinfo=UTC),
+        )
+        storage.sync_events(source_id, [original], WINDOW_START, WINDOW_END, synced_at=NOW)
+
+        moved = timed_event(
+            uid="moved",
+            start=datetime(2026, 7, 11, 14, 0, tzinfo=UTC),
+            end=datetime(2026, 7, 11, 15, 0, tzinfo=UTC),
+        )
+        storage.sync_events(source_id, [moved], WINDOW_START, WINDOW_END, synced_at=NOW)
+
+        stored = storage.get_events(WINDOW_START, WINDOW_END)
+        assert len(stored) == 1
+        assert stored[0].event.uid == "moved"
+        assert stored[0].event.start == datetime(2026, 7, 11, 14, 0, tzinfo=UTC)
+
     def test_events_are_sorted_by_start(self, tmp_path: Path) -> None:
         storage = make_storage(tmp_path)
         source_id = storage.add_source(type="caldav", name="Firma", config={})
