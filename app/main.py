@@ -15,8 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import sync as sync_module
-from app.filtering import DEFAULT_EVENING_BOUNDARY, filter_events
+from app.filtering import filter_events
 from app.models import LOCAL_TZ, StoredEvent
+from app.settings import get_evening_boundary
 from app.storage import Storage, default_db_path
 from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
 
@@ -123,21 +124,6 @@ def get_storage() -> Storage:
     return _storage_for(default_db_path())
 
 
-def _evening_boundary() -> time:
-    """Evening boundary for the family filter (env EVENING_BOUNDARY, HH:MM).
-
-    Becomes an admin UI setting later; until then the env var keeps it
-    configurable without a rebuild.
-    """
-    raw = os.environ.get("EVENING_BOUNDARY", "")
-    if raw:
-        try:
-            return time.fromisoformat(raw)
-        except ValueError:
-            pass
-    return DEFAULT_EVENING_BOUNDARY
-
-
 def _sync_interval_seconds() -> float:
     raw = os.environ.get("SYNC_INTERVAL_SECONDS", "")
     try:
@@ -213,7 +199,7 @@ async def list_events(
         raise HTTPException(status_code=400, detail="'from' muss vor 'to' liegen")
     range_start = datetime.combine(from_date, time.min, tzinfo=LOCAL_TZ)
     range_end = datetime.combine(to_date + timedelta(days=1), time.min, tzinfo=LOCAL_TZ)
-    boundary = _evening_boundary()
+    boundary = get_evening_boundary(get_storage())
     # filter_events is the single place deciding what display_mode means;
     # it is called per event because each StoredEvent carries its own mode.
     events = [

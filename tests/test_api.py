@@ -188,6 +188,22 @@ class TestEventsEndpoint:
         assert "firma-evening" not in uids
         assert "marina-morning" in uids
 
+    def test_evening_boundary_setting_wins_over_env(
+        self,
+        client: TestClient,
+        storage: Storage,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seed_two_sources(storage)
+        # Env would keep the 16:00-18:00 Kundentermin; the persisted admin
+        # setting (18:30) takes precedence and hides it.
+        monkeypatch.setenv("EVENING_BOUNDARY", "15:00")
+        storage.set_setting("evening_boundary", "18:30")
+        response = client.get("/api/events?from=2026-07-10&to=2026-07-10")
+        uids = [event["uid"] for event in response.json()["events"]]
+        assert "firma-evening" not in uids
+        assert "marina-morning" in uids
+
 
 class TestSyncEndpoint:
     def test_returns_409_while_a_sync_is_running(

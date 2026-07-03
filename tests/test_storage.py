@@ -269,6 +269,36 @@ class TestEvents:
         assert [item.event.uid for item in stored] == ["early", "late"]
 
 
+class TestSettings:
+    def test_missing_setting_returns_none(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        assert storage.get_setting("evening_boundary") is None
+
+    def test_set_and_get_roundtrip(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_setting("evening_boundary", "18:30")
+        assert storage.get_setting("evening_boundary") == "18:30"
+
+    def test_set_overwrites_existing_value(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_setting("evening_boundary", "18:30")
+        storage.set_setting("evening_boundary", "17:00")
+        assert storage.get_setting("evening_boundary") == "17:00"
+
+    def test_settings_survive_reopening(self, tmp_path: Path) -> None:
+        make_storage(tmp_path).set_setting("google_client_id", "abc.apps")
+        assert make_storage(tmp_path).get_setting("google_client_id") == "abc.apps"
+
+    def test_delete_setting(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_setting("evening_boundary", "18:30")
+        storage.delete_setting("evening_boundary")
+        assert storage.get_setting("evening_boundary") is None
+
+    def test_delete_missing_setting_is_a_noop(self, tmp_path: Path) -> None:
+        make_storage(tmp_path).delete_setting("nope")
+
+
 class TestConnectionSettings:
     def test_connections_use_busy_timeout(self, tmp_path: Path) -> None:
         # Concurrent writers (periodic sync vs. manual sync/API) must wait
