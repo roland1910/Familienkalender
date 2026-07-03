@@ -20,7 +20,13 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Integration tests need secrets.local.json and a reachable server; they are
+# excluded by default and run explicitly via `pytest -m integration`
+# (a -m option on the command line overrides the one from addopts).
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: Tests gegen echte externe Dienste (brauchen secrets.local.json)",
+]
 # Make the repo root importable regardless of how pytest is invoked
 # (python -m pytest vs. the pytest entry point).
 pythonpath = ["."]
