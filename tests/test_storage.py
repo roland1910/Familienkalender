@@ -1,5 +1,7 @@
 """Tests for the SQLite storage layer (sources and events)."""
 
+import os
+import stat
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -46,6 +48,31 @@ def all_day_event(uid: str = "uid-allday", days: int = 1) -> CalendarEvent:
 WINDOW_START = datetime(2026, 7, 1, tzinfo=UTC)
 WINDOW_END = datetime(2026, 10, 1, tzinfo=UTC)
 NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
+
+
+class TestDbFilePermissions:
+    def test_db_file_is_created(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        assert storage.db_path.exists()
+
+    @pytest.mark.skipif(
+        os.name != "posix", reason="POSIX file permissions do not apply on Windows"
+    )
+    def test_db_file_is_owner_only(self, tmp_path: Path) -> None:
+        # The database holds source configs incl. app passwords — the
+        # file must be private to the app user from the moment it exists.
+        storage = make_storage(tmp_path)
+        assert stat.S_IMODE(storage.db_path.stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(
+        os.name != "posix", reason="POSIX file permissions do not apply on Windows"
+    )
+    def test_existing_db_file_is_tightened(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "test.db"
+        db_path.touch()
+        db_path.chmod(0o644)
+        Storage(db_path)
+        assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
 
 
 class TestDataDir:

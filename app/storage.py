@@ -130,8 +130,23 @@ class Storage:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_private_db_file()
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+
+    def _ensure_private_db_file(self) -> None:
+        """Make sure the DB file exists with owner-only permissions (0600).
+
+        The database stores source configs including app passwords, so it
+        must be private to the app user. The mode is applied atomically at
+        creation via os.open (same pattern as token files — no window in
+        which a fresh file is world-readable); a pre-existing file from an
+        older version is tightened via chmod. SQLite creates journal/WAL
+        siblings with the DB file's permissions, so they inherit 0600.
+        """
+        fd = os.open(self.db_path, os.O_RDWR | os.O_CREAT, 0o600)
+        os.close(fd)
+        self.db_path.chmod(0o600)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
