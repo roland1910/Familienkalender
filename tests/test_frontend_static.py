@@ -5,6 +5,7 @@ must only ever be rendered via textContent — never through HTML-injection
 sinks. This is additionally verified end-to-end in tests/e2e/.
 """
 
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -19,7 +20,15 @@ HTML_INJECTION_SINKS = (
     "insertAdjacentHTML",
     "document.write",
     "DOMParser",
+    "createContextualFragment",
+    "srcdoc",
+    "eval(",
+    "new Function",
+    "javascript:",
 )
+
+# Any inline event handler attribute (onclick=, onerror=, onpointerdown=, ...).
+INLINE_HANDLER_PATTERN = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
 
 client = TestClient(app, client=("127.0.0.1", 50000))
 
@@ -43,9 +52,9 @@ def test_js_never_uses_html_injection_sinks() -> None:
 
 
 def test_index_has_no_inline_event_handlers() -> None:
-    content = (STATIC_DIR / "index.html").read_text(encoding="utf-8").lower()
-    for attribute in ("onclick=", "onerror=", "onload="):
-        assert attribute not in content
+    content = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    match = INLINE_HANDLER_PATTERN.search(content)
+    assert match is None, f"index.html enthält Inline-Handler: {match.group(0)!r}"
 
 
 def test_stylesheet_and_modules_are_served() -> None:
