@@ -409,6 +409,15 @@ async def google_connect(body: GoogleConnect) -> dict:
         calendars = await google_oauth.fetch_calendar_list(tokens["access_token"])
     except google_oauth.GoogleOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        # Network errors etc. — the exception text may quote request URLs;
+        # same sanitizing pattern as the CalDAV connection test.
+        error = sanitize_error(str(exc))
+        logger.warning("Google connect failed: %s", error)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google-Verbindung fehlgeschlagen: {error}",
+        ) from exc
     return {"flow_id": flow_id, "calendars": calendars}
 
 

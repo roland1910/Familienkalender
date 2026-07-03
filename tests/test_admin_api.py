@@ -452,6 +452,20 @@ class TestGoogleFlowEndpoints:
         assert response.status_code == 400
         assert "abgelaufen" in response.json()["detail"]
 
+    def test_connect_unexpected_error_gives_sanitized_german_message(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._set_credentials(client)
+
+        async def fake_exchange(code, *, client_id, client_secret, client=None):
+            raise RuntimeError("boom at https://user:geheim@oauth2.googleapis.com/token")
+
+        monkeypatch.setattr("app.admin.google_oauth.exchange_code", fake_exchange)
+        response = client.post("/api/admin/google/connect", json={"code": "4/x"})
+        assert response.status_code == 502
+        assert "geheim" not in response.text
+        assert "fehlgeschlagen" in response.json()["detail"]
+
     def test_connect_with_bad_paste_is_400(
         self, client: TestClient, storage: Storage
     ) -> None:
