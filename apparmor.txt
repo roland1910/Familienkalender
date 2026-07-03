@@ -8,23 +8,21 @@
 # slug from config.yaml — the Supervisor rewrites it to the installed
 # slug (e.g. local_familienkalender) via adjust_profile() before loading.
 #
-# Confinement goals (deliberately conservative — a too-tight profile
-# means a non-starting add-on, verified on the Pi after deployment):
-# - Python/uvicorn and the s6/bashio startup chain may execute.
-# - App code and system files are read-only.
-# - /data is read-write including file locking (k) — SQLite needs
-#   fcntl locks on the database file and its journal/WAL siblings.
-# - Outbound DNS and TLS are allowed (calendar sync targets).
-# - HA-specific mounts (/addons, /config, ...), mount and ptrace are
-#   denied explicitly.
+# Structure follows the official HA example profile (docs: add-on
+# security) — a fully enumerated allowlist broke the s6-overlay init
+# chain on the device in ways that are hard to debug without host dmesg
+# access, so we use the template's broad `file,` grant instead. The
+# effective confinement comes from the explicit deny rules (deny beats
+# allow in AppArmor): no access to other add-ons, HA config, SSL certs,
+# backups or shares, no mounts, no ptrace. Capabilities and network are
+# still enumerated narrowly.
 
 #include <tunables/global>
 
 profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
-  # Explicit denials first: deny rules beat allow rules in AppArmor,
-  # so these hold even against the broad allowances below.
+  # Explicit denials: these hold even against the broad `file,` below.
   deny /addons/{,**} rwklx,
   deny /config/{,**} rwklx,
   deny /ssl/{,**} rwklx,
@@ -34,6 +32,10 @@ profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   deny mount,
   deny umount,
   deny ptrace,
+
+  # Broad file access as in the official template; execution rights are
+  # granted separately below (file, does not imply x).
+  file,
 
   # Capabilities: run.sh chowns /data to the app user and drops
   # privileges via su-exec (setuid/setgid).
@@ -59,10 +61,12 @@ profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   network unix stream,
   network netlink raw,
 
-  # s6-overlay / with-contenv (the run.sh shebang) and its runtime state.
-  # /init is a shell script: the interpreter must READ it (r), not just
-  # execute it — `ix` alone yields "/bin/sh: can't open '/init'".
+  # S6-Overlay init chain (official template)
   /init rix,
+  /bin/** rix,
+  /sbin/** rix,
+  /usr/bin/** rix,
+  /usr/sbin/** rix,
   /run/{s6,s6-rc*,service}/** rwix,
   /package/** rix,
   /command/** rix,
@@ -71,45 +75,18 @@ profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   /etc/cont-init.d/** rwix,
   /etc/cont-finish.d/** rwix,
   /run/{,**} rwk,
-  /var/run/{,**} rwk,
   /dev/tty rw,
 
-  # bashio (sourced by run.sh) and scratch space.
+  # Bashio (sourced by run.sh)
   /usr/lib/bashio/** rix,
   /tmp/{,**} rwk,
 
-  # Startup script, busybox/bash utilities, su-exec.
+  # Start script and Python (HA base-python installs to /usr/local).
   /run.sh rix,
-  /bin/** rix,
-  /sbin/** rix,
-  /usr/bin/** rix,
-  /usr/sbin/** rix,
-
-  # Python interpreter (HA base-python installs to /usr/local) plus
-  # stdlib and site-packages; shared libraries need mmap (m).
   /usr/local/bin/** rix,
-  /usr/local/lib/{,**} rm,
-  /usr/lib/{,**} rm,
-  /lib/{,**} rm,
 
-  # App code is read-only (no self-modification, no .pyc writes).
-  /usr/src/familienkalender/{,**} r,
-
-  # Read-only system configuration: resolver, TLS trust store, users,
-  # timezone data.
-  /etc/{,**} r,
-  /usr/share/{,**} r,
-
-  # Persistent data: SQLite database, journal/WAL and token files need
-  # read/write plus POSIX file locking (k).
+  # Persistent data: SQLite needs fcntl locks (k) on the database and
+  # its journal/WAL siblings; token files live here too.
   /data/ rw,
   /data/** rwk,
-
-  # Introspection commonly used by Python/uvicorn at startup.
-  @{PROC}/{,**} r,
-  /sys/{,**} r,
-  /dev/null rw,
-  /dev/zero r,
-  /dev/urandom r,
-  /dev/random r,
 }
