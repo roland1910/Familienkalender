@@ -1,0 +1,109 @@
+# AppArmor profile for the Familienkalender add-on.
+#
+# File name and location are fixed by the Supervisor contract: an
+# `apparmor.txt` next to config.yaml is picked up automatically when the
+# add-on is (re)installed; the default `apparmor: true` then uses this
+# custom profile instead of the generic docker-default one. The profile
+# must contain exactly one top-level profile whose name is the add-on
+# slug from config.yaml — the Supervisor rewrites it to the installed
+# slug (e.g. local_familienkalender) via adjust_profile() before loading.
+#
+# Confinement goals (deliberately conservative — a too-tight profile
+# means a non-starting add-on, verified on the Pi after deployment):
+# - Python/uvicorn and the s6/bashio startup chain may execute.
+# - App code and system files are read-only.
+# - /data is read-write including file locking (k) — SQLite needs
+#   fcntl locks on the database file and its journal/WAL siblings.
+# - Outbound DNS and TLS are allowed (calendar sync targets).
+# - HA-specific mounts (/addons, /config, ...), mount and ptrace are
+#   denied explicitly.
+
+#include <tunables/global>
+
+profile familienkalender flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Explicit denials first: deny rules beat allow rules in AppArmor,
+  # so these hold even against the broad allowances below.
+  deny /addons/{,**} rwklx,
+  deny /config/{,**} rwklx,
+  deny /ssl/{,**} rwklx,
+  deny /backup/{,**} rwklx,
+  deny /share/{,**} rwklx,
+  deny /media/{,**} rwklx,
+  deny mount,
+  deny umount,
+  deny ptrace,
+
+  # Capabilities: run.sh chowns /data to the app user and drops
+  # privileges via su-exec (setuid/setgid).
+  capability chown,
+  capability fowner,
+  capability fsetid,
+  capability dac_override,
+  capability dac_read_search,
+  capability setuid,
+  capability setgid,
+  capability net_bind_service,
+
+  # Signals: s6/bashio send lifecycle signals; uvicorn receives them.
+  signal (send) set=(kill,term,int,hup,cont),
+  signal (receive),
+
+  # Network: uvicorn listens on 8099; sync fetches calendars over
+  # HTTPS (inet/inet6 stream) and resolves names via DNS (dgram).
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network netlink raw,
+
+  # s6-overlay / with-contenv (the run.sh shebang) and its runtime state.
+  /init ix,
+  /run/{s6,s6-rc*,service}/** rwix,
+  /package/** rix,
+  /command/** rix,
+  /run/{,**} rwk,
+  /var/run/{,**} rwk,
+  /dev/tty rw,
+
+  # bashio (sourced by run.sh) and scratch space.
+  /usr/lib/bashio/** rix,
+  /tmp/{,**} rwk,
+
+  # Startup script, busybox/bash utilities, su-exec.
+  /run.sh rix,
+  /bin/** rix,
+  /sbin/** rix,
+  /usr/bin/** rix,
+  /usr/sbin/** rix,
+
+  # Python interpreter (HA base-python installs to /usr/local) plus
+  # stdlib and site-packages; shared libraries need mmap (m).
+  /usr/local/bin/** rix,
+  /usr/local/lib/{,**} rm,
+  /usr/lib/{,**} rm,
+  /lib/{,**} rm,
+
+  # App code is read-only (no self-modification, no .pyc writes).
+  /usr/src/familienkalender/{,**} r,
+
+  # Read-only system configuration: resolver, TLS trust store, users,
+  # timezone data.
+  /etc/{,**} r,
+  /usr/share/{,**} r,
+
+  # Persistent data: SQLite database, journal/WAL and token files need
+  # read/write plus POSIX file locking (k).
+  /data/ rw,
+  /data/** rwk,
+
+  # Introspection commonly used by Python/uvicorn at startup.
+  @{PROC}/{,**} r,
+  /sys/{,**} r,
+  /dev/null rw,
+  /dev/zero r,
+  /dev/urandom r,
+  /dev/random r,
+}
