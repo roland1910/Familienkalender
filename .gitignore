@@ -1,6 +1,7 @@
 # Secrets — niemals committen
 secrets.local.json
 *.token.json
+google_token_*.json
 .env
 *.pem
 *.key
