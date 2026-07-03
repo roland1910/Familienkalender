@@ -1,0 +1,13 @@
+# Direct runtime dependencies for the add-on container.
+# requirements.txt is generated from this file — never edit it by hand:
+#   python -m uv pip compile requirements.in -o requirements.txt \
+#       --universal --generate-hashes --python-version 3.12
+# Keep the pins consistent with the version constraints in pyproject.toml
+# whenever either file changes.
+fastapi==0.139.0
+uvicorn==0.49.0
+httpx==0.28.1
+icalendar==7.2.0
+recurring-ical-events==3.8.2
+# zoneinfo data for Europe/Berlin (Alpine base image has no system tzdata)
+tzdata==2026.2

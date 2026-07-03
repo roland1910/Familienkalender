@@ -10,7 +10,9 @@ RUN apk add --no-cache su-exec && adduser -D -H app
 WORKDIR /usr/src/familienkalender
 
 COPY requirements.txt ./
-RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+# requirements.txt is fully pinned (incl. transitive deps) with --generate-hashes;
+# --require-hashes makes pip verify every downloaded artifact against them.
+RUN pip3 install --no-cache-dir --break-system-packages --require-hashes -r requirements.txt
 
 COPY app ./app
 
