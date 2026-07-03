@@ -1,0 +1,37 @@
+# Google OAuth für den Familienkalender einrichten
+
+Einmalige Klickarbeit (~10 Minuten). Danach läuft alles Weitere (Konten verbinden, Kalender auswählen) über den Adminbereich des Add-ons.
+
+## Welches Konto?
+
+**Empfehlung: dein privates Google-Konto** als Inhaber des Cloud-Projekts. Gründe:
+
+- Unabhängig vom Kunden — endet das Kundenverhältnis, bleibt die Familien-Infrastruktur intakt.
+- Workspace-Konten (Kunde) unterliegen oft Admin-Richtlinien, die das Anlegen von OAuth-Apps oder deren Nutzung einschränken.
+- Marina und dein Kundenkonto werden später einfach als Nutzer **verbunden** — dafür müssen sie das Projekt nicht besitzen.
+
+## Schritt für Schritt
+
+1. Mit dem **privaten Konto** anmelden auf <https://console.cloud.google.com>
+2. Oben in der Projektauswahl → **Neues Projekt** → Name `Familienkalender` → Erstellen (und danach auswählen).
+3. **APIs & Dienste → Bibliothek** → nach „Google Calendar API" suchen → **Aktivieren**.
+4. **APIs & Dienste → OAuth-Zustimmungsbildschirm** (bzw. „Google Auth Platform → Branding"):
+   - Nutzertyp: **Extern**
+   - App-Name: `Familienkalender`, Support-E-Mail: dein privates Konto
+   - Kontaktdaten: dein privates Konto → Speichern
+5. **Zielgruppe/Publishing-Status**: App auf **„In Produktion"** stellen (nicht im Status „Test" lassen!).
+   - Wichtig: Im Test-Status laufen die Zugriffstoken nach **7 Tagen** ab — der Kalender würde wöchentlich die Verbindung verlieren.
+   - Die App bleibt „unverifiziert" — das ist für eine private Eigenbau-App in Ordnung. Beim Verbinden zeigt Google eine Warnung („Google hat diese App nicht überprüft"), die man über „Erweitert → Fortfahren" bestätigt.
+6. **Anmeldedaten → Anmeldedaten erstellen → OAuth-Client-ID**:
+   - Anwendungstyp: **Desktop-App**, Name: `Familienkalender Addon`
+   - **Client-ID** und **Client-Secret** anzeigen lassen und sicher notieren (z. B. Passwortmanager). Diese beiden Werte trägst du später im Adminbereich ein — nicht ins Repo, nicht in den Chat.
+
+## Konten verbinden (später, im Adminbereich)
+
+Der Adminbereich führt durch die Verbindung — einmal für **Marina** (an ihrem Handy oder in einem Browser, in dem ihr Konto angemeldet ist) und einmal für dein **Kundenkonto**. Benötigter Zugriff: nur **Kalender lesen** (`calendar.readonly`).
+
+## Möglicher Stolperstein: Kundenkonto (Workspace)
+
+Manche Workspace-Administratoren blockieren „nicht überprüfte" Dritt-Apps. Falls die Verbindung mit dem Kundenkonto scheitert:
+
+**Fallback:** Im Kundenkalender → Einstellungen → „Für bestimmte Personen freigeben" → dein privates Konto mit „Alle Termindetails anzeigen" eintragen. Dann liest der Familienkalender den Kundenkalender einfach über dein privates Konto mit — gleiche Filterung, kein Workspace-Zugriff nötig.
