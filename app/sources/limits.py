@@ -6,7 +6,11 @@ so a single hostile or broken source cannot take the add-on down; hitting
 a cap aborts the fetch with a clear error that ends up in last_sync_error.
 """
 
+import dataclasses
+
 import httpx
+
+from app.models import CalendarEvent
 
 # A family calendar realistically holds well under 2000 events in the
 # ~97-day sync window; 10000 expanded occurrences only happen with an
@@ -18,9 +22,23 @@ MAX_EVENTS_PER_SOURCE = 10_000
 # few hundred KB at most; 10 MB bounds memory when a server misbehaves.
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
+# Titles and locations come from foreign calendars and invitations; 1000
+# characters cover any legitimate value while bounding database growth
+# and API payload size. The frontend additionally caps what it displays.
+MAX_TEXT_LENGTH = 1000
+
 
 class SyncLimitExceededError(Exception):
     """A protective limit was exceeded while fetching a source."""
+
+
+def clamp_event_text(event: CalendarEvent) -> CalendarEvent:
+    """Truncate title and location to MAX_TEXT_LENGTH characters."""
+    title = event.title[:MAX_TEXT_LENGTH]
+    location = event.location[:MAX_TEXT_LENGTH] if event.location else event.location
+    if title == event.title and location == event.location:
+        return event
+    return dataclasses.replace(event, title=title, location=location)
 
 
 def check_event_count(count: int) -> None:

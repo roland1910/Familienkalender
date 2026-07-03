@@ -11,7 +11,7 @@ from datetime import UTC, datetime, time, timedelta
 
 from app.models import LOCAL_TZ, CalendarEvent, Source
 from app.sanitize import sanitize_error
-from app.sources import caldav, google
+from app.sources import caldav, google, limits
 from app.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -40,15 +40,19 @@ async def _fetch_source_events(
     source: Source, window_start: datetime, window_end: datetime
 ) -> list[CalendarEvent]:
     if source.type == "caldav":
-        return await caldav.fetch_events(source.config, window_start, window_end)
-    if source.type == "google":
-        return await google.fetch_events(
+        events = await caldav.fetch_events(source.config, window_start, window_end)
+    elif source.type == "google":
+        events = await google.fetch_events(
             source.config,
             window_start,
             window_end,
             token_file=google.token_path(source.id),
         )
-    raise ValueError(f"unknown source type: {source.type!r}")
+    else:
+        raise ValueError(f"unknown source type: {source.type!r}")
+    # Applied here (not per client) so every current and future source type
+    # gets the same server-side cap on foreign text lengths.
+    return [limits.clamp_event_text(event) for event in events]
 
 
 async def sync_all(storage: Storage, *, now: datetime | None = None) -> dict[int, str | None]:
