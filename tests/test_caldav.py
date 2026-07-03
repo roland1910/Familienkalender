@@ -10,6 +10,7 @@ import pytest
 
 from app.sources import limits
 from app.sources.caldav import fetch_events, list_calendars
+from app.url_validation import SourceURLError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "caldav"
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -156,6 +157,33 @@ class TestFetchEvents:
         async with make_client("kaputt", captured, status_code=500) as client:
             with pytest.raises(httpx.HTTPStatusError):
                 await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+
+@pytest.mark.anyio
+class TestDefensiveURLValidation:
+    """Fetches validate their target URL even if the DB config was tampered with."""
+
+    async def test_fetch_events_rejects_forbidden_calendar_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FAMILIENKALENDER_ALLOW_HTTP", raising=False)
+        captured: list[httpx.Request] = []
+        config = {**CONFIG, "calendar_url": "http://172.30.32.2/dav/"}
+        async with make_client(multistatus_report(), captured) as client:
+            with pytest.raises(SourceURLError):
+                await fetch_events(config, WINDOW_START, WINDOW_END, client=client)
+        assert captured == []  # no request must leave the process
+
+    async def test_list_calendars_rejects_forbidden_base_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("FAMILIENKALENDER_ALLOW_HTTP", raising=False)
+        captured: list[httpx.Request] = []
+        config = {**CONFIG, "url": "https://169.254.1.1"}
+        async with make_client(multistatus_report(), captured) as client:
+            with pytest.raises(SourceURLError):
+                await list_calendars(config, client=client)
+        assert captured == []
 
 
 @pytest.mark.anyio

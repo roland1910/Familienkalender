@@ -25,6 +25,7 @@ from defusedxml import ElementTree as SafeET
 
 from app.models import LOCAL_TZ, CalendarEvent
 from app.sources import limits
+from app.url_validation import validate_source_url
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,9 @@ async def fetch_events(
     Recurring events are expanded into individual occurrences; overridden
     instances (RECURRENCE-ID) replace their regular occurrence.
     """
+    # Defensive: the config may have reached the DB without passing the
+    # admin API, so the target is validated before every single fetch.
+    validate_source_url(config["calendar_url"])
     body = _CALENDAR_QUERY_TEMPLATE.format(
         start=_utc_stamp(window_start), end=_utc_stamp(window_end)
     )
@@ -179,6 +183,8 @@ async def list_calendars(
     client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, str]]:
     """List the user's event calendars (name and collection URL)."""
+    # Defensive, like in fetch_events: never talk to forbidden targets.
+    validate_source_url(config["url"])
     if client is None:
         async with httpx.AsyncClient(timeout=30) as own_client:
             return await list_calendars(config, client=own_client)
