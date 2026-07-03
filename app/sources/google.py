@@ -17,6 +17,7 @@ Source config keys: ``calendar_id``.
 
 import json
 import logging
+import os
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -52,10 +53,16 @@ def load_tokens(path: Path) -> dict[str, Any]:
 
 
 def save_tokens(path: Path, tokens: dict[str, Any]) -> None:
-    """Persist tokens with owner-only file permissions (chmod 600)."""
+    """Persist tokens with owner-only file permissions (mode 600).
+
+    The mode is applied atomically at creation via os.open — a separate
+    chmod after writing would leave a window in which the freshly written
+    secrets are world-readable.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
-    path.chmod(0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        file.write(json.dumps(tokens, indent=2))
 
 
 def _is_expired(tokens: dict[str, Any]) -> bool:

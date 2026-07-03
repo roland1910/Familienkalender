@@ -318,6 +318,12 @@ class TestTokenStorage:
         write_tokens(path)
         assert path.stat().st_mode & 0o777 == 0o600
 
+    def test_overwriting_replaces_longer_content_completely(self, tmp_path: Path) -> None:
+        path = tmp_path / "tokens.json"
+        save_tokens(path, {"refresh_token": "x" * 500})
+        save_tokens(path, {"refresh_token": "short"})
+        assert load_tokens(path) == {"refresh_token": "short"}
+
     def test_token_path_lives_in_data_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
