@@ -4,3 +4,8 @@
 # either file changes.
 fastapi==0.139.0
 uvicorn==0.49.0
+httpx==0.28.1
+icalendar==7.2.0
+recurring-ical-events==3.8.2
+# zoneinfo data for Europe/Berlin (Alpine base image has no system tzdata)
+tzdata==2026.2
