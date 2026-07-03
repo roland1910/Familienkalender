@@ -95,6 +95,32 @@ class TestSettingsEndpoints:
         )
         assert response.status_code == 400
 
+    def test_put_google_credentials_with_placeholder_keeps_secret(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # The admin UI never sees the stored secret — sending the mask
+        # placeholder back must keep it (e.g. when fixing the client id).
+        client.put(
+            "/api/admin/settings/google",
+            json={"client_id": "cid-alt", "client_secret": "geheim"},
+        )
+        response = client.put(
+            "/api/admin/settings/google",
+            json={"client_id": "cid-neu", "client_secret": "***"},
+        )
+        assert response.status_code == 200
+        assert storage.get_setting("google_client_id") == "cid-neu"
+        assert storage.get_setting("google_client_secret") == "geheim"
+
+    def test_put_google_credentials_placeholder_without_stored_secret_is_400(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings/google",
+            json={"client_id": "cid", "client_secret": "***"},
+        )
+        assert response.status_code == 400
+
 
 class TestSourcesList:
     def test_lists_sources_with_status_and_counts(

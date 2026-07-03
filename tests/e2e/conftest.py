@@ -43,13 +43,19 @@ def _wait_for_health(url: str, process: subprocess.Popen, timeout: float = 30.0)
 
 
 @pytest.fixture(scope="session")
-def server_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """Base URL of a uvicorn instance serving the app with demo data."""
+def server_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """DATA_DIR of the test server — tests may seed files (e.g. tokens) here."""
     data_dir = tmp_path_factory.mktemp("e2e-data")
     seed_demo(data_dir)
+    return data_dir
+
+
+@pytest.fixture(scope="session")
+def server_url(server_data_dir: Path) -> Iterator[str]:
+    """Base URL of a uvicorn instance serving the app with demo data."""
     port = _free_port()
     env = os.environ | {
-        "DATA_DIR": str(data_dir),
+        "DATA_DIR": str(server_data_dir),
         "SYNC_INTERVAL_SECONDS": "0",
     }
     process = subprocess.Popen(

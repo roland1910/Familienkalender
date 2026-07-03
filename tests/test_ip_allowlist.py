@@ -41,6 +41,17 @@ def test_request_from_foreign_ip_is_rejected_for_static_files() -> None:
     assert response.status_code == 403
 
 
+def test_request_from_foreign_ip_is_rejected_for_admin_api() -> None:
+    # The admin endpoints manage credentials — they must sit behind the
+    # same allowlist as everything else (no separate auth layer exists).
+    client = TestClient(app, client=("192.168.1.77", 50000))
+    assert client.get("/api/admin/settings").status_code == 403
+    assert client.get("/api/admin/sources").status_code == 403
+    assert (
+        client.post("/api/admin/sources", json={"type": "caldav"}).status_code == 403
+    )
+
+
 @pytest.mark.anyio
 async def test_allowlist_is_configurable_via_environment(
     monkeypatch: pytest.MonkeyPatch,

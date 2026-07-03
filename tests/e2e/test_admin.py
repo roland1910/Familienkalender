@@ -5,6 +5,7 @@ connection test is intercepted in the browser (no external network).
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page, Route, expect
@@ -106,6 +107,97 @@ class TestNextcloudWizard:
         page.locator("#nc-test").click()
         expect(page.locator("#nc-error")).to_contain_text("Verbindung fehlgeschlagen")
         expect(page.locator("#nc-step-select")).to_be_hidden()
+
+
+class TestGoogleWizard:
+    def test_core_flow_with_intercepted_google_endpoints(
+        self, page: Page, server_url: str, server_data_dir: Path
+    ) -> None:
+        """Credentials → Auth-Link → Code einlösen → Kalenderwahl → Quelle anlegen.
+
+        The Google endpoints (auth-url, connect) are intercepted in the
+        browser; the parked tokens for the returned flow id are seeded
+        into the server's DATA_DIR so the real POST /sources can adopt
+        them. Settings PUT and source creation hit the real backend.
+        """
+        flow_id = "e2e-flow-123"
+        pending = server_data_dir / f"google_token_pending_{flow_id}.json"
+        pending.write_text(
+            json.dumps({"client_id": "cid", "client_secret": "cs",
+                        "refresh_token": "rt-e2e", "access_token": "at-e2e",
+                        "access_token_expires_at": "2027-01-01T00:00:00+00:00"}),
+            encoding="utf-8",
+        )
+
+        def fulfill_auth_url(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"auth_url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=x"}
+                ),
+            )
+
+        def fulfill_connect(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "flow_id": flow_id,
+                        "calendars": [
+                            {"id": "m@example.com", "name": "Marina Zweitkalender"},
+                            {"id": "v@example.com", "name": "Verein"},
+                        ],
+                    }
+                ),
+            )
+
+        page.route("**/api/admin/google/auth-url", fulfill_auth_url)
+        page.route("**/api/admin/google/connect", fulfill_connect)
+        goto_admin(page, server_url)
+
+        # No credentials stored yet: the wizard starts with the credentials step.
+        page.locator("#btn-add-google").click()
+        expect(page.locator("#g-step-credentials")).to_be_visible()
+        page.locator("#g-client-id").fill("cid.apps.googleusercontent.com")
+        page.locator("#g-client-secret").fill("cs-geheim")
+        page.locator("#g-save-credentials").click()
+
+        # Auth step: the consent link carries the (intercepted) auth URL.
+        expect(page.locator("#g-step-auth")).to_be_visible()
+        auth_link = page.locator("#g-auth-link")
+        expect(auth_link).to_be_visible()
+        expect(auth_link).to_have_attribute(
+            "href", "https://accounts.google.com/o/oauth2/v2/auth?client_id=x"
+        )
+        page.locator("#g-code").fill("http://localhost:1/?code=4%2F0AbCdEf&scope=x")
+        page.locator("#g-connect").click()
+
+        # Calendar list arrives, the name is prefilled from the selection.
+        expect(page.locator("#g-step-select")).to_be_visible()
+        expect(page.locator("#g-calendar option")).to_have_count(2)
+        expect(page.locator("#g-name")).to_have_value("Marina Zweitkalender")
+        page.locator("#g-calendar").select_option(label="Verein")
+        expect(page.locator("#g-name")).to_have_value("Verein")
+        page.locator("#g-save").click()
+
+        # The wizard closes; the real backend created the source and
+        # adopted the parked tokens.
+        expect(page.locator("#google-form")).to_be_hidden()
+        expect(page.locator(".source-name")).to_have_text(
+            ["Marina", "Kunde", "Firma", "Verein"]
+        )
+        new_item = page.locator(".source-item").last
+        expect(new_item.locator(".type-badge")).to_have_text("Google")
+        assert not pending.exists()
+
+        # Delete again (two-step confirmation) to leave the shared DB clean.
+        delete_button = new_item.locator(".small-button.danger")
+        delete_button.click()
+        expect(delete_button).to_have_text("Wirklich löschen?")
+        delete_button.click()
+        expect(page.locator(".source-name")).to_have_text(["Marina", "Kunde", "Firma"])
 
 
 class TestSettings:

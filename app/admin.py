@@ -185,6 +185,17 @@ async def update_google_credentials(credentials: GoogleCredentials) -> dict:
             status_code=400, detail="Client-ID und Client-Secret dürfen nicht leer sein."
         )
     storage = get_storage()
+    if client_secret == SECRET_MASK:
+        # The mask placeholder means: keep the stored secret (the UI never
+        # sees the real value, e.g. when only fixing the client id).
+        stored_secret = storage.get_setting(settings.GOOGLE_CLIENT_SECRET_KEY)
+        if not stored_secret:
+            raise HTTPException(
+                status_code=400,
+                detail="Es ist noch kein Client-Secret gespeichert — bitte"
+                " das echte Secret eingeben.",
+            )
+        client_secret = stored_secret
     storage.set_setting(settings.GOOGLE_CLIENT_ID_KEY, client_id)
     storage.set_setting(settings.GOOGLE_CLIENT_SECRET_KEY, client_secret)
     return _settings_payload()
