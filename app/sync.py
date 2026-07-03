@@ -19,6 +19,10 @@ SYNC_WINDOW_PAST_DAYS = 7
 SYNC_WINDOW_FUTURE_DAYS = 90
 DEFAULT_SYNC_INTERVAL_SECONDS = 300
 
+# Serializes sync runs: the periodic task and manual POST /api/sync must
+# never fetch and write concurrently (duplicate work, interleaved writes).
+SYNC_LOCK = asyncio.Lock()
+
 
 def sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
     """The fetch window: local midnight 7 days back to 90 days ahead."""
@@ -47,7 +51,18 @@ async def _fetch_source_events(
 
 
 async def sync_all(storage: Storage, *, now: datetime | None = None) -> dict[int, str | None]:
-    """Sync every enabled source; returns per-source error (None = success)."""
+    """Sync every enabled source; returns per-source error (None = success).
+
+    Runs under SYNC_LOCK: concurrent callers wait until the running sync
+    finishes (the API layer answers 409 instead of queueing up).
+    """
+    async with SYNC_LOCK:
+        return await _sync_all_locked(storage, now=now)
+
+
+async def _sync_all_locked(
+    storage: Storage, *, now: datetime | None = None
+) -> dict[int, str | None]:
     window_start, window_end = sync_window(now)
     results: dict[int, str | None] = {}
     for source in storage.list_sources():

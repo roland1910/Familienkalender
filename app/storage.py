@@ -133,6 +133,9 @@ class Storage:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # Wait up to 5s for a concurrent writer instead of failing with
+        # "database is locked" (periodic sync vs. manual sync/API access).
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             with conn:
                 yield conn

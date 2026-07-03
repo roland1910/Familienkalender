@@ -190,6 +190,21 @@ class TestEventsEndpoint:
 
 
 class TestSyncEndpoint:
+    def test_returns_409_while_a_sync_is_running(
+        self,
+        client: TestClient,
+        storage: Storage,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class HeldLock:
+            def locked(self) -> bool:
+                return True
+
+        monkeypatch.setattr("app.sync.SYNC_LOCK", HeldLock())
+        response = client.post("/api/sync")
+        assert response.status_code == 409
+        assert "läuft bereits" in response.json()["detail"]
+
     def test_manual_sync_returns_per_source_results(
         self,
         client: TestClient,

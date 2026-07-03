@@ -1,5 +1,6 @@
 """Tests for the sync orchestration (fetch all sources, isolate errors)."""
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -8,7 +9,13 @@ import pytest
 
 from app.models import CalendarEvent
 from app.storage import Storage
-from app.sync import SYNC_WINDOW_FUTURE_DAYS, SYNC_WINDOW_PAST_DAYS, sync_all, sync_window
+from app.sync import (
+    SYNC_LOCK,
+    SYNC_WINDOW_FUTURE_DAYS,
+    SYNC_WINDOW_PAST_DAYS,
+    sync_all,
+    sync_window,
+)
 
 BERLIN = ZoneInfo("Europe/Berlin")
 FIXED_NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
@@ -147,3 +154,49 @@ class TestSyncAll:
         await sync_all(storage, now=FIXED_NOW)
 
         assert storage.list_sources()[0].last_sync_error is None
+
+
+@pytest.mark.anyio
+class TestSyncLock:
+    async def test_sync_all_holds_the_module_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        seen: dict = {}
+
+        async def observing_fetch(*args, **kwargs):
+            seen["locked_during_fetch"] = SYNC_LOCK.locked()
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", observing_fetch)
+
+        await sync_all(storage, now=FIXED_NOW)
+
+        assert seen["locked_during_fetch"] is True
+        assert SYNC_LOCK.locked() is False
+
+    async def test_concurrent_sync_runs_serialize(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        active = 0
+        max_active = 0
+
+        async def slow_fetch(*args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", slow_fetch)
+
+        await asyncio.gather(
+            sync_all(storage, now=FIXED_NOW),
+            sync_all(storage, now=FIXED_NOW),
+        )
+
+        assert max_active == 1

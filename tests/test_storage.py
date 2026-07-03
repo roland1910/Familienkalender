@@ -242,3 +242,13 @@ class TestEvents:
 
         stored = storage.get_events(WINDOW_START, WINDOW_END)
         assert [item.event.uid for item in stored] == ["early", "late"]
+
+
+class TestConnectionSettings:
+    def test_connections_use_busy_timeout(self, tmp_path: Path) -> None:
+        # Concurrent writers (periodic sync vs. manual sync/API) must wait
+        # instead of failing immediately with "database is locked".
+        storage = make_storage(tmp_path)
+        with storage._connect() as conn:
+            timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert timeout_ms == 5000

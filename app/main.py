@@ -227,7 +227,15 @@ async def list_sources() -> dict:
 
 @app.post("/api/sync")
 async def trigger_sync() -> dict:
-    """Manually trigger a sync of all enabled sources."""
+    """Manually trigger a sync of all enabled sources.
+
+    While a sync is already running (periodic or manual) the request is
+    rejected instead of queueing a redundant second run behind the lock.
+    """
+    if sync_module.SYNC_LOCK.locked():
+        raise HTTPException(
+            status_code=409, detail="Eine Synchronisierung läuft bereits."
+        )
     results = await sync_all(get_storage())
     return {"results": {str(source_id): error for source_id, error in results.items()}}
 
