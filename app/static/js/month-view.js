@@ -46,6 +46,8 @@ function buildCell(day, dayEvents, anchor, today) {
   let visible = dayEvents;
   let hiddenCount = 0;
   if (dayEvents.length > MAX_CHIPS_PER_CELL) {
+    // -1: the "+N weitere" button takes the last of the MAX_CHIPS_PER_CELL
+    // slots, so the cell never grows beyond MAX_CHIPS_PER_CELL rows.
     visible = dayEvents.slice(0, MAX_CHIPS_PER_CELL - 1);
     hiddenCount = dayEvents.length - visible.length;
   }

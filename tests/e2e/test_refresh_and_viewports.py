@@ -1,5 +1,6 @@
 """E2E tests for the error/loading states and both target viewports."""
 
+import time
 from datetime import date
 from pathlib import Path
 
@@ -35,7 +36,9 @@ def test_loading_indicator_shows_before_first_data(page: Page, server_url: str) 
     page.route("**/api/events*", lambda route: pending.append(route))
     page.goto(server_url)
     expect(page.locator("#loading")).to_be_visible()
+    deadline = time.monotonic() + 10
     while not pending:
+        assert time.monotonic() < deadline, "events request was never issued"
         page.wait_for_timeout(25)
     pending[0].continue_()
     page.unroute("**/api/events*")

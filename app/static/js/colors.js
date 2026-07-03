@@ -14,6 +14,8 @@ const PALETTE = [
 ];
 
 export function colorForSource(sourceId) {
+  // `|| 0` tolerates unexpected ids (undefined, non-numeric → NaN): they
+  // all map to the first palette color instead of an undefined lookup.
   const index = Math.abs(Number(sourceId) || 0) % PALETTE.length;
   return PALETTE[index];
 }
