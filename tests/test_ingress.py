@@ -36,15 +36,15 @@ def test_static_asset_works_behind_ingress() -> None:
     ASGI spec, but the HA ingress proxy sends the path already stripped —
     without compensation every static asset 404s behind ingress.
     """
-    response = client.get("/static/styles.css", headers={"X-Ingress-Path": INGRESS_PATH})
+    response = client.get("/static/css/calendar.css", headers={"X-Ingress-Path": INGRESS_PATH})
     assert response.status_code == 200
     assert "text/css" in response.headers["content-type"]
 
 
 def test_static_asset_content_identical_with_and_without_ingress() -> None:
-    plain = client.get("/static/styles.css")
+    plain = client.get("/static/css/calendar.css")
     behind_ingress = client.get(
-        "/static/styles.css", headers={"X-Ingress-Path": INGRESS_PATH}
+        "/static/css/calendar.css", headers={"X-Ingress-Path": INGRESS_PATH}
     )
     assert behind_ingress.status_code == plain.status_code == 200
     assert behind_ingress.content == plain.content

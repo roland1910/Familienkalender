@@ -1,4 +1,4 @@
-"""Tests for the German placeholder index page."""
+"""Tests for the calendar index page."""
 
 import re
 
@@ -28,6 +28,14 @@ def test_index_uses_only_relative_asset_urls() -> None:
 
 
 def test_static_stylesheet_is_served() -> None:
-    response = client.get("/static/styles.css")
+    response = client.get("/static/css/calendar.css")
     assert response.status_code == 200
     assert "text/css" in response.headers["content-type"]
+
+
+def test_index_contains_calendar_shell() -> None:
+    """The page ships the calendar UI shell (views are rendered client-side)."""
+    response = client.get("/")
+    assert 'id="calendar"' in response.text
+    assert 'id="btn-today"' in response.text
+    assert "static/js/main.js" in response.text

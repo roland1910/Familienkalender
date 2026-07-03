@@ -1,0 +1,493 @@
+/* Familienkalender — Kiosk-Display (1920x1080) und HA-Ingress-Panel (schmal).
+   Touch-Ziele mindestens 48px. */
+
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --border: #d8dadf;
+  --text: #1c1e21;
+  --text-muted: #6b7280;
+  --accent: #2563eb;
+  --today-bg: #eaf1fe;
+  --warn-bg: #fef3c7;
+  --warn-text: #92400e;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+/* -- toolbar ------------------------------------------------------------ */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.toolbar-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.nav-button,
+.view-button {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0 18px;
+  font-size: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.nav-button:active,
+.view-button:active {
+  background: var(--today-bg);
+}
+
+.nav-button-today,
+.view-button {
+  font-size: 17px;
+}
+
+.period-title {
+  flex: 1;
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.view-switch {
+  display: flex;
+}
+
+.view-switch .view-button {
+  border-radius: 0;
+}
+
+.view-switch .view-button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.view-switch .view-button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+  border-left: none;
+}
+
+.view-button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.status-badge {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* Reserved space for future mode toggles (e.g. Strom-Ansicht). */
+.mode-slot {
+  min-width: 0;
+}
+
+/* -- calendar container --------------------------------------------------- */
+
+.calendar {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  padding: 8px;
+}
+
+.loading {
+  margin: 40px auto;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 20px;
+}
+
+/* -- month view ----------------------------------------------------------- */
+
+.month-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.weekday-header {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+.weekday {
+  text-align: center;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.month-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(6, 1fr);
+  gap: 2px;
+}
+
+.day-cell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.day-cell.other-month {
+  opacity: 0.45;
+}
+
+.day-cell.today {
+  background: var(--today-bg);
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.day-number {
+  font-size: 16px;
+  font-weight: 600;
+  padding: 0 2px 2px;
+}
+
+.day-cell.today .day-number {
+  color: var(--accent);
+}
+
+.day-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chip {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  background: var(--source-color, var(--accent));
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.chip-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  flex: none;
+}
+
+.chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.more-button {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 2px 6px;
+  min-height: 28px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* -- day popover ----------------------------------------------------------- */
+
+.popover-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.popover-backdrop[hidden] {
+  display: none;
+}
+
+.popover-panel {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  min-width: 340px;
+  max-width: min(560px, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.popover-title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.popover-close {
+  min-width: 48px;
+  min-height: 48px;
+  border: none;
+  background: none;
+  font-size: 28px;
+  cursor: pointer;
+  color: var(--text-muted);
+  touch-action: manipulation;
+}
+
+.popover-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.popover-item {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  border-left: 5px solid var(--source-color, var(--accent));
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.popover-time {
+  flex: none;
+  width: 110px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.popover-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.popover-event-title {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.popover-location {
+  color: var(--text-muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+/* -- week view -------------------------------------------------------------- */
+
+.week-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.week-header,
+.week-allday {
+  display: grid;
+  grid-template-columns: 64px repeat(7, 1fr);
+  gap: 2px;
+}
+
+.week-day-label {
+  text-align: center;
+  padding: 4px 0;
+  font-size: 16px;
+  border-radius: 6px;
+}
+
+.week-day-label.today {
+  background: var(--today-bg);
+  color: var(--accent);
+}
+
+.week-day-name {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.week-allday {
+  grid-auto-rows: 28px;
+  row-gap: 3px;
+  padding: 4px 0;
+}
+
+.allday-bar {
+  background: var(--source-color, var(--accent));
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.week-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.week-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: 64px repeat(7, 1fr);
+}
+
+.week-gutter {
+  position: relative;
+}
+
+.hour-label {
+  position: absolute;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 13px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hour-label:first-child {
+  transform: none;
+}
+
+.hour-lines {
+  position: absolute;
+  left: 64px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.hour-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--border);
+}
+
+.week-day-column {
+  position: relative;
+  border-left: 1px solid var(--border);
+}
+
+.week-day-column.today {
+  background: var(--today-bg);
+}
+
+.timed-event {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--source-color, var(--accent));
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+/* -- narrow layout (HA ingress side panel) ---------------------------------- */
+
+@media (max-width: 900px) {
+  .toolbar {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .period-title {
+    font-size: 19px;
+    order: -1;
+    flex-basis: 100%;
+  }
+
+  .chip {
+    font-size: 12px;
+  }
+
+  .chip-time {
+    display: none;
+  }
+
+  .day-number,
+  .weekday {
+    font-size: 13px;
+  }
+}

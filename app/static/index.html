@@ -5,13 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Familienkalender</title>
   <!-- Asset-URLs müssen relativ sein, damit die Seite hinter HA-Ingress funktioniert. -->
-  <link rel="stylesheet" href="static/styles.css">
+  <link rel="stylesheet" href="static/css/calendar.css">
 </head>
 <body>
-  <main class="hero">
-    <h1>Familienkalender</h1>
-    <p>Der gemeinsame Kalender der Familie – bald mit Terminen aus allen Kalendern.</p>
-    <p class="status">Das Add-on läuft. 🎉</p>
+  <header class="toolbar">
+    <div class="toolbar-nav">
+      <button id="btn-prev" class="nav-button" type="button" aria-label="Zurück">&#8249;</button>
+      <button id="btn-today" class="nav-button nav-button-today" type="button">Heute</button>
+      <button id="btn-next" class="nav-button" type="button" aria-label="Vor">&#8250;</button>
+    </div>
+    <h1 id="period-title" class="period-title"></h1>
+    <div class="toolbar-right">
+      <span id="status-badge" class="status-badge" hidden>Daten nicht aktuell</span>
+      <div class="view-switch" role="group" aria-label="Ansicht">
+        <button id="btn-month" class="view-button active" type="button">Monat</button>
+        <button id="btn-week" class="view-button" type="button">Woche</button>
+      </div>
+      <!-- Platz für spätere Umschalt-Buttons (z. B. Strom-Ansicht) -->
+      <div id="mode-slot" class="mode-slot"></div>
+    </div>
+  </header>
+  <main id="calendar" class="calendar">
+    <p id="loading" class="loading">Lädt&hellip;</p>
   </main>
+  <div id="day-popover" class="popover-backdrop" hidden></div>
+  <script type="module" src="static/js/main.js"></script>
 </body>
 </html>
