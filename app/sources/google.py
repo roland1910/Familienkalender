@@ -48,6 +48,16 @@ def token_path(source_id: int) -> Path:
     return resolve_data_dir() / f"google_token_{source_id}.json"
 
 
+def pending_token_path() -> Path:
+    """Parking spot for tokens between OAuth connect and source creation.
+
+    The admin flow first exchanges the code (tokens exist, source does
+    not yet), then the user picks a calendar and the new source adopts
+    this file under its own id.
+    """
+    return resolve_data_dir() / "google_token_pending.json"
+
+
 def load_tokens(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 

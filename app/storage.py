@@ -16,6 +16,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
+from functools import cache
 from pathlib import Path
 
 from app.models import (
@@ -346,3 +347,17 @@ class Storage:
                 )
         result.sort(key=lambda item: as_local_datetime(item.event.start))
         return result
+
+
+# Unbounded cache (equivalent to lru_cache(maxsize=None)): there is
+# exactly one DATA_DIR in production and one per test; a bounded cache
+# could evict (and later recreate) a Storage that is still in use, which
+# buys nothing and costs re-initialization.
+@cache
+def _storage_for(db_path: Path) -> Storage:
+    return Storage(db_path)
+
+
+def get_storage() -> Storage:
+    """Storage for the current DATA_DIR (env is re-read so tests can vary it)."""
+    return _storage_for(default_db_path())

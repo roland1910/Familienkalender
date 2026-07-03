@@ -5,7 +5,6 @@ import os
 import re
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, time, timedelta
-from functools import cache
 from pathlib import Path
 from typing import Annotated
 
@@ -15,10 +14,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import sync as sync_module
+from app.admin import router as admin_router
 from app.filtering import filter_events
 from app.models import LOCAL_TZ, StoredEvent
 from app.settings import get_evening_boundary
-from app.storage import Storage, default_db_path
+from app.storage import get_storage
 from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -110,20 +110,6 @@ class IngressPathMiddleware:
         await self.app(scope, receive, send)
 
 
-# Unbounded cache (equivalent to lru_cache(maxsize=None)): there is
-# exactly one DATA_DIR in production and one per test; a bounded cache
-# could evict (and later recreate) a Storage that is still in use, which
-# buys nothing and costs re-initialization.
-@cache
-def _storage_for(db_path: Path) -> Storage:
-    return Storage(db_path)
-
-
-def get_storage() -> Storage:
-    """Storage for the current DATA_DIR (env is re-read so tests can vary it)."""
-    return _storage_for(default_db_path())
-
-
 def _sync_interval_seconds() -> float:
     raw = os.environ.get("SYNC_INTERVAL_SECONDS", "")
     try:
@@ -149,6 +135,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Familienkalender", docs_url=None, redoc_url=None, lifespan=lifespan)
+app.include_router(admin_router)
 app.add_middleware(IngressPathMiddleware)
 # Added last so it runs first: nothing is processed for disallowed clients.
 app.add_middleware(ClientIPAllowlistMiddleware)
