@@ -100,6 +100,13 @@ def _masked_config(config: dict) -> dict:
     return masked
 
 
+def _validate_display_mode(display_mode: str) -> None:
+    if display_mode not in DISPLAY_MODES:
+        raise HTTPException(
+            status_code=400, detail=f"Unbekannter Anzeigemodus: {display_mode!r}"
+        )
+
+
 def _validated_name(name: str) -> str:
     """Trimmed source name, or 400 for empty/overlong names."""
     stripped = name.strip()
@@ -268,10 +275,7 @@ async def create_source(body: SourceCreate) -> dict:
     """
     if body.type not in SOURCE_TYPES:
         raise HTTPException(status_code=400, detail=f"Unbekannter Quelltyp: {body.type!r}")
-    if body.display_mode not in DISPLAY_MODES:
-        raise HTTPException(
-            status_code=400, detail=f"Unbekannter Anzeigemodus: {body.display_mode!r}"
-        )
+    _validate_display_mode(body.display_mode)
     name = _validated_name(body.name)
     config = _filtered_config(body.type, body.config)
     storage = get_storage()
@@ -298,14 +302,18 @@ async def create_source(body: SourceCreate) -> dict:
 
 @router.patch("/sources/{source_id}")
 async def update_source(source_id: int, body: SourceUpdate) -> dict:
+    """Partially update a source (name, display mode, enabled, config).
+
+    Config updates are whitelisted per type; the secret mask placeholder
+    keeps the stored secret, an empty secret is rejected (422), and all
+    URLs in the config are re-validated.
+    """
     storage = get_storage()
     existing = storage.get_source(source_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden.")
-    if body.display_mode is not None and body.display_mode not in DISPLAY_MODES:
-        raise HTTPException(
-            status_code=400, detail=f"Unbekannter Anzeigemodus: {body.display_mode!r}"
-        )
+    if body.display_mode is not None:
+        _validate_display_mode(body.display_mode)
     name = _validated_name(body.name) if body.name is not None else None
     config = None
     if body.config is not None:
@@ -337,6 +345,8 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
 
 @router.delete("/sources/{source_id}")
 async def delete_source(source_id: int) -> dict:
+    """Delete a source, its stored events (FK cascade) and, for Google
+    sources, the token file that belonged to it."""
     storage = get_storage()
     source = storage.get_source(source_id)
     if source is None:

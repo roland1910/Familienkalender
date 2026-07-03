@@ -199,13 +199,29 @@ class TestCreateCaldavSource:
         assert response.status_code == 400
         assert storage.list_sources() == []
 
-    def test_rejects_missing_fields(self, client: TestClient, storage: Storage) -> None:
+    def test_rejects_empty_name(self, client: TestClient, storage: Storage) -> None:
         response = client.post(
             "/api/admin/sources",
-            json={"type": "caldav", "name": "", "display_mode": "full",
-                  "config": {"url": "https://x"}},
+            json={"type": "caldav", "name": "   ", "display_mode": "full",
+                  "config": CALDAV_CONFIG},
         )
         assert response.status_code == 400
+        assert "Name" in response.json()["detail"]
+        assert storage.list_sources() == []
+
+    def test_rejects_incomplete_caldav_config(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "caldav", "name": "Firma", "display_mode": "full",
+                  "config": {"url": "https://cloud.example.com"}},
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "Fehlende Angaben" in detail
+        assert "app_password" in detail
+        assert storage.list_sources() == []
 
     def test_rejects_name_longer_than_200_characters(
         self, client: TestClient, storage: Storage

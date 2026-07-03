@@ -69,6 +69,19 @@ class TestExtractAuthCode:
         with pytest.raises(GoogleOAuthError, match="Code"):
             extract_auth_code("http://localhost:1/?error=access_denied")
 
+    def test_url_without_any_query_raises(self) -> None:
+        # A URL is recognized as such even without "code=" anywhere in it.
+        with pytest.raises(GoogleOAuthError, match="Code"):
+            extract_auth_code("http://localhost:1/")
+
+    def test_schemeless_url_with_code_works(self) -> None:
+        assert extract_auth_code("localhost:1/?code=4%2F0AbCdEf&scope=x") == "4/0AbCdEf"
+
+    def test_code_hidden_in_other_param_value_raises(self) -> None:
+        # "code=" only inside another parameter's value is not a code.
+        with pytest.raises(GoogleOAuthError, match="Code"):
+            extract_auth_code("http://localhost:1/?state=xyz&note=code=abc")
+
 
 def token_client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))

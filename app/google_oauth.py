@@ -11,6 +11,15 @@ consumes and refreshes them.
 
 All error messages raised here are German — they surface directly in
 the admin UI.
+
+Deliberately no ``state`` parameter and no PKCE: both protect a
+redirect-based callback against CSRF/code injection, but in this
+copy-paste flow there is no callback the attacker could steer — the
+admin manually carries the code from the browser to the (ingress- and
+IP-allowlist-protected) admin UI. What the parked tokens needed instead
+is a binding between "code eingelöst" and "Quelle angelegt": that is
+covered by the random per-flow id from POST /google/connect, which
+create_source must present to adopt the tokens.
 """
 
 import contextlib
@@ -54,25 +63,38 @@ def build_auth_url(client_id: str) -> str:
     return f"{AUTH_BASE_URL}?{urlencode(params)}"
 
 
+def _query_of_pasted_url(text: str) -> str | None:
+    """The query string if the paste looks like a URL/query, else None.
+
+    URL detection goes by structure (``://`` or ``?``, or a leading ``?``
+    / bare ``code=...`` fragment) instead of searching for the substring
+    ``code=`` anywhere — a code parameter hidden inside another parameter's
+    value must not be mistaken for the real one, and a URL without any
+    query must still be recognized as a URL.
+    """
+    if "://" in text or "?" in text:
+        # urlsplit also handles a bare "?code=..." query string.
+        return urlsplit(text).query
+    if text.startswith("code=") or "&" in text:
+        return text
+    return None
+
+
 def extract_auth_code(raw: str) -> str:
     """Extract the authorization code from whatever the user pasted.
 
-    Accepts the full redirect URL, just its query string, a ``code=...``
-    fragment, or the raw (possibly still percent-encoded) code itself.
+    Accepts the full redirect URL (with or without scheme), just its
+    query string, a ``code=...`` fragment, or the raw (possibly still
+    percent-encoded) code itself.
     """
     text = raw.strip()
     if not text:
         raise GoogleOAuthError("Bitte die Weiterleitungs-URL oder den Code einfügen.")
-    if "code=" in text:
-        query = urlsplit(text).query or text.removeprefix("?")
+    query = _query_of_pasted_url(text)
+    if query is not None:
         codes = parse_qs(query).get("code")
         if codes and codes[0].strip():
             return codes[0].strip()
-        raise GoogleOAuthError(
-            "In der eingefügten URL wurde kein Code gefunden — bitte die"
-            " vollständige Weiterleitungs-URL kopieren."
-        )
-    if "://" in text or "?" in text or "&" in text:
         raise GoogleOAuthError(
             "In der eingefügten URL wurde kein Code gefunden — bitte die"
             " vollständige Weiterleitungs-URL kopieren."

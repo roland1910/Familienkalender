@@ -224,6 +224,9 @@ class Storage:
         if not assignments:
             return self.get_source(source_id) is not None
         with self._connect() as conn:
+            # The f-string only splices column names from the literals
+            # above — every value goes through a ? placeholder, so this
+            # is not an injection surface.
             cursor = conn.execute(
                 f"UPDATE sources SET {', '.join(assignments)} WHERE id = ?",
                 (*values, source_id),
