@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Aggregierter Familienkalender als lokales Home-Assistant-Add-on"
 requires-python = ">=3.12"
 dependencies = [
+    "defusedxml>=0.7",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "httpx>=0.27",

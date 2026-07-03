@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 import icalendar
 import recurring_ical_events
+from defusedxml import ElementTree as SafeET
 
 from app.models import LOCAL_TZ, CalendarEvent
 from app.sources import limits
@@ -96,7 +97,9 @@ def _extract_events(
 
 
 def _calendar_data_texts(multistatus_xml: bytes) -> list[str]:
-    root = ET.fromstring(multistatus_xml)
+    # defusedxml: server responses are untrusted XML (entity-expansion
+    # bombs, external entities); plain ET is only used for type hints.
+    root = SafeET.fromstring(multistatus_xml)
     return [
         element.text
         for element in root.iter(f"{{{CALDAV_NS}}}calendar-data")
@@ -188,7 +191,7 @@ async def list_calendars(
     )
     response, content = await limits.send_limited(client, request, auth=_auth(config))
     response.raise_for_status()
-    root = ET.fromstring(content)
+    root = SafeET.fromstring(content)
     calendars = []
     for response_el in root.iter(f"{{{DAV_NS}}}response"):
         prop = response_el.find(f"{{{DAV_NS}}}propstat/{{{DAV_NS}}}prop")

@@ -4,6 +4,7 @@
 #       --universal --generate-hashes --python-version 3.12
 # Keep the pins consistent with the version constraints in pyproject.toml
 # whenever either file changes.
+defusedxml==0.7.1
 fastapi==0.139.0
 uvicorn==0.49.0
 httpx==0.28.1
