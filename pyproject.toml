@@ -18,6 +18,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Make the repo root importable regardless of how pytest is invoked
+# (python -m pytest vs. the pytest entry point).
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
