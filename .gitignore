@@ -30,3 +30,6 @@ Thumbs.db
 
 # E2E-Screenshots
 tests/artifacts/
+
+# Lokale Claude-Code-Konfiguration (Dev-Server-Launch)
+.claude/

@@ -237,3 +237,9 @@ async def trigger_sync() -> dict:
 async def index() -> HTMLResponse:
     """Serve the German placeholder page (relative asset URLs, ingress-safe)."""
     return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page() -> HTMLResponse:
+    """Serve the admin page (same relative-URL rules as the calendar)."""
+    return HTMLResponse((STATIC_DIR / "admin" / "admin.html").read_text(encoding="utf-8"))

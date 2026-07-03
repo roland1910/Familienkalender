@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Familienkalender – Verwaltung</title>
+  <!-- Asset-URLs müssen relativ sein, damit die Seite hinter HA-Ingress funktioniert. -->
+  <link rel="stylesheet" href="static/css/admin.css">
+</head>
+<body>
+  <header class="toolbar">
+    <a class="nav-button back-link" href="./">&#8249; Kalender</a>
+    <h1 class="page-title">Verwaltung</h1>
+    <button id="btn-sync" class="nav-button" type="button">Jetzt synchronisieren</button>
+  </header>
+  <main class="admin">
+    <p id="page-message" class="message" hidden></p>
+
+    <section class="admin-section" aria-labelledby="sources-heading">
+      <h2 id="sources-heading">Kalender-Quellen</h2>
+      <ul id="source-list" class="source-list"></ul>
+      <div class="button-row">
+        <button id="btn-add-nextcloud" class="action-button" type="button">
+          Nextcloud-Kalender hinzufügen
+        </button>
+        <button id="btn-add-google" class="action-button" type="button">
+          Google-Kalender hinzufügen
+        </button>
+      </div>
+    </section>
+
+    <section id="nextcloud-form" class="admin-section wizard" hidden
+             aria-labelledby="nextcloud-heading">
+      <h2 id="nextcloud-heading">Nextcloud-Kalender hinzufügen</h2>
+      <div class="form-grid">
+        <label for="nc-url">Server-URL</label>
+        <input id="nc-url" type="url" placeholder="https://cloud.example.com" autocomplete="off">
+        <label for="nc-username">Benutzername</label>
+        <input id="nc-username" type="text" autocomplete="off">
+        <label for="nc-password">App-Passwort</label>
+        <input id="nc-password" type="password" autocomplete="off">
+      </div>
+      <div class="button-row">
+        <button id="nc-test" class="action-button" type="button">
+          Verbindung testen &amp; Kalender laden
+        </button>
+      </div>
+      <div id="nc-step-select" hidden>
+        <div class="form-grid">
+          <label for="nc-calendar">Kalender</label>
+          <select id="nc-calendar"></select>
+          <label for="nc-name">Name im Familienkalender</label>
+          <input id="nc-name" type="text" autocomplete="off">
+          <label for="nc-mode">Anzeige</label>
+          <select id="nc-mode">
+            <option value="full">Alle Termine</option>
+            <option value="filtered">Nur familienrelevante Termine (Abend/mehrtägig)</option>
+          </select>
+        </div>
+        <div class="button-row">
+          <button id="nc-save" class="action-button primary" type="button">Quelle anlegen</button>
+        </div>
+      </div>
+      <p id="nc-error" class="error-text" hidden></p>
+      <div class="button-row">
+        <button id="nc-cancel" class="action-button subtle" type="button">Abbrechen</button>
+      </div>
+    </section>
+
+    <section id="google-form" class="admin-section wizard" hidden
+             aria-labelledby="google-heading">
+      <h2 id="google-heading">Google-Kalender hinzufügen</h2>
+      <div id="g-step-credentials" hidden>
+        <p>Zuerst die App-Zugangsdaten aus der Google Cloud Console eintragen
+          (siehe Anleitung docs/google-oauth-einrichtung.md).</p>
+        <div class="form-grid">
+          <label for="g-client-id">Client-ID</label>
+          <input id="g-client-id" type="text" autocomplete="off">
+          <label for="g-client-secret">Client-Secret</label>
+          <input id="g-client-secret" type="password" autocomplete="off">
+        </div>
+        <div class="button-row">
+          <button id="g-save-credentials" class="action-button" type="button">
+            Zugangsdaten speichern
+          </button>
+        </div>
+      </div>
+      <div id="g-step-auth" hidden>
+        <ol class="steps">
+          <li>Anmelde-Link öffnen (beliebiger Browser, auch am Handy) und das
+            gewünschte Google-Konto anmelden.</li>
+          <li>Nach dem Bestätigen zeigt der Browser eine Fehlerseite
+            (localhost ist nicht erreichbar) &#8211; das ist richtig so.</li>
+          <li>Die komplette Adresse aus der Adresszeile kopieren und unten einfügen.</li>
+        </ol>
+        <div class="button-row">
+          <!-- href wird per JS auf die generierte Auth-URL gesetzt; bis dahin hidden. -->
+          <a id="g-auth-link" class="action-button" href="https://accounts.google.com/"
+             target="_blank" rel="noopener" hidden>
+            Anmelde-Link öffnen
+          </a>
+        </div>
+        <div class="form-grid">
+          <label for="g-code">Weiterleitungs-URL oder Code</label>
+          <input id="g-code" type="text" autocomplete="off"
+                 placeholder="http://localhost:1/?code=4/0A...">
+        </div>
+        <div class="button-row">
+          <button id="g-connect" class="action-button" type="button">Code einlösen</button>
+        </div>
+      </div>
+      <div id="g-step-select" hidden>
+        <div class="form-grid">
+          <label for="g-calendar">Kalender</label>
+          <select id="g-calendar"></select>
+          <label for="g-name">Name im Familienkalender</label>
+          <input id="g-name" type="text" autocomplete="off">
+          <label for="g-mode">Anzeige</label>
+          <select id="g-mode">
+            <option value="full">Alle Termine</option>
+            <option value="filtered">Nur familienrelevante Termine (Abend/mehrtägig)</option>
+          </select>
+        </div>
+        <div class="button-row">
+          <button id="g-save" class="action-button primary" type="button">Quelle anlegen</button>
+        </div>
+      </div>
+      <p id="g-error" class="error-text" hidden></p>
+      <div class="button-row">
+        <button id="g-cancel" class="action-button subtle" type="button">Abbrechen</button>
+      </div>
+    </section>
+
+    <section class="admin-section" aria-labelledby="settings-heading">
+      <h2 id="settings-heading">Einstellungen</h2>
+      <div class="form-grid">
+        <label for="evening-boundary">Abendgrenze (gefilterte Kalender zeigen Termine,
+          die über diese Uhrzeit hinausreichen)</label>
+        <input id="evening-boundary" type="time" step="60">
+      </div>
+      <div class="button-row">
+        <button id="btn-save-settings" class="action-button" type="button">Speichern</button>
+      </div>
+      <p id="settings-message" class="message" hidden></p>
+    </section>
+  </main>
+  <script type="module" src="static/admin/main.js"></script>
+</body>
+</html>

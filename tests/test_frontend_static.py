@@ -43,18 +43,30 @@ def test_js_modules_exist() -> None:
 
 
 def test_js_never_uses_html_injection_sinks() -> None:
-    js_files = list((STATIC_DIR / "js").glob("**/*.js"))
-    assert js_files, "no JS files found"
+    # All JS below app/static — the calendar modules and the admin modules.
+    js_files = list(STATIC_DIR.glob("**/*.js"))
+    assert len(js_files) > 11, "expected calendar and admin JS files"
     for path in js_files:
         content = path.read_text(encoding="utf-8")
         for sink in HTML_INJECTION_SINKS:
             assert sink not in content, f"{path.name} verwendet {sink}"
 
 
-def test_index_has_no_inline_event_handlers() -> None:
-    content = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    match = INLINE_HANDLER_PATTERN.search(content)
-    assert match is None, f"index.html enthält Inline-Handler: {match.group(0)!r}"
+def test_html_pages_have_no_inline_event_handlers() -> None:
+    for page in STATIC_DIR.glob("**/*.html"):
+        content = page.read_text(encoding="utf-8")
+        match = INLINE_HANDLER_PATTERN.search(content)
+        assert match is None, f"{page.name} enthält Inline-Handler: {match.group(0)!r}"
+
+
+def test_admin_modules_exist_and_are_served() -> None:
+    for module in ("main", "api"):
+        assert (STATIC_DIR / "admin" / f"{module}.js").is_file()
+        response = client.get(f"/static/admin/{module}.js")
+        assert response.status_code == 200, f"admin/{module}.js not served"
+        assert "javascript" in response.headers["content-type"]
+    css = client.get("/static/css/admin.css")
+    assert css.status_code == 200
 
 
 def test_stylesheet_and_modules_are_served() -> None:

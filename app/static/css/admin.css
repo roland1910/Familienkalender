@@ -1,0 +1,294 @@
+/* Familienkalender – Adminbereich. Primär Desktop im HA-Panel,
+   Touch-Ziele trotzdem mindestens 44px. */
+
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --border: #d8dadf;
+  --text: #1c1e21;
+  --text-muted: #6b7280;
+  --accent: #2563eb;
+  --danger: #b91c1c;
+  --ok-bg: #dcfce7;
+  --ok-text: #166534;
+  --warn-bg: #fee2e2;
+  --warn-text: #991b1b;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.page-title {
+  flex: 1;
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  touch-action: manipulation;
+}
+
+.nav-button:active {
+  background: var(--bg);
+}
+
+.admin {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.admin-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+
+.admin-section h2 {
+  margin: 0 0 12px;
+  font-size: 19px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 320px) 1fr;
+  gap: 10px 14px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.form-grid label {
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.form-grid input,
+.form-grid select,
+.rename-row input {
+  min-height: 44px;
+  padding: 6px 10px;
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.action-button {
+  min-height: 44px;
+  padding: 0 18px;
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  touch-action: manipulation;
+}
+
+.action-button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.action-button.subtle {
+  color: var(--text-muted);
+}
+
+/* -- source list -------------------------------------------------------- */
+
+.source-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.source-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-item.disabled {
+  opacity: 0.6;
+}
+
+.source-item.empty {
+  color: var(--text-muted);
+}
+
+.source-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.source-name {
+  font-size: 17px;
+}
+
+.type-badge,
+.state-badge,
+.error-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.error-badge {
+  background: var(--warn-bg);
+  border-color: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.source-status {
+  display: flex;
+  gap: 16px;
+  font-size: 14px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.source-error {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.source-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mode-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.mode-select,
+.small-button {
+  min-height: 40px;
+  padding: 4px 12px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.small-button.danger {
+  color: var(--danger);
+}
+
+.small-button.subtle {
+  color: var(--text-muted);
+}
+
+.rename-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.rename-row input {
+  max-width: 280px;
+}
+
+/* -- messages ------------------------------------------------------------ */
+
+.message {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  font-size: 15px;
+}
+
+.error-text {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.steps {
+  margin: 0 0 12px;
+  padding-left: 22px;
+  font-size: 15px;
+  color: var(--text-muted);
+}
+
+.steps li {
+  margin-bottom: 4px;
+}
+
+@media (max-width: 700px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: 4px 0;
+  }
+
+  .form-grid label {
+    margin-top: 8px;
+  }
+}

@@ -39,3 +39,26 @@ def test_index_contains_calendar_shell() -> None:
     assert 'id="calendar"' in response.text
     assert 'id="btn-today"' in response.text
     assert "static/js/main.js" in response.text
+
+
+def test_index_links_to_the_admin_page() -> None:
+    response = client.get("/")
+    assert 'href="admin"' in response.text  # relative: works behind ingress
+
+
+class TestAdminPage:
+    def test_admin_returns_html_shell(self) -> None:
+        response = client.get("/admin")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "Verwaltung" in response.text
+        assert "static/admin/main.js" in response.text
+
+    def test_admin_uses_only_relative_asset_urls(self) -> None:
+        response = client.get("/admin")
+        absolute_refs = re.findall(r'(?:href|src)="/[^/"]', response.text)
+        assert absolute_refs == [], f"absolute local URLs found: {absolute_refs}"
+
+    def test_admin_links_back_to_the_calendar(self) -> None:
+        response = client.get("/admin")
+        assert 'href="./"' in response.text
