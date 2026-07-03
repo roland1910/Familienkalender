@@ -1,12 +1,23 @@
 """FastAPI application for the Familienkalender Home Assistant add-on."""
 
+import asyncio
 import os
+from contextlib import asynccontextmanager, suppress
+from datetime import date, datetime, time, timedelta
+from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from app import sync as sync_module
+from app.filtering import DEFAULT_EVENING_BOUNDARY, is_family_relevant
+from app.models import LOCAL_TZ, StoredEvent
+from app.storage import Storage, default_db_path
+from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -84,7 +95,56 @@ class IngressPathMiddleware:
         await self.app(scope, receive, send)
 
 
-app = FastAPI(title="Familienkalender", docs_url=None, redoc_url=None)
+@lru_cache(maxsize=8)
+def _storage_for(db_path: Path) -> Storage:
+    return Storage(db_path)
+
+
+def get_storage() -> Storage:
+    """Storage for the current DATA_DIR (env is re-read so tests can vary it)."""
+    return _storage_for(default_db_path())
+
+
+def _evening_boundary() -> time:
+    """Evening boundary for the family filter (env EVENING_BOUNDARY, HH:MM).
+
+    Becomes an admin UI setting later; until then the env var keeps it
+    configurable without a rebuild.
+    """
+    raw = os.environ.get("EVENING_BOUNDARY", "")
+    if raw:
+        try:
+            return time.fromisoformat(raw)
+        except ValueError:
+            pass
+    return DEFAULT_EVENING_BOUNDARY
+
+
+def _sync_interval_seconds() -> float:
+    raw = os.environ.get("SYNC_INTERVAL_SECONDS", "")
+    try:
+        return float(raw) if raw else DEFAULT_SYNC_INTERVAL_SECONDS
+    except ValueError:
+        return DEFAULT_SYNC_INTERVAL_SECONDS
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Run the periodic sync as a background task while the app is up."""
+    interval = _sync_interval_seconds()
+    task: asyncio.Task | None = None
+    if interval > 0:
+        task = asyncio.create_task(sync_module.periodic_sync(get_storage(), interval))
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+app = FastAPI(title="Familienkalender", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.add_middleware(IngressPathMiddleware)
 # Added last so it runs first: nothing is processed for disallowed clients.
 app.add_middleware(ClientIPAllowlistMiddleware)
@@ -95,6 +155,81 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def health() -> dict[str, str]:
     """Liveness probe for the add-on watchdog."""
     return {"status": "ok"}
+
+
+def _serialize_event(item: StoredEvent) -> dict:
+    """JSON shape for the frontend; timed events in local time, all-day as dates.
+
+    All-day ``end`` keeps the iCalendar semantics (exclusive end date).
+    """
+    event = item.event
+    if event.all_day:
+        start = event.start.isoformat()
+        end = event.end.isoformat()
+    else:
+        start = event.start_as_datetime().astimezone(LOCAL_TZ).isoformat()
+        end = event.end_as_datetime().astimezone(LOCAL_TZ).isoformat()
+    return {
+        "source_id": item.source_id,
+        "source_name": item.source_name,
+        "uid": event.uid,
+        "title": event.title,
+        "start": start,
+        "end": end,
+        "all_day": event.all_day,
+        "location": event.location,
+    }
+
+
+@app.get("/api/events")
+async def list_events(
+    from_date: Annotated[date, Query(alias="from")],
+    to_date: Annotated[date, Query(alias="to")],
+) -> dict:
+    """Aggregated events for [from, to] (inclusive local calendar days).
+
+    Sources with display_mode=filtered only contribute family-relevant
+    events (see app.filtering).
+    """
+    if from_date > to_date:
+        raise HTTPException(status_code=400, detail="'from' muss vor 'to' liegen")
+    range_start = datetime.combine(from_date, time.min, tzinfo=LOCAL_TZ)
+    range_end = datetime.combine(to_date + timedelta(days=1), time.min, tzinfo=LOCAL_TZ)
+    boundary = _evening_boundary()
+    events = [
+        _serialize_event(item)
+        for item in get_storage().get_events(range_start, range_end)
+        if item.display_mode == "full" or is_family_relevant(item.event, boundary=boundary)
+    ]
+    return {"events": events}
+
+
+@app.get("/api/sources")
+async def list_sources() -> dict:
+    """Configured sources with sync status — deliberately without config/secrets."""
+    return {
+        "sources": [
+            {
+                "id": source.id,
+                "type": source.type,
+                "name": source.name,
+                "enabled": source.enabled,
+                "display_mode": source.display_mode,
+                "last_sync_at": (
+                    source.last_sync_at.isoformat() if source.last_sync_at else None
+                ),
+                "last_sync_error": source.last_sync_error,
+            }
+            for source in get_storage().list_sources()
+        ]
+    }
+
+
+@app.post("/api/sync")
+async def trigger_sync() -> dict:
+    """Manually trigger a sync of all enabled sources."""
+    results = await sync_all(get_storage())
+    return {"results": {str(source_id): error for source_id, error in results.items()}}
 
 
 @app.get("/", response_class=HTMLResponse)
