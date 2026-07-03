@@ -5,5 +5,10 @@ set -e
 
 bashio::log.info "Starte Familienkalender..."
 
+# The add-on data volume is mounted root-owned; hand it to the app user.
+if [ -d /data ]; then
+    chown -R app /data
+fi
+
 cd /usr/src/familienkalender
-exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8099
+exec su-exec app python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8099
