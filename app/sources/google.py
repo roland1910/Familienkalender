@@ -15,9 +15,11 @@ access token fresh.
 Source config keys: ``calendar_id``.
 """
 
+import contextlib
 import json
 import logging
 import os
+import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -43,19 +45,49 @@ _EXPIRY_MARGIN = timedelta(seconds=60)
 MAX_PAGES = 20
 
 
+# Flow ids are generated via secrets.token_urlsafe but come back from the
+# client and end up in a filename — restrict to the token_urlsafe alphabet.
+_FLOW_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Pending token files from abandoned flows are removed after this age.
+PENDING_TOKEN_MAX_AGE = timedelta(minutes=15)
+
+
+class InvalidFlowIdError(ValueError):
+    """A pending-flow id has an invalid format (possible path injection)."""
+
+
 def token_path(source_id: int) -> Path:
     """Where the OAuth tokens for a Google source are stored."""
     return resolve_data_dir() / f"google_token_{source_id}.json"
 
 
-def pending_token_path() -> Path:
+def pending_token_path(flow_id: str) -> Path:
     """Parking spot for tokens between OAuth connect and source creation.
 
     The admin flow first exchanges the code (tokens exist, source does
     not yet), then the user picks a calendar and the new source adopts
-    this file under its own id.
+    this file under its own id. The random flow id ties adoption to the
+    connect step that parked the tokens.
     """
-    return resolve_data_dir() / "google_token_pending.json"
+    if not _FLOW_ID_PATTERN.match(flow_id):
+        raise InvalidFlowIdError(f"invalid flow id: {flow_id!r}")
+    return resolve_data_dir() / f"google_token_pending_{flow_id}.json"
+
+
+def cleanup_stale_pending_tokens(max_age: timedelta = PENDING_TOKEN_MAX_AGE) -> None:
+    """Delete pending token files older than max_age (abandoned flows).
+
+    Called at every flow start so orphaned refresh tokens never linger
+    on disk longer than necessary. The pattern without underscore also
+    matches the single pending file of older versions.
+    """
+    cutoff = datetime.now(UTC).timestamp() - max_age.total_seconds()
+    for path in resolve_data_dir().glob("google_token_pending*.json"):
+        # A concurrent adoption may unlink the file mid-iteration.
+        with contextlib.suppress(OSError):
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
 
 
 def load_tokens(path: Path) -> dict[str, Any]:

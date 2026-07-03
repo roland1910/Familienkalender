@@ -6,7 +6,8 @@ tokens) must never appear in any API response — asserted negatively here.
 """
 
 import json
-from datetime import UTC, datetime
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -367,11 +368,15 @@ class TestGoogleFlowEndpoints:
             json={"code": "http://localhost:1/?code=4%2F0AbCdEf&scope=x"},
         )
         assert response.status_code == 200
-        assert response.json()["calendars"] == [{"id": "m@example.com", "name": "Marina"}]
+        payload = response.json()
+        assert payload["calendars"] == [{"id": "m@example.com", "name": "Marina"}]
         assert seen["code"] == "4/0AbCdEf"  # extraction happened
         assert seen["access_token"] == "at-1"
-        # Tokens are parked in the pending file until the source is created.
-        pending = json.loads(pending_token_path().read_text(encoding="utf-8"))
+        # Tokens are parked in a per-flow pending file until the source is
+        # created; the random flow id is the claim ticket for adoption.
+        flow_id = payload["flow_id"]
+        assert len(flow_id) >= 16
+        pending = json.loads(pending_token_path(flow_id).read_text(encoding="utf-8"))
         assert pending["refresh_token"] == "rt-1"
         # No token material in the response.
         assert "rt-1" not in response.text
@@ -400,28 +405,33 @@ class TestGoogleFlowEndpoints:
         )
         assert response.status_code == 400
 
-    def test_create_google_source_adopts_pending_tokens(
-        self, client: TestClient, storage: Storage
-    ) -> None:
-        pending = pending_token_path()
+    def _park_pending_tokens(self, flow_id: str = "abcDEF123_-x") -> str:
+        pending = pending_token_path(flow_id)
         pending.parent.mkdir(parents=True, exist_ok=True)
         pending.write_text(json.dumps({"refresh_token": "rt-1"}), encoding="utf-8")
+        return flow_id
+
+    def test_create_google_source_adopts_pending_tokens_via_flow_id(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        flow_id = self._park_pending_tokens()
 
         response = client.post(
             "/api/admin/sources",
             json={"type": "google", "name": "Marina", "display_mode": "full",
-                  "config": {"calendar_id": "m@example.com"}},
+                  "config": {"calendar_id": "m@example.com"}, "flow_id": flow_id},
         )
         assert response.status_code == 201
         source_id = response.json()["source"]["id"]
-        assert not pending.exists()
+        assert not pending_token_path(flow_id).exists()
         tokens = json.loads(token_path(source_id).read_text(encoding="utf-8"))
         assert tokens["refresh_token"] == "rt-1"
         assert "rt-1" not in response.text
 
-    def test_create_google_source_without_pending_tokens_is_400(
+    def test_create_google_source_without_flow_id_is_400(
         self, client: TestClient, storage: Storage
     ) -> None:
+        self._park_pending_tokens()
         response = client.post(
             "/api/admin/sources",
             json={"type": "google", "name": "Marina", "display_mode": "full",
@@ -430,3 +440,79 @@ class TestGoogleFlowEndpoints:
         assert response.status_code == 400
         assert "verbinden" in response.json()["detail"]
         assert storage.list_sources() == []
+
+    def test_create_google_source_with_unknown_flow_id_is_400(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        self._park_pending_tokens()
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "google", "name": "Marina", "display_mode": "full",
+                  "config": {"calendar_id": "m@example.com"}, "flow_id": "falsche-id"},
+        )
+        assert response.status_code == 400
+        assert storage.list_sources() == []
+
+    def test_create_google_source_with_malicious_flow_id_is_400(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # flow_id becomes part of a filename — path traversal must fail.
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "google", "name": "Marina", "display_mode": "full",
+                  "config": {"calendar_id": "m@example.com"},
+                  "flow_id": "../../etc/passwd"},
+        )
+        assert response.status_code == 400
+        assert storage.list_sources() == []
+
+
+class TestGooglePendingLifecycle:
+    def _set_credentials(self, client: TestClient) -> None:
+        client.put(
+            "/api/admin/settings/google",
+            json={"client_id": "cid.apps.googleusercontent.com", "client_secret": "cs"},
+        )
+
+    def test_delete_pending_flow_removes_the_file(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        pending = pending_token_path("flow123")
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(json.dumps({"refresh_token": "rt-1"}), encoding="utf-8")
+
+        response = client.delete("/api/admin/google/pending/flow123")
+        assert response.status_code == 200
+        assert not pending.exists()
+
+    def test_delete_unknown_pending_flow_is_idempotent(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # The wizard reset calls this endpoint unconditionally.
+        assert client.delete("/api/admin/google/pending/unbekannt").status_code == 200
+
+    def test_delete_with_malicious_flow_id_is_400(
+        self, client: TestClient, storage: Storage, tmp_path: Path
+    ) -> None:
+        victim = tmp_path / "opfer.json"
+        victim.write_text("{}", encoding="utf-8")
+        response = client.delete("/api/admin/google/pending/..%2F..%2Fopfer.json")
+        assert response.status_code in (400, 404)
+        assert victim.exists()
+
+    def test_stale_pending_files_are_cleaned_on_flow_start(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._set_credentials(client)
+        stale = pending_token_path("altcode")
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text(json.dumps({"refresh_token": "rt-alt"}), encoding="utf-8")
+        old = (datetime.now(UTC) - timedelta(minutes=30)).timestamp()
+        os.utime(stale, (old, old))
+        fresh = pending_token_path("frisch")
+        fresh.write_text(json.dumps({"refresh_token": "rt-neu"}), encoding="utf-8")
+
+        response = client.post("/api/admin/google/auth-url")
+        assert response.status_code == 200
+        assert not stale.exists()
+        assert fresh.exists()

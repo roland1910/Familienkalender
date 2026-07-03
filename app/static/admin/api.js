@@ -68,6 +68,10 @@ export function googleConnect(code) {
   return request("POST", "api/admin/google/connect", { code });
 }
 
+export function deleteGooglePending(flowId) {
+  return request("DELETE", `api/admin/google/pending/${encodeURIComponent(flowId)}`);
+}
+
 export function triggerSync() {
   return request("POST", "api/sync");
 }

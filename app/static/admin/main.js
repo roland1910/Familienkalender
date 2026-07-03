@@ -248,7 +248,16 @@ function initNextcloudWizard() {
 
 // -- Google wizard ------------------------------------------------------------
 
+// Claim ticket of the current pending OAuth flow (returned by
+// googleConnect, consumed by createSource, discarded on reset).
+let googleFlowId = null;
+
 function resetGoogleForm() {
+  if (googleFlowId) {
+    // Abort the pending flow so its parked tokens are removed server-side.
+    api.deleteGooglePending(googleFlowId).catch(() => {});
+    googleFlowId = null;
+  }
   byId("google-form").hidden = true;
   byId("g-step-credentials").hidden = true;
   byId("g-step-auth").hidden = true;
@@ -306,7 +315,8 @@ function initGoogleWizard() {
     const errorNode = byId("g-error");
     showMessage(errorNode, "");
     try {
-      const { calendars } = await api.googleConnect(byId("g-code").value);
+      const { flow_id: flowId, calendars } = await api.googleConnect(byId("g-code").value);
+      googleFlowId = flowId;
       if (calendars.length === 0) {
         showMessage(errorNode, "Keine Kalender gefunden.", true);
         return;
@@ -337,7 +347,10 @@ function initGoogleWizard() {
         name: byId("g-name").value.trim(),
         display_mode: byId("g-mode").value,
         config: { calendar_id: byId("g-calendar").value },
+        flow_id: googleFlowId,
       });
+      // The backend adopted the tokens — the reset must not delete them.
+      googleFlowId = null;
       resetGoogleForm();
       await refreshSources();
     } catch (error) {

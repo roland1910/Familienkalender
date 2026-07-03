@@ -10,7 +10,9 @@ a PATCH sending the placeholder back keeps the stored secret.
 """
 
 import logging
+import secrets
 from datetime import time
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -52,6 +54,8 @@ class SourceCreate(BaseModel):
     name: str
     display_mode: str
     config: dict
+    # Claim ticket from POST /google/connect; required for Google sources.
+    flow_id: str | None = None
 
 
 class SourceUpdate(BaseModel):
@@ -185,13 +189,27 @@ def _validate_caldav_create(body: SourceCreate) -> None:
     _validate_config_urls(body.config)
 
 
-def _adopt_pending_google_tokens(source_id: int) -> None:
-    pending = google.pending_token_path()
-    if not pending.exists():
+def _pending_tokens_or_400(flow_id: str | None) -> Path:
+    """The pending token file for a flow id, or 400 with a German message."""
+    if not flow_id:
         raise HTTPException(
             status_code=400,
             detail="Bitte zuerst das Google-Konto verbinden (Code einlösen).",
         )
+    try:
+        pending = google.pending_token_path(flow_id)
+    except google.InvalidFlowIdError as exc:
+        raise HTTPException(status_code=400, detail="Ungültige Flow-ID.") from exc
+    if not pending.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="Die Google-Verbindung ist abgelaufen — bitte den Vorgang"
+            " neu starten (Code einlösen).",
+        )
+    return pending
+
+
+def _adopt_pending_google_tokens(source_id: int, pending: Path) -> None:
     tokens = google.load_tokens(pending)
     google.save_tokens(google.token_path(source_id), tokens)
     pending.unlink()
@@ -199,6 +217,13 @@ def _adopt_pending_google_tokens(source_id: int) -> None:
 
 @router.post("/sources", status_code=201)
 async def create_source(body: SourceCreate) -> dict:
+    """Create a calendar source.
+
+    CalDAV sources must bring a complete, URL-validated config; Google
+    sources must reference a pending OAuth flow (``flow_id``) whose parked
+    tokens are adopted for the new source. Secrets in the response are
+    masked.
+    """
     if body.type not in SOURCE_TYPES:
         raise HTTPException(status_code=400, detail=f"Unbekannter Quelltyp: {body.type!r}")
     if body.display_mode not in DISPLAY_MODES:
@@ -208,25 +233,23 @@ async def create_source(body: SourceCreate) -> dict:
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Der Name darf nicht leer sein.")
     storage = get_storage()
+    pending = None
     if body.type == "caldav":
         _validate_caldav_create(body)
-    elif not body.config.get("calendar_id"):
-        raise HTTPException(status_code=400, detail="Bitte einen Kalender auswählen.")
-    # Check before creating the source so a failed adoption does not
-    # leave a token-less source behind.
-    if body.type == "google" and not google.pending_token_path().exists():
-        raise HTTPException(
-            status_code=400,
-            detail="Bitte zuerst das Google-Konto verbinden (Code einlösen).",
-        )
+    else:
+        if not body.config.get("calendar_id"):
+            raise HTTPException(status_code=400, detail="Bitte einen Kalender auswählen.")
+        # Check before creating the source so a failed adoption does not
+        # leave a token-less source behind.
+        pending = _pending_tokens_or_400(body.flow_id)
     source_id = storage.add_source(
         type=body.type,
         name=body.name.strip(),
         config=body.config,
         display_mode=body.display_mode,
     )
-    if body.type == "google":
-        _adopt_pending_google_tokens(source_id)
+    if pending is not None:
+        _adopt_pending_google_tokens(source_id, pending)
     source = storage.get_source(source_id)
     return {"source": _serialize_source(source, 0)}
 
@@ -320,21 +343,45 @@ def _google_credentials_or_400() -> tuple[str, str]:
 
 @router.post("/google/auth-url")
 async def google_auth_url() -> dict:
+    """Start of the OAuth flow: build the consent URL for the admin UI."""
+    google.cleanup_stale_pending_tokens()
     client_id, _ = _google_credentials_or_400()
     return {"auth_url": google_oauth.build_auth_url(client_id)}
 
 
 @router.post("/google/connect")
 async def google_connect(body: GoogleConnect) -> dict:
-    """Exchange the pasted code, park the tokens, return the calendar list."""
+    """Exchange the pasted code, park the tokens, return the calendar list.
+
+    The tokens are parked in a per-flow pending file; the returned random
+    ``flow_id`` is the claim ticket that ``create_source`` needs to adopt
+    them (nobody can adopt tokens they did not just receive the id for).
+    """
+    google.cleanup_stale_pending_tokens()
     client_id, client_secret = _google_credentials_or_400()
     try:
         code = google_oauth.extract_auth_code(body.code)
         tokens = await google_oauth.exchange_code(
             code, client_id=client_id, client_secret=client_secret
         )
-        google.save_tokens(google.pending_token_path(), tokens)
+        flow_id = secrets.token_urlsafe(16)
+        google.save_tokens(google.pending_token_path(flow_id), tokens)
         calendars = await google_oauth.fetch_calendar_list(tokens["access_token"])
     except google_oauth.GoogleOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"calendars": calendars}
+    return {"flow_id": flow_id, "calendars": calendars}
+
+
+@router.delete("/google/pending/{flow_id}")
+async def delete_google_pending(flow_id: str) -> dict:
+    """Abort a pending OAuth flow: discard its parked tokens.
+
+    Idempotent — the wizard reset calls this unconditionally, so an
+    already adopted or cleaned-up flow is not an error.
+    """
+    try:
+        pending = google.pending_token_path(flow_id)
+    except google.InvalidFlowIdError as exc:
+        raise HTTPException(status_code=400, detail="Ungültige Flow-ID.") from exc
+    pending.unlink(missing_ok=True)
+    return {"deleted": flow_id}
