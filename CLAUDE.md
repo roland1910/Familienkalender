@@ -28,7 +28,12 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 3. **Quality-Gate:** `ruff check` (und Frontend-Lint, sobald vorhanden) muss vor jedem Commit sauber sein. Code gut lesbar und wartbar halten; nach jedem größeren Arbeitspaket läuft ein separater Quality-Review-Agent.
 4. **Security:** Keine Secrets im Repo, in Commits oder im Chat. Credentials kommen zur Laufzeit aus der Admin-UI/HA-Optionen; für lokale Entwicklung aus `secrets.local.json` (gitignored). Security-Review bei jedem Meilenstein, der Credentials, Netzwerk oder Nutzereingaben berührt.
 5. **Sprache:** UI-Texte und Nutzer-Doku Deutsch; Code, Bezeichner und Kommentare Englisch.
-6. **Deployment** auf den Pi (`root@192.168.1.3`, Key `~/.ssh/id_ed25519`, Ziel `/addons/familienkalender`, dann `ha addons rebuild local_familienkalender`) macht ausschließlich der Orchestrator (Hauptsession), nicht Implementierungs-Agenten.
+6. **Deployment** auf den Pi macht ausschließlich der Orchestrator (Hauptsession), nicht Implementierungs-Agenten. Erprobte Prozedur:
+   ```
+   git archive main | ssh -i ~/.ssh/id_ed25519 root@192.168.1.3 "tar -x -C /addons/familienkalender"
+   ssh ... "ha store reload && ha addons rebuild local_familienkalender && ha addons restart local_familienkalender"
+   ```
+   Wichtig: `ha store reload` (nicht `ha addons reload`) macht Änderungen an config.yaml/neuen Add-ons sichtbar. Danach Logs prüfen: `ha addons logs local_familienkalender`.
 7. **Rollen & Modelle:** Implementierung komplexer Logik → Fable/inherit; mechanische Arbeit & Quality-Review → Sonnet; Boilerplate/Doku → Haiku; Security-Review → Fable. Implementierungs-Agenten laufen im Hintergrund.
 
 ## Kommandos
