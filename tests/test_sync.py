@@ -157,6 +157,29 @@ class TestSyncAll:
 
 
 @pytest.mark.anyio
+class TestSyncTimestamp:
+    async def test_all_sources_share_one_timestamp_per_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        storage.add_source(type="caldav", name="Zweite", config={})
+
+        async def slow_fetch(*args, **kwargs):
+            await asyncio.sleep(0.01)
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", slow_fetch)
+
+        # No fixed `now`: the timestamp must still be taken once per run,
+        # not once per source.
+        await sync_all(storage)
+
+        first, second = storage.list_sources()
+        assert first.last_sync_at == second.last_sync_at
+
+
+@pytest.mark.anyio
 class TestErrorSanitizing:
     async def test_credentials_in_error_reach_neither_db_nor_log(
         self,

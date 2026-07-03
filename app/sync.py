@@ -66,10 +66,11 @@ async def _sync_all_locked(
 ) -> dict[int, str | None]:
     window_start, window_end = sync_window(now)
     results: dict[int, str | None] = {}
+    # One consistent timestamp for the whole run, not one per source.
+    synced_at = now or datetime.now(UTC)
     for source in storage.list_sources():
         if not source.enabled:
             continue
-        synced_at = now or datetime.now(UTC)
         try:
             events = await _fetch_source_events(source, window_start, window_end)
             storage.sync_events(
