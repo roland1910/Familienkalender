@@ -17,16 +17,22 @@ dependencies = [
 dev = [
     "pytest>=8",
     "ruff>=0.8",
+    # Browser E2E tests run only on the dev machine, never in the add-on
+    # container — therefore a dev dependency, not part of requirements.in.
+    # Needs a one-time `python -m playwright install chromium`.
+    "pytest-playwright>=0.6",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Integration tests need secrets.local.json and a reachable server; they are
-# excluded by default and run explicitly via `pytest -m integration`
+# Integration tests need secrets.local.json and a reachable server; E2E tests
+# need playwright and an installed chromium. Both are excluded by default and
+# run explicitly via `pytest -m integration` / `pytest -m e2e`
 # (a -m option on the command line overrides the one from addopts).
-addopts = "-q -m 'not integration'"
+addopts = "-q -m 'not integration and not e2e'"
 markers = [
     "integration: Tests gegen echte externe Dienste (brauchen secrets.local.json)",
+    "e2e: Browser-E2E-Tests mit Playwright (brauchen chromium)",
 ]
 # Make the repo root importable regardless of how pytest is invoked
 # (python -m pytest vs. the pytest entry point).

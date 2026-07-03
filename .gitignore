@@ -27,3 +27,6 @@ node_modules/
 Thumbs.db
 .idea/
 .vscode/
+
+# E2E-Screenshots
+tests/artifacts/
