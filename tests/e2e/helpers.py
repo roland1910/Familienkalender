@@ -36,3 +36,46 @@ def goto_month_containing(page: Page, server_url: str, target: date) -> None:
     for _ in range(abs(months_ahead)):
         button.click()
     expect(page.locator("#period-title")).to_have_text(month_title(target))
+
+
+def monday_of_week(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def goto_week_containing(page: Page, server_url: str, target: date) -> None:
+    """Open the calendar in week view and page to the week of the target day."""
+    goto_calendar(page, server_url)
+    page.locator("#btn-week").click()
+    expect(page.locator(".week-view")).to_be_visible()
+    weeks_ahead = (monday_of_week(target) - monday_of_week(date.today())).days // 7
+    button = page.locator("#btn-next" if weeks_ahead >= 0 else "#btn-prev")
+    for _ in range(abs(weeks_ahead)):
+        button.click()
+    expect(
+        page.locator(f'.week-day-column[data-date="{target.isoformat()}"]')
+    ).to_be_attached()
+
+
+def swipe_horizontally(page: Page, delta_x: int) -> None:
+    """Dispatch a synthetic horizontal touch swipe on the calendar area."""
+    page.evaluate(
+        """(deltaX) => {
+            const element = document.getElementById("calendar");
+            const rect = element.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            const touchAt = (x, y) =>
+                new Touch({ identifier: 1, target: element, clientX: x, clientY: y });
+            element.dispatchEvent(new TouchEvent("touchstart", {
+                touches: [touchAt(centerX, centerY)],
+                changedTouches: [touchAt(centerX, centerY)],
+                bubbles: true,
+            }));
+            element.dispatchEvent(new TouchEvent("touchend", {
+                touches: [],
+                changedTouches: [touchAt(centerX + deltaX, centerY)],
+                bubbles: true,
+            }));
+        }""",
+        delta_x,
+    )
