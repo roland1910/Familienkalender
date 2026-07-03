@@ -10,15 +10,37 @@ with hostile XSS payload titles for manual verification that the frontend
 renders titles as text only.
 """
 
+import os
 import sys
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # Allow running as a plain script: `python scripts/seed_demo.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.models import LOCAL_TZ, CalendarEvent
 from app.storage import DB_FILENAME, Storage
+
+# The add-on's production data directory inside the container.
+PROD_DATA_DIR = PurePosixPath("/data")
+
+
+def ensure_seed_target_allowed(data_dir: Path) -> None:
+    """Refuse to seed the production data dir unless explicitly allowed.
+
+    /data holds the real family calendar inside the add-on container;
+    accidentally running the seed there would mix demo events into it.
+    The comparison uses the POSIX form so it is platform-independent
+    (and thereby unit-testable on Windows, where /data does not exist).
+    """
+    if PurePosixPath(Path(data_dir).as_posix()) != PROD_DATA_DIR:
+        return
+    if os.environ.get("FAMILIENKALENDER_ALLOW_PROD_SEED"):
+        return
+    raise SystemExit(
+        "Abbruch: Ziel ist das Produktions-Datenverzeichnis /data. "
+        "Demo-Daten dort nur mit FAMILIENKALENDER_ALLOW_PROD_SEED=1 anlegen."
+    )
 
 # (name, source type, display mode) — mirrors the real family setup.
 DEMO_SOURCES = (
@@ -118,6 +140,7 @@ def seed_demo(data_dir: Path, *, today: date | None = None) -> dict[str, int]:
 
     Returns a mapping of source name to source id.
     """
+    ensure_seed_target_allowed(data_dir)
     today = today or date.today()
     storage = Storage(Path(data_dir) / DB_FILENAME)
 
@@ -151,6 +174,9 @@ def main() -> None:
     from app.storage import resolve_data_dir
 
     data_dir = resolve_data_dir()
+    # Announce the target before anything is written, so an aborted or
+    # interrupted run still tells the user where it was about to write.
+    print(f"Ziel-Datenverzeichnis: {data_dir}")
     source_ids = seed_demo(data_dir)
     print(f"Demo-Daten angelegt in {data_dir} (Quellen: {source_ids})")
 

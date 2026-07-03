@@ -3,9 +3,11 @@
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+import pytest
+
 from app.models import LOCAL_TZ
 from app.storage import Storage
-from scripts.seed_demo import seed_demo
+from scripts.seed_demo import ensure_seed_target_allowed, seed_demo
 
 TODAY = date(2026, 7, 3)
 
@@ -94,3 +96,35 @@ def test_seed_filtered_source_has_droppable_daytime_event(tmp_path: Path) -> Non
         == item.event.end.astimezone(LOCAL_TZ).date()
     ]
     assert filtered_daytime, "expected a daytime meeting in a filtered source"
+
+
+def test_seed_refuses_prod_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Seeding into the add-on's production /data must abort by default.
+
+    The guard compares paths platform-independently (POSIX form), so the
+    test works on Windows too, where /data does not exist.
+    """
+    monkeypatch.delenv("FAMILIENKALENDER_ALLOW_PROD_SEED", raising=False)
+    with pytest.raises(SystemExit, match="FAMILIENKALENDER_ALLOW_PROD_SEED"):
+        ensure_seed_target_allowed(Path("/data"))
+
+
+def test_seed_demo_itself_refuses_prod_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard sits in seed_demo, not only in main — every caller is safe."""
+    monkeypatch.delenv("FAMILIENKALENDER_ALLOW_PROD_SEED", raising=False)
+    with pytest.raises(SystemExit):
+        seed_demo(Path("/data"), today=TODAY)
+
+
+def test_seed_prod_data_dir_allowed_with_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAMILIENKALENDER_ALLOW_PROD_SEED", "1")
+    ensure_seed_target_allowed(Path("/data"))  # must not raise
+
+
+def test_seed_other_dirs_are_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FAMILIENKALENDER_ALLOW_PROD_SEED", raising=False)
+    ensure_seed_target_allowed(tmp_path)  # must not raise
