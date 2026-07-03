@@ -4,7 +4,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, time, timedelta
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Annotated
 
@@ -95,7 +95,11 @@ class IngressPathMiddleware:
         await self.app(scope, receive, send)
 
 
-@lru_cache(maxsize=8)
+# Unbounded cache (equivalent to lru_cache(maxsize=None)): there is
+# exactly one DATA_DIR in production and one per test; a bounded cache
+# could evict (and later recreate) a Storage that is still in use, which
+# buys nothing and costs re-initialization.
+@cache
 def _storage_for(db_path: Path) -> Storage:
     return Storage(db_path)
 

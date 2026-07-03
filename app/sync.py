@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, time, timedelta
 
-from app.models import LOCAL_TZ, Source
+from app.models import LOCAL_TZ, CalendarEvent, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google
 from app.storage import Storage
@@ -38,7 +38,7 @@ def sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
 
 async def _fetch_source_events(
     source: Source, window_start: datetime, window_end: datetime
-) -> list:
+) -> list[CalendarEvent]:
     if source.type == "caldav":
         return await caldav.fetch_events(source.config, window_start, window_end)
     if source.type == "google":

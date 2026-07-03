@@ -241,6 +241,10 @@ class Storage:
 
     def get_events(self, range_start: datetime, range_end: datetime) -> list[StoredEvent]:
         """All stored events overlapping [range_start, range_end), sorted by start."""
+        # Range filtering happens in Python, not in SQL: the start/end
+        # columns mix UTC ISO datetimes (timed events) with plain ISO dates
+        # (all-day events), so a lexicographic SQL comparison would be wrong
+        # across the two encodings. The table is tiny (one household).
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT e.*, s.name AS source_name, s.display_mode AS source_display_mode"
