@@ -79,6 +79,12 @@ class IngressPathMiddleware:
     before proxying and sends it in the X-Ingress-Path header. Setting it as
     root_path keeps generated URLs (url_for, redirects, docs) correct.
     Invalid header values are ignored, never an error.
+
+    The ASGI spec requires "path" to contain root_path as a prefix; Starlette
+    relies on that and strips root_path from the path when routing
+    (get_route_path). Because the proxy already stripped the prefix, it has
+    to be re-added here — otherwise mounted apps (StaticFiles) resolve the
+    wrong path and every asset 404s behind ingress.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -91,6 +97,13 @@ class IngressPathMiddleware:
                     ingress_path = value.decode("latin-1")
                     if _is_valid_ingress_path(ingress_path):
                         scope["root_path"] = ingress_path
+                        path = scope.get("path", "")
+                        if not path.startswith(ingress_path):
+                            scope["path"] = ingress_path + path
+                        raw_path = scope.get("raw_path")
+                        ingress_raw = ingress_path.encode("latin-1")
+                        if raw_path is not None and not raw_path.startswith(ingress_raw):
+                            scope["raw_path"] = ingress_raw + raw_path
                     break
         await self.app(scope, receive, send)
 

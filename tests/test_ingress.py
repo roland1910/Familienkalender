@@ -29,20 +29,54 @@ def test_health_works_behind_ingress() -> None:
     assert response.status_code == 200
 
 
+def test_static_asset_works_behind_ingress() -> None:
+    """Regression: mounted StaticFiles must resolve with the ingress header set.
+
+    Starlette strips root_path from the request path (get_route_path) per the
+    ASGI spec, but the HA ingress proxy sends the path already stripped —
+    without compensation every static asset 404s behind ingress.
+    """
+    response = client.get("/static/styles.css", headers={"X-Ingress-Path": INGRESS_PATH})
+    assert response.status_code == 200
+    assert "text/css" in response.headers["content-type"]
+
+
+def test_static_asset_content_identical_with_and_without_ingress() -> None:
+    plain = client.get("/static/styles.css")
+    behind_ingress = client.get(
+        "/static/styles.css", headers={"X-Ingress-Path": INGRESS_PATH}
+    )
+    assert behind_ingress.status_code == plain.status_code == 200
+    assert behind_ingress.content == plain.content
+
+
+def test_api_route_works_behind_ingress() -> None:
+    response = client.get(
+        "/api/events",
+        params={"from": "2026-07-01", "to": "2026-07-31"},
+        headers={"X-Ingress-Path": INGRESS_PATH},
+    )
+    assert response.status_code == 200
+
+
 @pytest.mark.anyio
-async def test_middleware_sets_root_path_from_header() -> None:
+async def test_middleware_sets_root_path_and_prefixes_path() -> None:
     captured: dict[str, str] = {}
 
     async def asgi_app(scope: Scope, receive: Receive, send: Send) -> None:
         captured["root_path"] = scope.get("root_path", "")
+        captured["path"] = scope.get("path", "")
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})
 
     wrapped = IngressPathMiddleware(asgi_app)
     transport = httpx.ASGITransport(app=wrapped)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
-        await async_client.get("/", headers={"X-Ingress-Path": INGRESS_PATH})
+        await async_client.get("/static/app.css", headers={"X-Ingress-Path": INGRESS_PATH})
     assert captured["root_path"] == INGRESS_PATH
+    # ASGI spec: "path" contains root_path as a prefix. The ingress proxy
+    # strips it, so the middleware has to put it back.
+    assert captured["path"] == f"{INGRESS_PATH}/static/app.css"
 
 
 @pytest.mark.anyio
