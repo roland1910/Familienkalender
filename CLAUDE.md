@@ -49,5 +49,6 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 ## Frontend
 
 - Vanilla-ES-Module in `app/static/js/` (api, state, dates, events, colors, dom, popover, month-view, week-view, gestures, main), CSS in `app/static/css/`. **Kein Build-Schritt** — die Module laufen direkt im Browser.
+- Adminbereich unter `/admin` (`app/static/admin/`: admin.html, main.js, api.js; Stile in `app/static/css/admin.css`), erreichbar über das Zahnrad im Kalender-Header. Gleiche Regeln: relative URLs, `textContent`-only, Deutsch. Backend-Endpunkte unter `/api/admin/*` (`app/admin.py`).
 - JS-Lint/-Format: **Biome** (einzelne Dev-Dependency in `package.json`, `biome.json` als Konfiguration). `npx biome check --write app/static` formatiert.
 - Alle URLs im Frontend sind relativ (Ingress!). Fremde Strings (Titel, Ort) ausschließlich via `textContent` — abgesichert durch `tests/test_frontend_static.py` (verbietet HTML-Injection-Sinks) und den XSS-E2E-Test.
