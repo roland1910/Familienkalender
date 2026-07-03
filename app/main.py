@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import sync as sync_module
-from app.filtering import DEFAULT_EVENING_BOUNDARY, is_family_relevant
+from app.filtering import DEFAULT_EVENING_BOUNDARY, filter_events
 from app.models import LOCAL_TZ, StoredEvent
 from app.storage import Storage, default_db_path
 from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
@@ -196,10 +196,12 @@ async def list_events(
     range_start = datetime.combine(from_date, time.min, tzinfo=LOCAL_TZ)
     range_end = datetime.combine(to_date + timedelta(days=1), time.min, tzinfo=LOCAL_TZ)
     boundary = _evening_boundary()
+    # filter_events is the single place deciding what display_mode means;
+    # it is called per event because each StoredEvent carries its own mode.
     events = [
         _serialize_event(item)
         for item in get_storage().get_events(range_start, range_end)
-        if item.display_mode == "full" or is_family_relevant(item.event, boundary=boundary)
+        if filter_events([item.event], display_mode=item.display_mode, boundary=boundary)
     ]
     return {"events": events}
 
