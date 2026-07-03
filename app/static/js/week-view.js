@@ -12,11 +12,16 @@ import {
   WEEKDAY_NAMES_SHORT,
 } from "./dates.js";
 import { el } from "./dom.js";
-import { spansFullDays } from "./events.js";
+import { groupEventsByDay, spansFullDays } from "./events.js";
+import { openDayPopover } from "./popover.js";
 
 export const HOUR_HEIGHT_PX = 60;
 const SCROLL_TO_HOUR = 6;
 const MIN_EVENT_HEIGHT_PX = 24;
+// Rendering caps: foreign calendars can deliver arbitrarily many events, so
+// the DOM size per view stays bounded. Overflow goes to the day popover.
+const MAX_ALLDAY_LANES = 5;
+const MAX_TIMED_EVENTS_PER_DAY = 30;
 
 export function weekRange(anchor) {
   const start = startOfWeek(anchor);
@@ -41,6 +46,18 @@ function assignLanes(bars) {
   return laneEnds.length;
 }
 
+// All events touching the given day, sorted like the month view sorts them.
+function eventsForDay(events, day) {
+  return groupEventsByDay(events, day, day).get(toISODate(day)) ?? [];
+}
+
+function moreButton(hiddenCount, events, day) {
+  const more = el("button", "more-button", `+${hiddenCount} weitere`);
+  more.type = "button";
+  more.addEventListener("click", () => openDayPopover(day, eventsForDay(events, day)));
+  return more;
+}
+
 function buildAllDaySection(events, start) {
   const section = el("div", "week-allday");
   const bars = events
@@ -52,8 +69,11 @@ function buildAllDaySection(events, start) {
     }))
     .filter((bar) => bar.startCol <= 6 && bar.endCol >= 0)
     .sort((a, b) => a.startCol - b.startCol || b.endCol - a.endCol);
-  assignLanes(bars);
+  const laneCount = assignLanes(bars);
+  // With more lanes than fit, the last row becomes the "+N weitere" buttons.
+  const visibleLanes = laneCount > MAX_ALLDAY_LANES ? MAX_ALLDAY_LANES - 1 : laneCount;
   for (const bar of bars) {
+    if (bar.lane >= visibleLanes) continue;
     const node = el("div", "allday-bar");
     node.style.setProperty("--source-color", colorForSource(bar.event.source_id));
     // +2: column 1 is the hour gutter.
@@ -61,6 +81,16 @@ function buildAllDaySection(events, start) {
     node.style.gridRow = String(bar.lane + 1);
     node.append(el("span", "chip-title", bar.event.title));
     section.append(node);
+  }
+  for (let col = 0; col < 7 && laneCount > visibleLanes; col += 1) {
+    const hidden = bars.filter(
+      (bar) => bar.lane >= visibleLanes && bar.startCol <= col && bar.endCol >= col,
+    ).length;
+    if (hidden === 0) continue;
+    const more = moreButton(hidden, events, addDays(start, col));
+    more.style.gridColumn = String(col + 2);
+    more.style.gridRow = String(MAX_ALLDAY_LANES);
+    section.append(more);
   }
   return section;
 }
@@ -110,11 +140,19 @@ function minutesIntoDay(moment, day) {
   return moment.getHours() * 60 + moment.getMinutes();
 }
 
-function buildDayColumn(day, dayEvents, today) {
+function buildDayColumn(day, dayEvents, today, allEvents) {
   const column = el("div", "week-day-column");
   column.dataset.date = toISODate(day);
   if (isSameDay(day, today)) column.classList.add("today");
-  for (const item of layoutTimedEvents(dayEvents)) {
+  // Cap the rendered events per day; the earliest ones win, the rest is
+  // reachable through the "+N weitere" popover.
+  let visible = dayEvents;
+  if (dayEvents.length > MAX_TIMED_EVENTS_PER_DAY) {
+    visible = [...dayEvents]
+      .sort((a, b) => a.start - b.start || a.end - b.end)
+      .slice(0, MAX_TIMED_EVENTS_PER_DAY);
+  }
+  for (const item of layoutTimedEvents(visible)) {
     const startMinutes = minutesIntoDay(item.start, day);
     const endMinutes = Math.max(
       minutesIntoDay(item.end, day),
@@ -131,6 +169,11 @@ function buildDayColumn(day, dayEvents, today) {
     node.append(el("span", "chip-title", item.event.title));
     node.title = item.event.title;
     column.append(node);
+  }
+  if (visible.length < dayEvents.length) {
+    const more = moreButton(dayEvents.length - visible.length, allEvents, day);
+    more.classList.add("timed-more");
+    column.append(more);
   }
   return column;
 }
@@ -180,7 +223,7 @@ export function renderWeekView(container, anchor, events, today) {
     const dayEvents = events.filter(
       (event) => !spansFullDays(event) && event.startDay <= day && event.endDayInclusive >= day,
     );
-    grid.append(buildDayColumn(day, dayEvents, today));
+    grid.append(buildDayColumn(day, dayEvents, today, events));
   }
   scroll.append(grid);
   view.append(scroll);

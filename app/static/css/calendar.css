@@ -381,6 +381,24 @@ body {
   grid-auto-rows: 28px;
   row-gap: 3px;
   padding: 4px 0;
+  /* Fallback cap: 5 lanes à 28px + 4 gaps à 3px + 8px padding. The JS
+     already limits the lanes; this guards against layout surprises. */
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.week-allday .more-button {
+  min-height: 0;
+  padding: 0 6px;
+  text-align: left;
+}
+
+.timed-more {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--surface);
 }
 
 .allday-bar {
