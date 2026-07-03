@@ -39,6 +39,18 @@ _SECRET_CONFIG_KEYS = ("app_password",)
 # Config keys that are fetch targets and must pass validate_source_url.
 _URL_CONFIG_KEYS = ("url", "calendar_url")
 
+# Allowed config keys per source type. Unknown keys are discarded so the
+# raw JSON from the client can never persist (and later expose) anything
+# the sync engine does not consume.
+_CONFIG_KEYS_BY_TYPE = {
+    "caldav": ("url", "username", "app_password", "calendar_url"),
+    "google": ("calendar_id",),
+}
+
+# Source names are display strings; the cap keeps hostile input from
+# bloating the DB and the admin UI.
+MAX_NAME_LENGTH = 200
+
 
 class SettingsUpdate(BaseModel):
     evening_boundary: str
@@ -86,6 +98,25 @@ def _masked_config(config: dict) -> dict:
         if masked.get(key):
             masked[key] = SECRET_MASK
     return masked
+
+
+def _validated_name(name: str) -> str:
+    """Trimmed source name, or 400 for empty/overlong names."""
+    stripped = name.strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="Der Name darf nicht leer sein.")
+    if len(stripped) > MAX_NAME_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Der Name darf höchstens {MAX_NAME_LENGTH} Zeichen lang sein.",
+        )
+    return stripped
+
+
+def _filtered_config(source_type: str, config: dict) -> dict:
+    """The config restricted to the whitelisted keys for this source type."""
+    allowed = _CONFIG_KEYS_BY_TYPE[source_type]
+    return {key: value for key, value in config.items() if key in allowed}
 
 
 def _validate_config_urls(config: dict) -> None:
@@ -175,18 +206,18 @@ async def list_sources() -> dict:
     }
 
 
-def _validate_caldav_create(body: SourceCreate) -> None:
+def _validate_caldav_create(config: dict) -> None:
     missing = [
         key
         for key in ("url", "username", "app_password", "calendar_url")
-        if not body.config.get(key)
+        if not config.get(key)
     ]
     if missing:
         raise HTTPException(
             status_code=400,
             detail=f"Fehlende Angaben: {', '.join(missing)}",
         )
-    _validate_config_urls(body.config)
+    _validate_config_urls(config)
 
 
 def _pending_tokens_or_400(flow_id: str | None) -> Path:
@@ -230,22 +261,22 @@ async def create_source(body: SourceCreate) -> dict:
         raise HTTPException(
             status_code=400, detail=f"Unbekannter Anzeigemodus: {body.display_mode!r}"
         )
-    if not body.name.strip():
-        raise HTTPException(status_code=400, detail="Der Name darf nicht leer sein.")
+    name = _validated_name(body.name)
+    config = _filtered_config(body.type, body.config)
     storage = get_storage()
     pending = None
     if body.type == "caldav":
-        _validate_caldav_create(body)
+        _validate_caldav_create(config)
     else:
-        if not body.config.get("calendar_id"):
+        if not config.get("calendar_id"):
             raise HTTPException(status_code=400, detail="Bitte einen Kalender auswählen.")
         # Check before creating the source so a failed adoption does not
         # leave a token-less source behind.
         pending = _pending_tokens_or_400(body.flow_id)
     source_id = storage.add_source(
         type=body.type,
-        name=body.name.strip(),
-        config=body.config,
+        name=name,
+        config=config,
         display_mode=body.display_mode,
     )
     if pending is not None:
@@ -264,17 +295,26 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
         raise HTTPException(
             status_code=400, detail=f"Unbekannter Anzeigemodus: {body.display_mode!r}"
         )
+    name = _validated_name(body.name) if body.name is not None else None
     config = None
     if body.config is not None:
-        config = dict(body.config)
-        # The mask placeholder (or an omitted value) means: keep the secret.
+        config = _filtered_config(existing.type, body.config)
         for key in _SECRET_CONFIG_KEYS:
+            # The mask placeholder (or an omitted value) means: keep the secret.
             if config.get(key, SECRET_MASK) == SECRET_MASK and existing.config.get(key):
                 config[key] = existing.config[key]
+            # An empty secret would silently break the next sync — reject it
+            # instead of storing it (the stored secret stays untouched).
+            if key in config and not config[key]:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Das App-Passwort darf nicht leer sein — zum"
+                    " Beibehalten das Feld unverändert lassen.",
+                )
         _validate_config_urls(config)
     storage.update_source(
         source_id,
-        name=body.name,
+        name=name,
         config=config,
         enabled=body.enabled,
         display_mode=body.display_mode,

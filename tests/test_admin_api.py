@@ -181,6 +181,30 @@ class TestCreateCaldavSource:
         )
         assert response.status_code == 400
 
+    def test_rejects_name_longer_than_200_characters(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "caldav", "name": "x" * 201, "display_mode": "full",
+                  "config": CALDAV_CONFIG},
+        )
+        assert response.status_code == 400
+        assert "200" in response.json()["detail"]
+        assert storage.list_sources() == []
+
+    def test_unknown_config_keys_are_discarded(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        config = {**CALDAV_CONFIG, "unbekannt": "wert", "__proto__": "x"}
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "caldav", "name": "Firma", "display_mode": "full",
+                  "config": config},
+        )
+        assert response.status_code == 201
+        assert storage.list_sources()[0].config == CALDAV_CONFIG
+
     def test_rejects_unknown_type_and_mode(
         self, client: TestClient, storage: Storage
     ) -> None:
@@ -230,6 +254,39 @@ class TestUpdateAndDeleteSource:
         new_config = {**CALDAV_CONFIG, "app_password": "neues-passwort"}
         client.patch(f"/api/admin/sources/{source_id}", json={"config": new_config})
         assert storage.get_source(source_id).config["app_password"] == "neues-passwort"
+
+    def test_patch_empty_app_password_is_422_and_keeps_secret(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(type="caldav", name="Firma", config=CALDAV_CONFIG)
+        new_config = {**CALDAV_CONFIG, "app_password": ""}
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"config": new_config}
+        )
+        assert response.status_code == 422
+        assert "App-Passwort" in response.json()["detail"]
+        assert storage.get_source(source_id).config["app_password"] == "sehr-geheim"
+
+    def test_patch_name_longer_than_200_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(type="caldav", name="Firma", config=CALDAV_CONFIG)
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"name": "x" * 201}
+        )
+        assert response.status_code == 400
+        assert storage.get_source(source_id).name == "Firma"
+
+    def test_patch_discards_unknown_config_keys(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(type="caldav", name="Firma", config=CALDAV_CONFIG)
+        new_config = {**CALDAV_CONFIG, "app_password": "***", "extra": "weg-damit"}
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"config": new_config}
+        )
+        assert response.status_code == 200
+        assert storage.get_source(source_id).config == CALDAV_CONFIG
 
     def test_patch_config_validates_urls(
         self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
