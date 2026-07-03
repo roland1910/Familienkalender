@@ -49,6 +49,26 @@ class TestForbiddenNetworks:
         with pytest.raises(SourceURLError, match="nicht erlaubt"):
             validate_source_url("https://169.254.10.20/dav/")
 
+    def test_loopback_v4_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("FAMILIENKALENDER_ALLOW_HTTP", raising=False)
+        with pytest.raises(SourceURLError, match="nicht erlaubt"):
+            validate_source_url("https://127.0.0.1/dav/")
+
+    def test_loopback_v6_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("FAMILIENKALENDER_ALLOW_HTTP", raising=False)
+        with pytest.raises(SourceURLError, match="nicht erlaubt"):
+            validate_source_url("https://[::1]/dav/")
+
+    def test_loopback_is_allowed_in_dev_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # FAMILIENKALENDER_ALLOW_HTTP marks local development/E2E stubs,
+        # which listen on 127.0.0.1 — never set in the add-on container.
+        monkeypatch.setenv("FAMILIENKALENDER_ALLOW_HTTP", "1")
+        validate_source_url("https://127.0.0.1:8123/dav/")
+
+    def test_reserved_range_is_rejected(self) -> None:
+        with pytest.raises(SourceURLError, match="nicht erlaubt"):
+            validate_source_url("https://240.0.0.1/dav/")
+
     def test_link_local_v6_is_rejected(self) -> None:
         with pytest.raises(SourceURLError):
             validate_source_url("https://[fe80::1]/dav/")
@@ -74,6 +94,38 @@ class TestForbiddenNetworks:
 
     def test_hostnames_are_allowed(self) -> None:
         validate_source_url("https://cloud.example.com/remote.php/dav/")
+
+    def test_lan_ip_literals_stay_allowed(self) -> None:
+        # Design decision: private LAN ranges stay reachable — a Nextcloud
+        # on the home network is the primary use case.
+        validate_source_url("https://192.168.1.50/dav/")
+
+
+class TestNumericHostnames:
+    """inet_aton-style notations that bypass the IP-literal check.
+
+    ``ipaddress`` does not parse them, but glibc resolvers do (decimal
+    2130706433, hex 0x7f000001, octal 0177.0.0.1 → 127.0.0.1). The current
+    musl base image does not resolve them, but the check is defensive
+    against a base-image change.
+    """
+
+    def test_decimal_notation_is_rejected(self) -> None:
+        with pytest.raises(SourceURLError, match="Hostname"):
+            validate_source_url("https://2130706433/dav/")
+
+    def test_hex_notation_is_rejected(self) -> None:
+        with pytest.raises(SourceURLError, match="Hostname"):
+            validate_source_url("https://0x7f000001/dav/")
+
+    def test_octal_dotted_notation_is_rejected(self) -> None:
+        with pytest.raises(SourceURLError, match="Hostname"):
+            validate_source_url("https://0177.0.0.1/dav/")
+
+    def test_short_dotted_numeric_is_rejected(self) -> None:
+        # inet_aton("127.1") is 127.0.0.1.
+        with pytest.raises(SourceURLError, match="Hostname"):
+            validate_source_url("https://127.1/dav/")
 
     def test_error_messages_are_german(self) -> None:
         with pytest.raises(SourceURLError) as excinfo:
