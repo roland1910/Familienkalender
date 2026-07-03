@@ -28,23 +28,27 @@ export function weekRange(anchor) {
   return { start, end: addDays(start, 6) };
 }
 
-// -- top section: full-day / multi-day bars ------------------------------
-
-function assignLanes(bars) {
-  // Greedy interval scheduling: first lane whose last bar ends before this
-  // bar starts. Bars are pre-sorted by start column.
+// Greedy interval scheduling, shared by the all-day bars (integer columns)
+// and the timed events (millisecond timestamps): each item goes into the
+// first lane that is free at its start. getStart/getEnd must use
+// exclusive-end semantics (a lane is free when its last end <= the next
+// start) and the items must be pre-sorted by start. Sets item.lane and
+// returns the number of lanes used.
+function assignLanes(items, getStart, getEnd) {
   const laneEnds = [];
-  for (const bar of bars) {
-    let lane = laneEnds.findIndex((end) => end < bar.startCol);
+  for (const item of items) {
+    let lane = laneEnds.findIndex((end) => end <= getStart(item));
     if (lane === -1) {
       lane = laneEnds.length;
       laneEnds.push(0);
     }
-    laneEnds[lane] = bar.endCol;
-    bar.lane = lane;
+    laneEnds[lane] = getEnd(item);
+    item.lane = lane;
   }
   return laneEnds.length;
 }
+
+// -- top section: full-day / multi-day bars ------------------------------
 
 // All events touching the given day, sorted like the month view sorts them.
 function eventsForDay(events, day) {
@@ -69,7 +73,12 @@ function buildAllDaySection(events, start) {
     }))
     .filter((bar) => bar.startCol <= 6 && bar.endCol >= 0)
     .sort((a, b) => a.startCol - b.startCol || b.endCol - a.endCol);
-  const laneCount = assignLanes(bars);
+  // endCol is inclusive; +1 turns it into the exclusive end assignLanes expects.
+  const laneCount = assignLanes(
+    bars,
+    (bar) => bar.startCol,
+    (bar) => bar.endCol + 1,
+  );
   // With more lanes than fit, the last row becomes the "+N weitere" buttons.
   const visibleLanes = laneCount > MAX_ALLDAY_LANES ? MAX_ALLDAY_LANES - 1 : laneCount;
   for (const bar of bars) {
@@ -106,18 +115,13 @@ function layoutTimedEvents(dayEvents) {
   let clusterEnd = null;
 
   const flush = () => {
-    const laneEnds = [];
+    const laneCount = assignLanes(
+      cluster,
+      (item) => item.start.getTime(),
+      (item) => item.end.getTime(),
+    );
     for (const item of cluster) {
-      let lane = laneEnds.findIndex((end) => end <= item.start.getTime());
-      if (lane === -1) {
-        lane = laneEnds.length;
-        laneEnds.push(0);
-      }
-      laneEnds[lane] = item.end.getTime();
-      item.lane = lane;
-    }
-    for (const item of cluster) {
-      item.laneCount = laneEnds.length;
+      item.laneCount = laneCount;
       laid.push(item);
     }
     cluster = [];
