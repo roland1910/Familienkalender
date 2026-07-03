@@ -13,6 +13,7 @@ Source config keys: ``url`` (server base URL), ``username``,
 ``app_password``, ``calendar_url`` (the calendar collection to sync).
 """
 
+import logging
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,6 +24,8 @@ import recurring_ical_events
 
 from app.models import LOCAL_TZ, CalendarEvent
 from app.sources import limits
+
+logger = logging.getLogger(__name__)
 
 DAV_NS = "DAV:"
 CALDAV_NS = "urn:ietf:params:xml:ns:caldav"
@@ -132,9 +135,25 @@ async def fetch_events(
     response, content = await limits.send_limited(client, request, auth=_auth(config))
     response.raise_for_status()
     events: list[CalendarEvent] = []
+    parse_errors: list[str] = []
     for ics_text in _calendar_data_texts(content):
-        events.extend(_extract_events(ics_text, window_start, window_end))
+        # One broken object (e.g. a malformed foreign invitation) must not
+        # abort the whole calendar fetch: skip it and keep the rest.
+        try:
+            extracted = _extract_events(ics_text, window_start, window_end)
+        except Exception as exc:
+            # Only the exception type is logged — messages of parser
+            # exceptions may quote raw (foreign, untrusted) event data.
+            parse_errors.append(type(exc).__name__)
+            continue
+        events.extend(extracted)
         limits.check_event_count(len(events))
+    if parse_errors:
+        logger.warning(
+            "Skipped %d unparseable calendar object(s) (%s)",
+            len(parse_errors),
+            ", ".join(sorted(set(parse_errors))),
+        )
     return events
 
 

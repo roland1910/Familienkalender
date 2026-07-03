@@ -210,6 +210,30 @@ class TestFetchLimits:
         assert len(events) == 1
 
 
+BROKEN_ICS = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART;VALUE=KAPUTT:???\nEND:VCALENDAR"
+
+
+@pytest.mark.anyio
+class TestPerEventErrorIsolation:
+    async def test_broken_ical_blob_does_not_abort_the_fetch(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(BROKEN_ICS, fixture("simple.ics"), fixture("allday.ics"))
+        async with make_client(xml, captured) as client:
+            with caplog.at_level("WARNING", logger="app.sources.caldav"):
+                events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+        # The two valid events survive the broken foreign invitation.
+        assert {event.uid for event in events} == {
+            "simple-1@example.com",
+            "allday-1@example.com",
+        }
+        # The failure is counted and logged — without leaking raw event data.
+        assert any("1" in record.getMessage() for record in caplog.records)
+        assert all("KAPUTT" not in record.getMessage() for record in caplog.records)
+
+
 PROPFIND_MULTISTATUS = """<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
   <d:response>

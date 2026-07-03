@@ -214,6 +214,26 @@ class TestFetchLimits:
                     CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
                 )
 
+    async def test_broken_item_does_not_abort_the_fetch(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        captured: list[httpx.Request] = []
+        broken_item = {"id": "evt-broken-geheim", "status": "confirmed", "start": {}}
+        pages = [{"items": [TIMED_ITEM, broken_item, ALL_DAY_ITEM]}]
+        async with make_client(captured, pages=pages) as client:
+            with caplog.at_level("WARNING", logger="app.sources.google"):
+                events = await fetch_events(
+                    CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+                )
+
+        # The two valid events survive the malformed item.
+        assert [event.uid for event in events] == ["evt-timed", "evt-allday"]
+        # The failure is counted and logged — without leaking raw event data.
+        assert any("1" in record.getMessage() for record in caplog.records)
+        assert all("geheim" not in record.getMessage() for record in caplog.records)
+
     async def test_event_cap_aborts_with_clear_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

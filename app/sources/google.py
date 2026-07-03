@@ -16,6 +16,7 @@ Source config keys: ``calendar_id``.
 """
 
 import json
+import logging
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ import httpx
 from app.models import CalendarEvent
 from app.sources import limits
 from app.storage import resolve_data_dir
+
+logger = logging.getLogger(__name__)
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 EVENTS_URL_TEMPLATE = "https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
@@ -159,6 +162,7 @@ async def fetch_events(
     page_token: str | None = None
     refreshed_after_401 = False
     pages_fetched = 0
+    skipped_items = 0
     while True:
         if pages_fetched >= MAX_PAGES:
             raise limits.SyncLimitExceededError(
@@ -175,12 +179,19 @@ async def fetch_events(
         response.raise_for_status()
         pages_fetched += 1
         payload = json.loads(body)
-        events.extend(
-            _item_to_event(item)
-            for item in payload.get("items", [])
-            if item.get("status") != "cancelled"
-        )
+        for item in payload.get("items", []):
+            if item.get("status") == "cancelled":
+                continue
+            # A malformed item (missing start/end fields) must not abort
+            # the whole fetch: skip it and keep the rest.
+            try:
+                events.append(_item_to_event(item))
+            except (KeyError, ValueError, TypeError):
+                skipped_items += 1
         limits.check_event_count(len(events))
         page_token = payload.get("nextPageToken")
         if not page_token:
+            if skipped_items:
+                # Count only — item contents are foreign, untrusted data.
+                logger.warning("Skipped %d malformed calendar item(s)", skipped_items)
             return events
