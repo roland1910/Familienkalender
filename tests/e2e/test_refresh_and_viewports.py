@@ -68,6 +68,29 @@ def test_kiosk_viewport_1920x1080(
         context.close()
 
 
+def test_ingress_panel_viewport_800x1280(
+    browser: Browser, server_url: str, artifacts_dir: Path
+) -> None:
+    """Narrow HA ingress side panel: the <=900px breakpoint must kick in."""
+    context = browser.new_context(viewport={"width": 800, "height": 1280}, has_touch=True)
+    page = context.new_page()
+    try:
+        goto_calendar(page, server_url)
+        expect(page.locator(".month-grid")).to_be_visible()
+        chip = page.locator(".chip", has_text="Zahnarzt Emil")
+        expect(chip).to_be_visible()
+        # Breakpoint behavior: chip times are hidden below 900px width.
+        expect(chip.locator(".chip-time")).to_have_css("display", "none")
+        _assert_no_horizontal_overflow(page)
+        page.screenshot(path=artifacts_dir / "month-800x1280.png")
+        page.locator("#btn-week").click()
+        expect(page.locator(".week-view")).to_be_visible()
+        _assert_no_horizontal_overflow(page)
+        page.screenshot(path=artifacts_dir / "week-800x1280.png")
+    finally:
+        context.close()
+
+
 def test_narrow_viewport_1280x720(
     browser: Browser, server_url: str, artifacts_dir: Path
 ) -> None:
