@@ -30,6 +30,16 @@ Local development and tests run without ingress: requests from
 suite, container healthcheck). The real ingress proxy always sets the
 header, so this fallback never applies to ingress traffic; requests
 from 172.30.32.2 without an admin user are never admin (fail closed).
+
+This fallback is disabled outright once SUPERVISOR_TOKEN is set — the
+one reliable marker that the process is running inside the add-on
+container (Supervisor sets it there and nowhere else, e.g. not for a
+local dev server or the E2E suite). Without that guard, anything that
+reached 127.0.0.1 inside the production container without a user
+header — the container healthcheck, or a bug that let another process
+in — would be treated as admin; disabling the fallback there and
+failing closed instead costs nothing (ingress traffic always has the
+header) and removes that risk entirely.
 """
 
 import asyncio
@@ -188,7 +198,11 @@ async def is_admin_request(request: Request) -> bool:
     # No user header: real ingress traffic always carries one, so this is
     # local traffic — the dev server, the E2E suite or the container
     # healthcheck on 127.0.0.1. Anything else (e.g. the ingress proxy
-    # without a session user) is not admin.
+    # without a session user) is not admin. SUPERVISOR_TOKEN being set
+    # means this *is* the production container, so the fallback does not
+    # apply there — see the module docstring.
+    if os.environ.get("SUPERVISOR_TOKEN"):
+        return False
     client = request.client
     return client is not None and client.host == "127.0.0.1"
 

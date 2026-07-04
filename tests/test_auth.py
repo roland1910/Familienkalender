@@ -288,6 +288,29 @@ class TestApiMe:
         assert response.json() == {"is_admin": False}
 
 
+class TestLocalhostFallbackDisabledInProduction:
+    """SUPERVISOR_TOKEN is only ever set inside the add-on container — a
+    reliable production marker. The localhost fallback must not apply
+    there, even though the IP allowlist would otherwise let 127.0.0.1
+    through: the container healthcheck talks to the app from inside the
+    same container, so a mistaken production deployment must not grant
+    it (or anything else reaching 127.0.0.1) admin rights.
+    """
+
+    def test_localhost_without_header_is_not_admin_when_supervisor_token_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "super-secret")
+        response = localhost_client().get("/api/me")
+        assert response.json() == {"is_admin": False}
+
+    def test_localhost_without_header_is_admin_when_no_supervisor_token(self) -> None:
+        # Unchanged dev/E2E behaviour: no SUPERVISOR_TOKEN in the
+        # environment means this is not the production container.
+        response = localhost_client().get("/api/me")
+        assert response.json() == {"is_admin": True}
+
+
 class TestAdminGate:
     def test_admin_api_rejects_non_admin_with_german_message(self) -> None:
         client = ingress_client()
