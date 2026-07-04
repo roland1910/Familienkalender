@@ -10,5 +10,9 @@ startup: application
 boot: auto
 ingress: true
 ingress_port: 8099
+# Needed for the power view: /api/power reads sensor states from the HA Core
+# API (http://supervisor/core/api with the SUPERVISOR_TOKEN). Was removed in
+# the stage-1 security review while nothing used it — the need is here now.
+homeassistant_api: true
 panel_icon: mdi:calendar-heart
 panel_title: Familienkalender
