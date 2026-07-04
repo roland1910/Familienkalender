@@ -2,6 +2,7 @@
 // views are pure functions of (anchor, events, today).
 
 export const state = {
+  mode: "calendar", // "calendar" | "power" — which main view is on screen
   view: "month", // "month" | "week"
   anchor: new Date(), // any day inside the visible period
   events: [], // parsed events (see events.js)

@@ -28,6 +28,23 @@ export async function fetchTagOptions() {
   return response.json();
 }
 
+export async function fetchPower() {
+  const response = await fetch("api/power");
+  if (!response.ok) {
+    // The backend sends German error details (e.g. "Home Assistant ist
+    // nicht erreichbar."); surface them in the view's error state.
+    let detail = `Stromdaten laden fehlgeschlagen: HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (typeof payload.detail === "string") detail = payload.detail;
+    } catch {
+      // keep the generic message
+    }
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
 export async function putDayTags(dateISO, emojis) {
   const response = await fetch(`api/tags/${dateISO}`, {
     method: "PUT",

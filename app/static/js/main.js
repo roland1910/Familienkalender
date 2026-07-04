@@ -14,6 +14,7 @@ import { parseEvent } from "./events.js";
 import { attachSwipe } from "./gestures.js";
 import { monthGridRange, renderMonthView } from "./month-view.js";
 import { closeDayPopover, initPopover } from "./popover.js";
+import { startPowerView, stopPowerView } from "./power-view.js";
 import { state } from "./state.js";
 import { renderWeekView, weekRange } from "./week-view.js";
 
@@ -30,6 +31,7 @@ function visibleRange() {
 }
 
 function periodTitle() {
+  if (state.mode === "power") return "Strom";
   if (state.view === "month") {
     return `${MONTH_NAMES[state.anchor.getMonth()]} ${state.anchor.getFullYear()}`;
   }
@@ -130,6 +132,26 @@ function switchView(view) {
   refresh();
 }
 
+function switchMode(mode) {
+  if (state.mode === mode) return;
+  closeDayPopover();
+  state.mode = mode;
+  const isPower = mode === "power";
+  // The body class hides the calendar-only toolbar controls via CSS.
+  document.body.classList.toggle("mode-power", isPower);
+  document.getElementById("btn-mode-calendar").classList.toggle("active", !isPower);
+  document.getElementById("btn-mode-power").classList.toggle("active", isPower);
+  document.getElementById("calendar").hidden = isPower;
+  document.getElementById("power").hidden = !isPower;
+  if (isPower) {
+    startPowerView(document.getElementById("power"));
+  } else {
+    stopPowerView();
+    refresh();
+  }
+  render();
+}
+
 function init() {
   initPopover({ onTagsChanged: render });
   document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
@@ -137,6 +159,10 @@ function init() {
   document.getElementById("btn-today").addEventListener("click", goToToday);
   document.getElementById("btn-month").addEventListener("click", () => switchView("month"));
   document.getElementById("btn-week").addEventListener("click", () => switchView("week"));
+  document
+    .getElementById("btn-mode-calendar")
+    .addEventListener("click", () => switchMode("calendar"));
+  document.getElementById("btn-mode-power").addEventListener("click", () => switchMode("power"));
   attachSwipe(document.getElementById("calendar"), {
     onSwipeLeft: () => navigate(1),
     onSwipeRight: () => navigate(-1),

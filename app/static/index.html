@@ -21,8 +21,13 @@
         <button id="btn-month" class="view-button active" type="button">Monat</button>
         <button id="btn-week" class="view-button" type="button">Woche</button>
       </div>
-      <!-- Platz für spätere Umschalt-Buttons (z. B. Strom-Ansicht) -->
       <div id="mode-slot" class="mode-slot">
+        <div class="mode-switch">
+          <button id="btn-mode-calendar" class="view-button active" type="button"
+                  aria-label="Kalender" title="Kalender">&#128197;</button>
+          <button id="btn-mode-power" class="view-button" type="button"
+                  aria-label="Strom" title="Strom">&#9889;</button>
+        </div>
         <a class="nav-button admin-link" href="admin" aria-label="Verwaltung">&#9881;</a>
       </div>
     </div>
@@ -30,6 +35,9 @@
   <main id="calendar" class="calendar">
     <p id="loading" class="loading">Lädt&hellip;</p>
   </main>
+  <section id="power" class="power" hidden aria-label="Strom">
+    <p class="loading">Lädt&hellip;</p>
+  </section>
   <div id="day-popover" class="popover-backdrop" hidden></div>
   <script type="module" src="static/js/main.js"></script>
 </body>

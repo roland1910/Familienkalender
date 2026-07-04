@@ -75,7 +75,8 @@ def test_stylesheet_and_modules_are_served() -> None:
     assert css.status_code == 200
     assert "text/css" in css.headers["content-type"]
     for module in ("main", "api", "state", "dates", "events", "colors",
-                   "month-view", "week-view", "gestures", "popover", "dom"):
+                   "month-view", "week-view", "gestures", "popover", "dom",
+                   "power-view", "power-format"):
         response = client.get(f"/static/js/{module}.js")
         assert response.status_code == 200, f"{module}.js not served"
         assert "javascript" in response.headers["content-type"]
