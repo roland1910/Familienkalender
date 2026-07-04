@@ -132,11 +132,20 @@ def _user_is_admin(user: dict) -> bool:
     """Admin = active and (owner or member of the admin group).
 
     Field names follow the config/auth/list result (mirrored by the
-    Supervisor's HomeAssistantUser model in supervisor/const.py).
+    Supervisor's HomeAssistantUser model in supervisor/const.py). Any
+    unexpected shape for group_ids (not a list, e.g. a wrong type from a
+    malformed response) is treated as "no group membership" rather than
+    raising — an unexpected response is a reason to deny admin, not to
+    500.
     """
     if not user.get("is_active"):
         return False
-    return bool(user.get("is_owner")) or ADMIN_GROUP_ID in (user.get("group_ids") or [])
+    if user.get("is_owner"):
+        return True
+    group_ids = user.get("group_ids")
+    if not isinstance(group_ids, list):
+        return False
+    return ADMIN_GROUP_ID in group_ids
 
 
 async def _fetch_admin_user_ids() -> frozenset[str]:
@@ -144,7 +153,11 @@ async def _fetch_admin_user_ids() -> frozenset[str]:
 
     Speaks the standard HA WebSocket handshake (auth_required → auth →
     auth_ok) and skips unrelated messages until the command result
-    arrives. Every failure mode is normalized to AdminLookupError.
+    arrives. Every failure mode is normalized to AdminLookupError,
+    including an unexpected shape for the result (anything but a list
+    raises; individual non-dict entries or dicts without a string "id"
+    are skipped rather than raising) — a malformed response is a reason
+    to fail closed, not to 500.
     """
     token = _ws_token()
     try:
@@ -172,9 +185,17 @@ async def _fetch_admin_user_ids() -> frozenset[str]:
         raise AdminLookupError(f"admin lookup failed: {exc}") from exc
     if not message.get("success"):
         raise AdminLookupError("config/auth/list was not successful")
-    users = message.get("result") or []
+    users = message.get("result")
+    if users is None:
+        users = []
+    if not isinstance(users, list):
+        raise AdminLookupError(f"unexpected result shape: {type(users).__name__}")
     return frozenset(
-        user["id"] for user in users if isinstance(user, dict) and _user_is_admin(user)
+        user_id
+        for user in users
+        if isinstance(user, dict)
+        and isinstance(user_id := user.get("id"), str)
+        and _user_is_admin(user)
     )
 
 

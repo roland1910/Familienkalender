@@ -106,6 +106,12 @@ class TestUserIsAdmin:
     def test_missing_fields_mean_not_admin(self) -> None:
         assert auth._user_is_admin({"id": "x"}) is False
 
+    def test_non_list_group_ids_mean_not_admin_not_a_crash(self) -> None:
+        # An unexpected shape for group_ids (anything but a list/None) must
+        # not raise — treat it like "no admin group membership" instead.
+        user = {"id": "x", "is_active": True, "is_owner": False, "group_ids": 42}
+        assert auth._user_is_admin(user) is False
+
 
 class FakeWebSocket:
     def __init__(self, incoming: list[dict]) -> None:
@@ -214,6 +220,69 @@ class TestFetchAdminUserIds:
         monkeypatch.setenv("SUPERVISOR_TOKEN", "super-secret")
         with pytest.raises(auth.AdminLookupError):
             await auth._fetch_admin_user_ids()
+
+    @pytest.mark.anyio
+    async def test_admin_user_without_id_is_skipped_not_a_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An admin-shaped dict with no "id" field is an unexpected server
+        # response, not a reason to 500 — skip it like any other malformed
+        # entry instead of raising KeyError.
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "super-secret")
+        admin_without_id = {k: v for k, v in ADMIN_USER.items() if k != "id"}
+        websocket = FakeWebSocket(
+            [
+                {"type": "auth_required"},
+                {"type": "auth_ok"},
+                {
+                    "id": 1,
+                    "type": "result",
+                    "success": True,
+                    "result": [admin_without_id, ADMIN_USER],
+                },
+            ]
+        )
+        monkeypatch.setattr(auth, "connect", FakeConnect(websocket))
+        assert await auth._fetch_admin_user_ids() == frozenset({"admin-user-id"})
+
+    @pytest.mark.anyio
+    async def test_result_as_object_instead_of_array_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "result" is expected to be a list of user dicts; a bare object
+        # (or any other non-list) must be a clean AdminLookupError, not a
+        # TypeError from iterating/indexing the wrong shape.
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "super-secret")
+        websocket = FakeWebSocket(
+            [
+                {"type": "auth_required"},
+                {"type": "auth_ok"},
+                {"id": 1, "type": "result", "success": True, "result": ADMIN_USER},
+            ]
+        )
+        monkeypatch.setattr(auth, "connect", FakeConnect(websocket))
+        with pytest.raises(auth.AdminLookupError):
+            await auth._fetch_admin_user_ids()
+
+    @pytest.mark.anyio
+    async def test_mixed_result_list_skips_non_dict_entries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "super-secret")
+        websocket = FakeWebSocket(
+            [
+                {"type": "auth_required"},
+                {"type": "auth_ok"},
+                {
+                    "id": 1,
+                    "type": "result",
+                    "success": True,
+                    "result": ["not-a-dict", 42, None, ADMIN_USER],
+                },
+            ]
+        )
+        monkeypatch.setattr(auth, "connect", FakeConnect(websocket))
+        assert await auth._fetch_admin_user_ids() == frozenset({"admin-user-id"})
 
 
 class TestIsUserAdminCaching:
