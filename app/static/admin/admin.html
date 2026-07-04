@@ -142,6 +142,20 @@
         <button id="btn-save-settings" class="action-button" type="button">Speichern</button>
       </div>
       <p id="settings-message" class="message" hidden></p>
+
+      <h3>Strom-Ansicht: Geräte</h3>
+      <div class="form-grid">
+        <label for="power-devices">Steckdosen-Sensoren (eine Zeile pro Gerät:
+          entity_id = Anzeigename)</label>
+        <textarea id="power-devices" rows="6" spellcheck="false"
+                  placeholder="sensor.kuhlschrank_leistung = Kühlschrank"></textarea>
+      </div>
+      <div class="button-row">
+        <button id="btn-save-power-devices" class="action-button" type="button">
+          Geräte speichern
+        </button>
+      </div>
+      <p id="power-devices-message" class="message" hidden></p>
     </section>
   </main>
   <script type="module" src="static/admin/main.js"></script>

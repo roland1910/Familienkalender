@@ -29,6 +29,10 @@ export function saveSettings(eveningBoundary) {
   return request("PUT", "api/admin/settings", { evening_boundary: eveningBoundary });
 }
 
+export function savePowerDevices(devices) {
+  return request("PUT", "api/admin/settings/power", { devices });
+}
+
 export function saveGoogleCredentials(clientId, clientSecret) {
   return request("PUT", "api/admin/settings/google", {
     client_id: clientId,

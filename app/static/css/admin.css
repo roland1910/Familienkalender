@@ -100,6 +100,7 @@ body {
 
 .form-grid input,
 .form-grid select,
+.form-grid textarea,
 .rename-row input {
   min-height: 44px;
   padding: 6px 10px;
@@ -107,6 +108,14 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   width: 100%;
+}
+
+/* Device list of the power view: entity ids read best in monospace. */
+.form-grid textarea {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 15px;
+  resize: vertical;
+  align-self: start;
 }
 
 .button-row {

@@ -61,7 +61,7 @@ def test_html_pages_have_no_inline_event_handlers() -> None:
 
 def test_admin_modules_exist_and_are_served() -> None:
     for module in ("main", "api", "dom", "wizard-shared", "sources",
-                   "nextcloud-wizard", "google-wizard", "settings"):
+                   "nextcloud-wizard", "google-wizard", "settings", "power-devices"):
         assert (STATIC_DIR / "admin" / f"{module}.js").is_file()
         response = client.get(f"/static/admin/{module}.js")
         assert response.status_code == 200, f"admin/{module}.js not served"
