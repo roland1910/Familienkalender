@@ -10,12 +10,13 @@ a PATCH sending the placeholder back keeps the stored secret.
 """
 
 import logging
+import re
 import secrets
 from datetime import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import google_oauth, settings
 from app.models import DISPLAY_MODES, SOURCE_TYPES, Source
@@ -51,9 +52,24 @@ _CONFIG_KEYS_BY_TYPE = {
 # bloating the DB and the admin UI.
 MAX_NAME_LENGTH = 200
 
+# Power-view device list: HA entity ids are lowercase domain.object_id.
+# Only sensors make sense here — anything else is a configuration error.
+_ENTITY_ID_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+MAX_POWER_DEVICES = 30
+MAX_POWER_DEVICE_NAME_LENGTH = 100
+
 
 class SettingsUpdate(BaseModel):
     evening_boundary: str
+
+
+class PowerDeviceIn(BaseModel):
+    entity_id: str
+    name: str
+
+
+class PowerDevicesUpdate(BaseModel):
+    devices: list[PowerDeviceIn] = Field(max_length=MAX_POWER_DEVICES)
 
 
 class GoogleCredentials(BaseModel):
@@ -162,6 +178,10 @@ def _settings_payload() -> dict:
             "configured": bool(client_id and client_secret),
             "client_id_masked": _mask_client_id(client_id) if client_id else None,
         },
+        "power_devices": [
+            {"entity_id": device.entity_id, "name": device.name}
+            for device in settings.get_power_devices(storage)
+        ],
     }
 
 
@@ -205,6 +225,32 @@ async def update_google_credentials(credentials: GoogleCredentials) -> dict:
         client_secret = stored_secret
     storage.set_setting(settings.GOOGLE_CLIENT_ID_KEY, client_id)
     storage.set_setting(settings.GOOGLE_CLIENT_SECRET_KEY, client_secret)
+    return _settings_payload()
+
+
+@router.put("/settings/power")
+async def update_power_devices(update: PowerDevicesUpdate) -> dict:
+    """Replace the power-view device list (an empty list is valid)."""
+    devices = []
+    for item in update.devices:
+        entity_id = item.entity_id.strip()
+        name = item.name.strip()
+        if not _ENTITY_ID_PATTERN.fullmatch(entity_id):
+            raise HTTPException(
+                status_code=400, detail=f"Ungültige Entity-ID: {item.entity_id!r}"
+            )
+        if not name:
+            raise HTTPException(
+                status_code=400, detail="Der Anzeigename darf nicht leer sein."
+            )
+        if len(name) > MAX_POWER_DEVICE_NAME_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail="Der Anzeigename darf höchstens"
+                f" {MAX_POWER_DEVICE_NAME_LENGTH} Zeichen lang sein.",
+            )
+        devices.append(settings.PowerDevice(entity_id, name))
+    settings.set_power_devices(get_storage(), devices)
     return _settings_payload()
 
 

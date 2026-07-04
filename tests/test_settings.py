@@ -1,11 +1,20 @@
 """Tests for typed access to persisted settings (app.settings)."""
 
+import json
 from datetime import time
 from pathlib import Path
 
 import pytest
 
-from app.settings import EVENING_BOUNDARY_KEY, get_evening_boundary
+from app.settings import (
+    DEFAULT_POWER_DEVICES,
+    EVENING_BOUNDARY_KEY,
+    POWER_DEVICES_KEY,
+    PowerDevice,
+    get_evening_boundary,
+    get_power_devices,
+    set_power_devices,
+)
 from app.storage import Storage
 
 
@@ -46,3 +55,31 @@ class TestEveningBoundary:
     ) -> None:
         monkeypatch.setenv("EVENING_BOUNDARY", "25:99")
         assert get_evening_boundary(storage) == time(17, 0)
+
+
+class TestPowerDevices:
+    def test_defaults_without_stored_setting(self, storage: Storage) -> None:
+        devices = get_power_devices(storage)
+        assert devices == list(DEFAULT_POWER_DEVICES)
+        # The defaults are the household's smart plugs with German names.
+        assert PowerDevice("sensor.kuhlschrank_leistung", "Kühlschrank") in devices
+
+    def test_roundtrip_persists_devices(self, storage: Storage) -> None:
+        devices = [
+            PowerDevice("sensor.kuhlschrank_leistung", "Kühlschrank"),
+            PowerDevice("sensor.neue_steckdose_leistung", "Neue Steckdose"),
+        ]
+        set_power_devices(storage, devices)
+        assert get_power_devices(storage) == devices
+
+    def test_empty_list_is_a_valid_stored_value(self, storage: Storage) -> None:
+        set_power_devices(storage, [])
+        assert get_power_devices(storage) == []
+
+    def test_invalid_json_falls_back_to_defaults(self, storage: Storage) -> None:
+        storage.set_setting(POWER_DEVICES_KEY, "kaputt")
+        assert get_power_devices(storage) == list(DEFAULT_POWER_DEVICES)
+
+    def test_wrong_shape_falls_back_to_defaults(self, storage: Storage) -> None:
+        storage.set_setting(POWER_DEVICES_KEY, json.dumps([{"foo": "bar"}]))
+        assert get_power_devices(storage) == list(DEFAULT_POWER_DEVICES)

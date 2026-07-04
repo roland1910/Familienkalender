@@ -122,6 +122,74 @@ class TestSettingsEndpoints:
         assert response.status_code == 400
 
 
+class TestPowerDevicesSettings:
+    def test_get_settings_includes_default_power_devices(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        payload = client.get("/api/admin/settings").json()
+        devices = payload["power_devices"]
+        assert {"entity_id": "sensor.kuhlschrank_leistung", "name": "Kühlschrank"} in devices
+        assert len(devices) == 5
+
+    def test_put_power_devices_persists(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        devices = [
+            {"entity_id": "sensor.kuhlschrank_leistung", "name": "Kühlschrank"},
+            {"entity_id": "sensor.neu_leistung", "name": "Neu"},
+        ]
+        response = client.put("/api/admin/settings/power", json={"devices": devices})
+        assert response.status_code == 200
+        assert response.json()["power_devices"] == devices
+        assert client.get("/api/admin/settings").json()["power_devices"] == devices
+
+    def test_put_empty_device_list_is_allowed(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put("/api/admin/settings/power", json={"devices": []})
+        assert response.status_code == 200
+        assert response.json()["power_devices"] == []
+
+    def test_put_invalid_entity_id_is_rejected_in_german(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings/power",
+            json={"devices": [{"entity_id": "<script>alert(1)</script>", "name": "Böse"}]},
+        )
+        assert response.status_code == 400
+        assert "Entity-ID" in response.json()["detail"]
+
+    def test_put_empty_name_is_rejected_in_german(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings/power",
+            json={"devices": [{"entity_id": "sensor.ok_leistung", "name": "  "}]},
+        )
+        assert response.status_code == 400
+        assert "Anzeigename" in response.json()["detail"]
+
+    def test_put_overlong_name_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings/power",
+            json={"devices": [{"entity_id": "sensor.ok_leistung", "name": "x" * 101}]},
+        )
+        assert response.status_code == 400
+
+    def test_put_too_many_devices_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        devices = [
+            {"entity_id": f"sensor.geraet_{i}_leistung", "name": f"Gerät {i}"}
+            for i in range(31)
+        ]
+        response = client.put("/api/admin/settings/power", json={"devices": devices})
+        assert response.status_code == 422
+
+
 class TestSourcesList:
     def test_lists_sources_with_status_and_counts(
         self, client: TestClient, storage: Storage
