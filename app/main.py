@@ -20,6 +20,7 @@ from app.models import LOCAL_TZ, StoredEvent
 from app.settings import get_evening_boundary
 from app.storage import get_storage
 from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
+from app.tags import router as tags_router
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -136,6 +137,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Familienkalender", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.include_router(admin_router)
+app.include_router(tags_router)
 app.add_middleware(IngressPathMiddleware)
 # Added last so it runs first: nothing is processed for disallowed clients.
 app.add_middleware(ClientIPAllowlistMiddleware)
