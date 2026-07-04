@@ -9,6 +9,7 @@ including that the non-admin endpoints (calendar, tags, power) stay
 open.
 """
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -241,6 +242,28 @@ class TestIsUserAdminCaching:
         fake_now[0] += auth.ADMIN_CACHE_TTL_SECONDS + 1
         assert await auth.is_user_admin("admin-user-id") is True
         assert len(calls) == 2
+
+    @pytest.mark.anyio
+    async def test_concurrent_misses_trigger_only_one_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A parallel cache miss (e.g. several page loads right after
+        # startup or a cache expiry) must share a single WS lookup instead
+        # of each request opening its own connection — single-flight,
+        # mirroring app.power's _fetch_lock.
+        calls: list[int] = []
+
+        async def _slow_fetch() -> frozenset[str]:
+            calls.append(1)
+            await asyncio.sleep(0)
+            return frozenset({"admin-user-id"})
+
+        monkeypatch.setattr(auth, "_fetch_admin_user_ids", _slow_fetch)
+        results = await asyncio.gather(
+            *(auth.is_user_admin("admin-user-id") for _ in range(5))
+        )
+        assert calls == [1]
+        assert results == [True] * 5
 
 
 class TestApiMe:

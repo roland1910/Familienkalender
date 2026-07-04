@@ -81,11 +81,16 @@ class AdminLookupError(Exception):
     """The admin user list could not be fetched from Home Assistant."""
 
 
-# Cache of the admin user ids; no lock on purpose: admin checks are rare
-# (page loads, admin API calls), so a concurrent miss at worst causes a
-# couple of parallel WS lookups instead of stale/blocked requests.
+# Cache of the admin user ids.
 _cached_admin_ids: frozenset[str] | None = None
 _cache_valid_until = 0.0
+
+# Guards _fetch_admin_user_ids so a cache miss triggers exactly one WS
+# lookup; requests that arrive while a lookup is in flight wait for it
+# instead of each opening their own connection (mirrors app.power's
+# _fetch_lock — same thundering-herd concern for a slow or down HA
+# instance, e.g. several page loads right after cache expiry).
+_lookup_lock = asyncio.Lock()
 
 
 def _now() -> float:
@@ -173,21 +178,32 @@ async def _fetch_admin_user_ids() -> frozenset[str]:
     )
 
 
+def _cache_is_valid() -> bool:
+    return _cached_admin_ids is not None and _now() < _cache_valid_until
+
+
 async def is_user_admin(user_id: str) -> bool:
     """Whether the HA user id belongs to an admin; cached, fail closed."""
     global _cached_admin_ids, _cache_valid_until
-    if _cached_admin_ids is None or _now() >= _cache_valid_until:
-        try:
-            _cached_admin_ids = await _fetch_admin_user_ids()
-            _cache_valid_until = _now() + ADMIN_CACHE_TTL_SECONDS
-        except AdminLookupError as exc:
-            # Fail closed: an unknown admin list means no admin rights. The
-            # empty result is cached briefly so a down HA instance is not
-            # queried again on every single request.
-            logger.warning("Admin-Lookup fehlgeschlagen (Nutzer gilt als Nicht-Admin): %s", exc)
-            _cached_admin_ids = frozenset()
-            _cache_valid_until = _now() + ERROR_CACHE_TTL_SECONDS
-    return user_id in _cached_admin_ids
+    if not _cache_is_valid():
+        async with _lookup_lock:
+            # Re-check: another caller may have populated the cache while
+            # this one was waiting for the lock.
+            if not _cache_is_valid():
+                try:
+                    _cached_admin_ids = await _fetch_admin_user_ids()
+                    _cache_valid_until = _now() + ADMIN_CACHE_TTL_SECONDS
+                except AdminLookupError as exc:
+                    # Fail closed: an unknown admin list means no admin
+                    # rights. The empty result is cached briefly so a down
+                    # HA instance is not queried again on every request.
+                    logger.warning(
+                        "Admin-Lookup fehlgeschlagen (Nutzer gilt als Nicht-Admin): %s",
+                        exc,
+                    )
+                    _cached_admin_ids = frozenset()
+                    _cache_valid_until = _now() + ERROR_CACHE_TTL_SECONDS
+    return user_id in (_cached_admin_ids or frozenset())
 
 
 async def is_admin_request(request: Request) -> bool:
