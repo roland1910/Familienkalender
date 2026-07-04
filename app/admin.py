@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app import google_oauth, settings
+from app import google_oauth, power, settings
 from app.models import DISPLAY_MODES, SOURCE_TYPES, Source
 from app.sanitize import sanitize_error
 from app.settings import get_evening_boundary
@@ -251,6 +251,8 @@ async def update_power_devices(update: PowerDevicesUpdate) -> dict:
             )
         devices.append(settings.PowerDevice(entity_id, name))
     settings.set_power_devices(get_storage(), devices)
+    # The next /api/power request must already reflect the new list.
+    power.reset_cache()
     return _settings_payload()
 
 
