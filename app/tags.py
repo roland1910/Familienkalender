@@ -12,16 +12,26 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.models import MAX_TAGS_PER_DAY, TAG_OPTIONS, TagLimitError, UnknownTagError
+from app.models import (
+    MAX_TAGS_PER_DAY,
+    TAG_OPTIONS,
+    TagLimitError,
+    UnknownTagError,
+    is_tag_date_in_range,
+)
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api/tags")
 
+# Fail-fast payload cap, well above MAX_TAGS_PER_DAY: rejects oversized
+# request bodies before dedup/whitelist processing even runs.
+MAX_EMOJIS_PER_REQUEST = 32
+
 
 class DayTagsUpdate(BaseModel):
-    emojis: list[str]
+    emojis: list[str] = Field(max_length=MAX_EMOJIS_PER_REQUEST)
 
 
 @router.get("/options")
@@ -50,8 +60,13 @@ async def set_tags(day: date, update: DayTagsUpdate) -> dict:
 
     Dedup and the per-day cap are enforced by the storage layer alone
     (single source of truth); this handler only maps its two specific
-    exception types onto the existing German error messages.
+    exception types onto the existing German error messages. The date
+    window is checked here, before touching storage.
     """
+    if not is_tag_date_in_range(day):
+        raise HTTPException(
+            status_code=400, detail="Datum außerhalb des zulässigen Bereichs."
+        )
     try:
         stored = get_storage().set_day_tags(day, update.emojis)
     except TagLimitError as error:

@@ -49,6 +49,34 @@ class TagLimitError(ValueError):
     """Raised when a day-tag write would exceed MAX_TAGS_PER_DAY."""
 
 
+class TagDateOutOfRangeError(ValueError):
+    """Raised when a day-tag write targets a date outside the allowed window."""
+
+
+# Day-tags are a small, purely local feature; there is no legitimate reason
+# to tag a day far outside this window. Bounding it keeps the day_tags table
+# from growing unbounded via scripted/malicious requests with wild dates.
+TAG_DATE_PAST_YEARS = 2
+TAG_DATE_FUTURE_YEARS = 10
+
+
+def _shift_years(reference: date, years: int) -> date:
+    """reference + years, clamped to a valid day (handles 29 Feb safely)."""
+    try:
+        return reference.replace(year=reference.year + years)
+    except ValueError:
+        # 29 Feb shifted onto a non-leap year: fall back to 28 Feb.
+        return reference.replace(month=2, day=28, year=reference.year + years)
+
+
+def is_tag_date_in_range(day: date, *, today: date | None = None) -> bool:
+    """Whether ``day`` lies within [today - 2 years, today + 10 years]."""
+    reference = today if today is not None else date.today()
+    earliest = _shift_years(reference, -TAG_DATE_PAST_YEARS)
+    latest = _shift_years(reference, TAG_DATE_FUTURE_YEARS)
+    return earliest <= day <= latest
+
+
 @dataclass(frozen=True, slots=True)
 class CalendarEvent:
     """A single (already recurrence-expanded) calendar event occurrence.
