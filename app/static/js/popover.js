@@ -27,12 +27,26 @@ export function closeDayPopover() {
 
 // -- tag picker ------------------------------------------------------------
 
+// Double-tap guard: while a PUT is in flight, every tag button in the
+// section is disabled so a second tap cannot fire a second request for the
+// same day (touch screens are prone to accidental double taps). The section
+// is re-rendered (success) or re-enabled (failure) once the request settles.
+function lockTagButtons(section) {
+  const buttons = section.querySelectorAll(".tag-button");
+  for (const button of buttons) button.disabled = true;
+  return () => {
+    for (const button of buttons) button.disabled = false;
+  };
+}
+
 async function saveTags(day, emojis, section) {
   const iso = toISODate(day);
+  const unlock = lockTagButtons(section);
   let stored;
   try {
     stored = await putDayTags(iso, emojis);
   } catch {
+    unlock();
     section.querySelector(".tag-error")?.remove();
     section.append(el("p", "tag-error", "Symbol speichern fehlgeschlagen."));
     return;
