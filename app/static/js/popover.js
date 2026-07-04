@@ -7,6 +7,7 @@ import { formatDayMonth, formatTime, isSameDay, toISODate, WEEKDAY_NAMES_SHORT }
 import { el } from "./dom.js";
 import { spansFullDays } from "./events.js";
 import { state } from "./state.js";
+import { isAtTagCap, withoutTag, withTag } from "./tag-picker.js";
 
 // Cap against event floods from foreign calendars; everything beyond this
 // collapses into one "… und N weitere" line.
@@ -75,18 +76,18 @@ function buildTagSection(day) {
 
   const row = el("div", "tag-row");
   for (const emoji of current) {
-    const remaining = current.filter((item) => item !== emoji);
+    const remaining = withoutTag(current, emoji);
     row.append(
       tagButton(emoji, "tag-current", `Symbol ${emoji} entfernen`, () =>
         saveTags(day, remaining, section),
       ),
     );
   }
-  const atCap = current.length >= state.maxTagsPerDay;
+  const atCap = isAtTagCap(current, state.maxTagsPerDay);
   for (const option of state.tagOptions) {
     if (current.includes(option.emoji)) continue;
     const button = tagButton(option.emoji, "tag-option", `Symbol ${option.emoji} hinzufügen`, () =>
-      saveTags(day, [...current, option.emoji], section),
+      saveTags(day, withTag(current, option.emoji), section),
     );
     button.disabled = atCap;
     row.append(button);
