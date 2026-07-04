@@ -71,19 +71,27 @@ async function refresh() {
   const { start, end } = visibleRange();
   const fromISO = toISODate(addDays(start, -FETCH_BUFFER_DAYS));
   const toISO = toISODate(addDays(end, FETCH_BUFFER_DAYS));
+  // Intentionally not awaited: the tag catalog is fetched independently of
+  // events/tags below and must not block or fail the calendar refresh.
   if (state.tagOptions.length === 0) loadTagOptions();
-  let rawEvents;
-  let rawTags;
-  try {
-    [rawEvents, rawTags] = await Promise.all([
-      fetchEvents(fromISO, toISO),
-      fetchTags(fromISO, toISO),
-    ]);
-  } catch {
+  // Events and tags are fetched independently (Promise.allSettled, not
+  // Promise.all): if only one of the two requests fails — e.g. a flaky
+  // network hiccup hits just the tags endpoint — we still want to show the
+  // events that did load instead of throwing away both. Only a complete
+  // failure of both requests marks the data as stale.
+  const [eventsResult, tagsResult] = await Promise.allSettled([
+    fetchEvents(fromISO, toISO),
+    fetchTags(fromISO, toISO),
+  ]);
+  if (eventsResult.status === "rejected" && tagsResult.status === "rejected") {
     // Keep showing the last known data, just flag it as possibly outdated.
     setStale(true);
     return;
   }
+  // On a partial failure, fall back to the last successfully fetched raw
+  // payload for the half that failed instead of losing it entirely.
+  const rawEvents = eventsResult.status === "fulfilled" ? eventsResult.value : state.lastRawEvents;
+  const rawTags = tagsResult.status === "fulfilled" ? tagsResult.value : state.lastRawTags;
   setStale(false);
   // Light DOM diff: skip re-rendering entirely when nothing changed, so the
   // 60s auto-refresh never causes flicker on the kiosk display. Tags are part
@@ -91,6 +99,8 @@ async function refresh() {
   const fingerprint = `${fromISO}|${toISO}|${JSON.stringify(rawEvents)}|${JSON.stringify(rawTags)}`;
   if (state.loaded && fingerprint === state.fingerprint) return;
   state.fingerprint = fingerprint;
+  state.lastRawEvents = rawEvents;
+  state.lastRawTags = rawTags;
   state.events = rawEvents.map(parseEvent);
   state.tags = rawTags;
   state.loaded = true;

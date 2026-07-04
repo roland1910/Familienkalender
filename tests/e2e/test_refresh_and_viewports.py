@@ -13,9 +13,13 @@ pytestmark = pytest.mark.e2e
 
 
 def test_failed_fetch_shows_stale_badge_and_keeps_data(page: Page, server_url: str) -> None:
+    # Both events and tags must fail for the badge to appear: a single
+    # endpoint failing is a partial failure (see the allSettled test below)
+    # and is handled by keeping the half that did load, not by going stale.
     goto_calendar(page, server_url)
     expect(page.locator("#status-badge")).to_be_hidden()
     page.route("**/api/events*", lambda route: route.abort())
+    page.route("**/api/tags?*", lambda route: route.abort())
     page.locator("#btn-next").click()
     badge = page.locator("#status-badge")
     expect(badge).to_be_visible()
@@ -24,9 +28,25 @@ def test_failed_fetch_shows_stale_badge_and_keeps_data(page: Page, server_url: s
     expect(page.locator(".month-grid")).to_be_visible()
     # Once the backend is reachable again, the badge disappears.
     page.unroute("**/api/events*")
+    page.unroute("**/api/tags?*")
     page.locator("#btn-today").click()
     expect(badge).to_be_hidden()
     expect(page.locator("#period-title")).to_have_text(month_title(date.today()))
+
+
+def test_partial_fetch_failure_keeps_the_half_that_loaded(page: Page, server_url: str) -> None:
+    # Only the tags endpoint fails: events still refresh and no stale badge
+    # appears, because Promise.allSettled only gives up when both fail.
+    goto_calendar(page, server_url)
+    expect(page.locator("#status-badge")).to_be_hidden()
+    page.route("**/api/tags?*", lambda route: route.abort())
+    today = date.today()
+    next_month = date(today.year + (1 if today.month == 12 else 0), today.month % 12 + 1, 1)
+    page.locator("#btn-next").click()
+    expect(page.locator("#period-title")).to_have_text(month_title(next_month))
+    expect(page.locator("#status-badge")).to_be_hidden()
+    expect(page.locator(".month-grid")).to_be_visible()
+    page.unroute("**/api/tags?*")
 
 
 def test_loading_indicator_shows_before_first_data(page: Page, server_url: str) -> None:
