@@ -57,6 +57,13 @@ def server_url(server_data_dir: Path) -> Iterator[str]:
     env = os.environ | {
         "DATA_DIR": str(server_data_dir),
         "SYNC_INTERVAL_SECONDS": "0",
+        # Admin lookups must fail closed deterministically: overriding the
+        # WS URL makes app.auth refuse the SUPERVISOR_TOKEN fallback, so a
+        # request carrying an X-Remote-User-Id header is non-admin without
+        # any network round trip (see test_admin_gate.py). Header-less
+        # requests from 127.0.0.1 stay admin — the default for this suite.
+        "HA_WS_URL": "ws://127.0.0.1:9/e2e-disabled",
+        "HA_API_TOKEN": "",
     }
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(port)],

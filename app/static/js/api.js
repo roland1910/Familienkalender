@@ -10,6 +10,14 @@ export async function fetchEvents(fromISO, toISO) {
   return payload.events;
 }
 
+export async function fetchMe() {
+  const response = await fetch("api/me");
+  if (!response.ok) {
+    throw new Error(`Benutzerstatus laden fehlgeschlagen: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function fetchTags(fromISO, toISO) {
   const query = new URLSearchParams({ from: fromISO, to: toISO });
   const response = await fetch(`api/tags?${query}`);

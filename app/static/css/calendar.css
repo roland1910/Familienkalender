@@ -164,6 +164,12 @@ body.mode-power .status-badge {
   padding: 0 12px;
 }
 
+/* display:inline-flex would override the UA rule of the hidden attribute —
+   without this, non-admins would see the gear despite hidden. */
+.admin-link[hidden] {
+  display: none;
+}
+
 /* -- calendar container --------------------------------------------------- */
 
 .calendar {

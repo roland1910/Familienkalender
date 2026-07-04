@@ -1,6 +1,6 @@
 // App wiring: navigation, data loading, auto-refresh, view rendering.
 
-import { fetchEvents, fetchTagOptions, fetchTags } from "./api.js";
+import { fetchEvents, fetchMe, fetchTagOptions, fetchTags } from "./api.js";
 import {
   addDays,
   addMonths,
@@ -152,8 +152,21 @@ function switchMode(mode) {
   render();
 }
 
+async function applyAdminVisibility() {
+  // Fail closed: the gear stays hidden unless the backend confirms admin.
+  // The real gate is server-side (403 on /admin and /api/admin/*) — this
+  // only removes a dead-end link for normal HA users.
+  try {
+    const me = await fetchMe();
+    if (me.is_admin) document.querySelector(".admin-link").hidden = false;
+  } catch {
+    // keep the gear hidden
+  }
+}
+
 function init() {
   initPopover({ onTagsChanged: render });
+  applyAdminVisibility();
   document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
   document.getElementById("btn-next").addEventListener("click", () => navigate(1));
   document.getElementById("btn-today").addEventListener("click", goToToday);

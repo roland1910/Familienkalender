@@ -28,7 +28,9 @@
           <button id="btn-mode-power" class="view-button" type="button"
                   aria-label="Strom" title="Strom">&#9889;</button>
         </div>
-        <a class="nav-button admin-link" href="admin" aria-label="Verwaltung">&#9881;</a>
+        <!-- Standardmäßig versteckt; main.js blendet das Zahnrad nur für
+             HA-Admins ein (GET api/me). Der Server schützt /admin zusätzlich. -->
+        <a class="nav-button admin-link" href="admin" aria-label="Verwaltung" hidden>&#9881;</a>
       </div>
     </div>
   </header>
