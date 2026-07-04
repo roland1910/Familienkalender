@@ -193,7 +193,11 @@ async def _fetch_snapshot_uncached() -> dict:
         results = await asyncio.gather(
             *(_fetch_metric(client, entity_id) for entity_id in entity_ids),
             # Let every request finish before the client closes, then surface
-            # the first error — gather would otherwise leave requests running.
+            # one of the errors — gather would otherwise leave requests
+            # running. "First" here just means first in entity_ids/results
+            # order, not most severe; if several sensors fail at once this
+            # picks whichever happens to be first in that list, arbitrarily
+            # with respect to severity.
             return_exceptions=True,
         )
     for result in results:

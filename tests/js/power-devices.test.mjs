@@ -40,16 +40,23 @@ test("parseDeviceLines returns an empty list for empty text", () => {
   assert.deepEqual(result.devices, []);
 });
 
-test("parseDeviceLines reports a German error with the line number", () => {
+test("parseDeviceLines reports a German error naming a missing '=' by line number", () => {
   const result = parseDeviceLines("sensor.ok = Gut\nnur-eine-id");
   assert.equal(result.devices, null);
   assert.match(result.error, /Zeile 2/);
+  assert.match(result.error, /"="/);
   assert.match(result.error, /entity_id = Anzeigename/);
 });
 
-test("parseDeviceLines rejects lines with an empty name or id", () => {
-  assert.match(parseDeviceLines("sensor.a =").error, /Zeile 1/);
-  assert.match(parseDeviceLines("= Nur Name").error, /Zeile 1/);
+test("parseDeviceLines rejects lines with an empty name or id after trimming", () => {
+  // Both have a "=" but one side is empty once trimmed — a different
+  // German message than the "no '=' at all" case above.
+  for (const line of ["sensor.a =", "= Nur Name"]) {
+    const result = parseDeviceLines(line);
+    assert.match(result.error, /Zeile 1/);
+    assert.doesNotMatch(result.error, /Kein "="/);
+    assert.match(result.error, /nicht leer/);
+  }
 });
 
 test("formatDeviceLines renders one line per device", () => {

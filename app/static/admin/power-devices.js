@@ -16,13 +16,24 @@ export function parseDeviceLines(text) {
   for (const [index, rawLine] of lines.entries()) {
     const line = rawLine.trim();
     if (line === "") continue;
+    const lineNumber = index + 1;
     const separator = line.indexOf("=");
-    const entityId = separator === -1 ? "" : line.slice(0, separator).trim();
-    const name = separator === -1 ? "" : line.slice(separator + 1).trim();
+    if (separator === -1) {
+      return {
+        devices: null,
+        error:
+          `Zeile ${lineNumber}: Kein "=" gefunden — bitte im Format` +
+          ` "entity_id = Anzeigename" angeben.`,
+      };
+    }
+    const entityId = line.slice(0, separator).trim();
+    const name = line.slice(separator + 1).trim();
     if (entityId === "" || name === "") {
       return {
         devices: null,
-        error: `Zeile ${index + 1}: Bitte im Format "entity_id = Anzeigename" angeben.`,
+        error:
+          `Zeile ${lineNumber}: entity_id und Anzeigename dürfen nach dem` +
+          ` Trennen am "=" nicht leer sein.`,
       };
     }
     devices.push({ entity_id: entityId, name });

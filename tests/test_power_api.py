@@ -143,6 +143,40 @@ class TestPowerEndpoint:
         assert "sensor.strom_netzbezug" in response.json()["detail"]
         assert "unbekannt" in response.json()["detail"]
 
+    def test_first_of_several_simultaneous_errors_wins_by_list_order(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two different failure kinds at once (a missing sensor plus a
+        # non-2xx HA error) to document that "first error" in
+        # _fetch_snapshot_uncached means first in entity_ids/results order,
+        # not most severe — the production sensor is first in
+        # AGGREGATE_ENTITIES, so its "unbekannt" error wins over the 500
+        # from a later sensor, regardless of which one is worse.
+        states = dict(HAPPY_STATES)
+        del states["sensor.hoymiles_station_balkonkraftwerk_current_power"]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            entity_id = request.url.path.rsplit("/", 1)[-1]
+            if entity_id == "sensor.stromverbrauch_gesamt":
+                return httpx.Response(500)
+            if entity_id not in states:
+                return httpx.Response(404, json={"message": "Entity not found."})
+            return httpx.Response(200, json={"entity_id": entity_id, "state": states[entity_id]})
+
+        def create_client() -> httpx.AsyncClient:
+            return httpx.AsyncClient(
+                transport=httpx.MockTransport(handler),
+                base_url="http://supervisor/core/api",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        monkeypatch.setattr(power, "create_client", create_client)
+        response = client.get("/api/power")
+        assert response.status_code == 502
+        detail = response.json()["detail"]
+        assert "hoymiles_station_balkonkraftwerk_current_power" in detail
+        assert "unbekannt" in detail
+
     def test_uses_the_configured_device_list(
         self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
     ) -> None:
