@@ -33,6 +33,10 @@ router = APIRouter(prefix="/api/power")
 DEFAULT_HA_API_URL = "http://supervisor/core/api"
 REQUEST_TIMEOUT_SECONDS = 5.0
 CACHE_TTL_SECONDS = 10.0
+# Short TTL for cached *errors*: long enough that a down HA instance is not
+# hammered by every poller (kiosk display plus ingress panels, each polling
+# every 15s), short enough that a recovered HA is picked up quickly.
+ERROR_CACHE_TTL_SECONDS = 5.0
 
 # Fixed aggregate sensors (template sensors + inverter) → payload keys.
 AGGREGATE_ENTITIES = {
@@ -58,6 +62,17 @@ class HomeAssistantUnavailableError(Exception):
 _cached_payload: dict | None = None
 _cache_valid_until = 0.0
 
+# Cached error message, separate from the payload cache so a failing HA
+# instance is not refetched on every poll from every client. All errors are
+# reported as 502, so only the message needs caching.
+_cached_error: str | None = None
+_error_cache_valid_until = 0.0
+
+# Guards _fetch_snapshot so a cache miss triggers exactly one fetch; requests
+# that arrive while a fetch is in flight wait for it instead of each
+# starting their own (thundering-herd protection when HA is slow or down).
+_fetch_lock = asyncio.Lock()
+
 
 def _now() -> float:
     """Monotonic clock; wrapped so tests can control cache expiry."""
@@ -65,10 +80,12 @@ def _now() -> float:
 
 
 def reset_cache() -> None:
-    """Drop the cached payload (tests; device-list changes in the admin API)."""
-    global _cached_payload, _cache_valid_until
+    """Drop the cached payload and error (tests; device-list changes in the admin API)."""
+    global _cached_payload, _cache_valid_until, _cached_error, _error_cache_valid_until
     _cached_payload = None
     _cache_valid_until = 0.0
+    _cached_error = None
+    _error_cache_valid_until = 0.0
 
 
 def create_client() -> httpx.AsyncClient:
@@ -116,7 +133,7 @@ async def _fetch_metric(client: httpx.AsyncClient, entity_id: str) -> dict:
     return {"value": value, "available": available}
 
 
-async def _fetch_snapshot() -> dict:
+async def _fetch_snapshot_uncached() -> dict:
     """Fetch all sensors concurrently and build the /api/power payload."""
     devices = get_power_devices(get_storage())
     entity_ids = [*AGGREGATE_ENTITIES.values(), *(device.entity_id for device in devices)]
@@ -141,16 +158,59 @@ async def _fetch_snapshot() -> dict:
     return payload
 
 
+def _cached_response() -> dict | tuple[str, int] | None:
+    """The still-valid cached payload or error, if any."""
+    now = _now()
+    if _cached_payload is not None and now < _cache_valid_until:
+        return _cached_payload
+    if _cached_error is not None and now < _error_cache_valid_until:
+        return _cached_error
+    return None
+
+
+async def _fetch_snapshot() -> dict:
+    """Cache-and-lock-aware snapshot: serves the cache, else fetches once.
+
+    On a cache miss (payload or error) this takes ``_fetch_lock`` so
+    concurrent callers (multiple pollers hitting a miss at the same moment)
+    share a single HA fetch instead of each firing their own — both for the
+    happy path and for a failing HA instance, whose error is cached for a
+    short TTL as well (protects against a thundering herd when HA is slow
+    or down). Raises ``HomeAssistantUnavailableError`` for both a fresh and
+    a cached error, so callers only need to handle one exception type.
+    """
+    global _cached_payload, _cache_valid_until, _cached_error, _error_cache_valid_until
+    cached = _cached_response()
+    if cached is not None:
+        return _payload_or_raise(cached)
+    async with _fetch_lock:
+        # Re-check: another caller may have populated the cache while this
+        # one was waiting for the lock.
+        cached = _cached_response()
+        if cached is not None:
+            return _payload_or_raise(cached)
+        try:
+            payload = await _fetch_snapshot_uncached()
+        except HomeAssistantUnavailableError as exc:
+            _cached_error = str(exc)
+            _error_cache_valid_until = _now() + ERROR_CACHE_TTL_SECONDS
+            raise
+        _cached_payload = payload
+        _cache_valid_until = _now() + CACHE_TTL_SECONDS
+        return payload
+
+
+def _payload_or_raise(cached: dict | str) -> dict:
+    """Return a cached payload, or re-raise a cached error."""
+    if isinstance(cached, str):
+        raise HomeAssistantUnavailableError(cached)
+    return cached
+
+
 @router.get("")
 async def get_power() -> dict:
     """Current power values for the view; served from cache within the TTL."""
-    global _cached_payload, _cache_valid_until
-    if _cached_payload is not None and _now() < _cache_valid_until:
-        return _cached_payload
     try:
-        payload = await _fetch_snapshot()
+        return await _fetch_snapshot()
     except HomeAssistantUnavailableError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    _cached_payload = payload
-    _cache_valid_until = _now() + CACHE_TTL_SECONDS
-    return payload

@@ -1,5 +1,6 @@
 """Tests for the power view API (/api/power) with mocked HA Core API."""
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
@@ -185,13 +186,20 @@ class TestPowerCache:
         client.get("/api/power")
         assert mock.requests == 2 * requests_after_first
 
-    def test_errors_are_not_cached(
+    def test_errors_are_cached_briefly_then_recover(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Errors get their own short-lived cache (see TestPowerErrorCache) so
+        # a down HA instance is not hammered by every poller; recovery is
+        # picked up once that error TTL — not the (longer) payload TTL —
+        # has passed.
         mock = MockHA(HAPPY_STATES, down=True)
         use_mock_ha(monkeypatch, mock)
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(power, "_now", lambda: clock["now"])
         assert client.get("/api/power").status_code == 502
         mock.down = False
+        clock["now"] += power.ERROR_CACHE_TTL_SECONDS + 0.1
         assert client.get("/api/power").status_code == 200
 
     def test_saving_the_device_list_invalidates_the_cache(
@@ -207,6 +215,53 @@ class TestPowerCache:
         assert response.status_code == 200
         devices = client.get("/api/power").json()["devices"]
         assert [device["name"] for device in devices] == ["Neu"]
+
+
+class TestPowerErrorCache:
+    def test_error_is_served_from_cache_for_a_few_seconds(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock = MockHA(HAPPY_STATES, down=True)
+        use_mock_ha(monkeypatch, mock)
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(power, "_now", lambda: clock["now"])
+        first = client.get("/api/power")
+        assert first.status_code == 502
+        requests_after_first = mock.requests
+        assert requests_after_first == 10  # all entities attempted (gather, not short-circuit)
+        clock["now"] += power.ERROR_CACHE_TTL_SECONDS - 0.1
+        second = client.get("/api/power")
+        assert second.status_code == 502
+        assert second.json() == first.json()
+        assert mock.requests == requests_after_first  # served from the error cache
+
+    def test_error_cache_expires_after_its_ttl(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock = MockHA(HAPPY_STATES, down=True)
+        use_mock_ha(monkeypatch, mock)
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(power, "_now", lambda: clock["now"])
+        client.get("/api/power")
+        requests_after_first = mock.requests
+        clock["now"] += power.ERROR_CACHE_TTL_SECONDS + 0.1
+        client.get("/api/power")
+        assert mock.requests > requests_after_first
+
+
+@pytest.mark.anyio
+class TestFetchSnapshotLock:
+    async def test_concurrent_misses_trigger_only_one_fetch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        power.reset_cache()
+        mock = MockHA(HAPPY_STATES)
+        use_mock_ha(monkeypatch, mock)
+        results = await asyncio.gather(*(power._fetch_snapshot() for _ in range(5)))
+        assert mock.requests == 10  # 5 aggregates + 5 devices, fetched exactly once
+        for result in results:
+            assert result == results[0]
 
 
 class TestCreateClient:
