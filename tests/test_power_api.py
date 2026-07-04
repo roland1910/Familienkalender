@@ -293,3 +293,41 @@ class TestCreateClient:
             assert ha_client.headers["Authorization"] == "Bearer dev-token"
         finally:
             del ha_client
+
+    def test_default_url_explicitly_set_still_uses_supervisor_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Setting HA_API_URL to exactly the default is not an override.
+        monkeypatch.setenv("HA_API_URL", power.DEFAULT_HA_API_URL)
+        monkeypatch.delenv("HA_API_TOKEN", raising=False)
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "super-token")
+        ha_client = power.create_client()
+        try:
+            assert ha_client.headers["Authorization"] == "Bearer super-token"
+        finally:
+            del ha_client
+
+    def test_url_override_without_ha_api_token_raises_clear_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A custom HA_API_URL must not silently fall back to the
+        # supervisor token (that token is only valid for the supervisor
+        # proxy, and reusing it for another URL would be a mismatch that
+        # is easy to miss) — fail fast with a clear error instead.
+        monkeypatch.setenv("HA_API_URL", "http://192.168.1.3:8123/api")
+        monkeypatch.delenv("HA_API_TOKEN", raising=False)
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "super-token")
+        with pytest.raises(power.MissingHomeAssistantTokenError):
+            power.create_client()
+
+    def test_url_override_with_ha_api_token_ignores_supervisor_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HA_API_URL", "http://192.168.1.3:8123/api")
+        monkeypatch.setenv("HA_API_TOKEN", "dev-token")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "super-token")
+        ha_client = power.create_client()
+        try:
+            assert ha_client.headers["Authorization"] == "Bearer dev-token"
+        finally:
+            del ha_client

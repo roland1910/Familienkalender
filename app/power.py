@@ -3,7 +3,10 @@
 Data source is the Home Assistant Core API of the host instance, read
 via the standard mechanism for add-ons with ``homeassistant_api``:
 ``http://supervisor/core/api`` with the SUPERVISOR_TOKEN. For local
-development and tests both are overridable via HA_API_URL / HA_API_TOKEN.
+development and tests the URL is overridable via HA_API_URL; once
+overridden, only HA_API_TOKEN is accepted for the token (see
+create_client) — the SUPERVISOR_TOKEN is coupled to the default URL and
+is never reused against a different host.
 
 The aggregate sensors (production, total consumption, balance, surplus,
 grid import) are fixed template sensors of the household's HA instance;
@@ -15,7 +18,10 @@ Responses are cached server side for a few seconds so polling frontends
 ``unavailable``/``unknown`` (or a non-numeric state) are returned as 0
 with ``available: false``; HA being unreachable or a sensor missing
 entirely is an error (HTTP 502, German message) so the view can show a
-proper error state.
+proper error state. Errors themselves are cached briefly too, and a
+lock protects against concurrent fetches on a cache miss (see
+_fetch_snapshot) — both guard against a thundering herd of requests
+hitting a slow or down HA instance.
 """
 
 import asyncio
@@ -88,10 +94,33 @@ def reset_cache() -> None:
     _error_cache_valid_until = 0.0
 
 
+class MissingHomeAssistantTokenError(Exception):
+    """HA_API_URL was overridden but no HA_API_TOKEN is set.
+
+    The SUPERVISOR_TOKEN is only valid for the supervisor's proxy at
+    DEFAULT_HA_API_URL; silently reusing it for a different URL would send
+    it to a host it was never meant for. Fail fast instead.
+    """
+
+
 def create_client() -> httpx.AsyncClient:
-    """HTTP client for the HA Core API (env overrides for local dev/tests)."""
+    """HTTP client for the HA Core API (env overrides for local dev/tests).
+
+    The SUPERVISOR_TOKEN is only used against the default supervisor URL.
+    Once HA_API_URL is overridden to something else, only HA_API_TOKEN is
+    accepted — a missing one is a configuration error, not a silent
+    fallback to a token meant for a different host.
+    """
     base_url = os.environ.get("HA_API_URL") or DEFAULT_HA_API_URL
-    token = os.environ.get("HA_API_TOKEN") or os.environ.get("SUPERVISOR_TOKEN", "")
+    if base_url == DEFAULT_HA_API_URL:
+        token = os.environ.get("HA_API_TOKEN") or os.environ.get("SUPERVISOR_TOKEN", "")
+    else:
+        token = os.environ.get("HA_API_TOKEN", "")
+        if not token:
+            raise MissingHomeAssistantTokenError(
+                "HA_API_URL ist gesetzt, aber HA_API_TOKEN fehlt — der"
+                " SUPERVISOR_TOKEN gilt nur für die Standard-URL."
+            )
     return httpx.AsyncClient(
         base_url=base_url,
         headers={"Authorization": f"Bearer {token}"},
