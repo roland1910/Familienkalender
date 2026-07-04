@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -32,6 +32,10 @@ INGRESS_PATH_PATTERN = re.compile(r"^/api/hassio_ingress/[A-Za-z0-9_-]+$")
 
 # HA ingress proxy plus localhost for the container-internal healthcheck.
 DEFAULT_ALLOWED_CLIENT_IPS = "172.30.32.2,127.0.0.1"
+
+# Global cap for request bodies: no endpoint of this app takes payloads
+# anywhere near this size (the largest are small JSON settings updates).
+MAX_REQUEST_BODY_BYTES = 16 * 1024
 
 
 def _allowed_client_ips() -> frozenset[str]:
@@ -72,6 +76,51 @@ class ClientIPAllowlistMiddleware:
                 await response(scope, receive, send)
                 return
         await self.app(scope, receive, send)
+
+
+class RequestBodyLimitMiddleware:
+    """Reject request bodies above MAX_REQUEST_BODY_BYTES with 413.
+
+    Declared bodies (Content-Length) are rejected up front. Bodies without
+    a declared length (chunked) are cut off once the limit is exceeded:
+    the truncated payload then fails JSON parsing in the endpoint (422)
+    instead of ever being buffered in full. Both paths keep oversized
+    payloads away from every POST/PUT endpoint centrally, rather than
+    relying on per-endpoint field caps alone.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    declared = None
+                if declared is not None and declared > MAX_REQUEST_BODY_BYTES:
+                    response = JSONResponse({"detail": "Anfrage zu groß."}, status_code=413)
+                    await response(scope, receive, send)
+                    return
+                break
+
+        received = 0
+
+        async def limited_receive() -> dict:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > MAX_REQUEST_BODY_BYTES:
+                    # Stop feeding the app; the truncated body fails parsing.
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        await self.app(scope, limited_receive, send)
 
 
 class IngressPathMiddleware:
@@ -140,6 +189,8 @@ app = FastAPI(title="Familienkalender", docs_url=None, redoc_url=None, lifespan=
 app.include_router(admin_router)
 app.include_router(tags_router)
 app.include_router(power_router)
+# Innermost (added first): runs after allowlist and ingress handling.
+app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(IngressPathMiddleware)
 # Added last so it runs first: nothing is processed for disallowed clients.
 app.add_middleware(ClientIPAllowlistMiddleware)
