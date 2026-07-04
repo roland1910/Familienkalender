@@ -1,13 +1,19 @@
-// Day popover: full event list for one day (opened from "+N weitere").
+// Day popover: full event list for one day plus the tag picker. Opened
+// from "+N weitere", from the day number (month) or the column header (week).
 
+import { putDayTags } from "./api.js";
 import { colorForSource } from "./colors.js";
-import { formatDayMonth, formatTime, isSameDay, WEEKDAY_NAMES_SHORT } from "./dates.js";
+import { formatDayMonth, formatTime, isSameDay, toISODate, WEEKDAY_NAMES_SHORT } from "./dates.js";
 import { el } from "./dom.js";
 import { spansFullDays } from "./events.js";
+import { state } from "./state.js";
 
 // Cap against event floods from foreign calendars; everything beyond this
 // collapses into one "… und N weitere" line.
 const MAX_POPOVER_ITEMS = 100;
+
+// Set via initPopover: re-renders the calendar after a tag change.
+let onTagsChanged = () => {};
 
 function backdrop() {
   return document.getElementById("day-popover");
@@ -18,6 +24,70 @@ export function closeDayPopover() {
   node.hidden = true;
   node.replaceChildren();
 }
+
+// -- tag picker ------------------------------------------------------------
+
+async function saveTags(day, emojis, section) {
+  const iso = toISODate(day);
+  let stored;
+  try {
+    stored = await putDayTags(iso, emojis);
+  } catch {
+    section.querySelector(".tag-error")?.remove();
+    section.append(el("p", "tag-error", "Symbol speichern fehlgeschlagen."));
+    return;
+  }
+  if (stored.length > 0) {
+    state.tags[iso] = stored;
+  } else {
+    delete state.tags[iso];
+  }
+  section.replaceWith(buildTagSection(day));
+  onTagsChanged();
+}
+
+function tagButton(emoji, className, label, onTap) {
+  const button = el("button", `tag-button ${className}`, emoji);
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  button.addEventListener("click", onTap);
+  return button;
+}
+
+function buildTagSection(day) {
+  const section = el("section", "popover-tags");
+  const current = state.tags[toISODate(day)] ?? [];
+  section.append(el("h3", "popover-tags-title", "Symbole für diesen Tag"));
+
+  const row = el("div", "tag-row");
+  for (const emoji of current) {
+    const remaining = current.filter((item) => item !== emoji);
+    row.append(
+      tagButton(emoji, "tag-current", `Symbol ${emoji} entfernen`, () =>
+        saveTags(day, remaining, section),
+      ),
+    );
+  }
+  const atCap = current.length >= state.maxTagsPerDay;
+  for (const option of state.tagOptions) {
+    if (current.includes(option.emoji)) continue;
+    const button = tagButton(option.emoji, "tag-option", `Symbol ${option.emoji} hinzufügen`, () =>
+      saveTags(day, [...current, option.emoji], section),
+    );
+    button.disabled = atCap;
+    row.append(button);
+  }
+  section.append(row);
+
+  if (state.tagOptions.length === 0) {
+    section.append(el("p", "tag-hint", "Symbolauswahl konnte nicht geladen werden."));
+  } else if (atCap) {
+    section.append(el("p", "tag-hint", `Höchstens ${state.maxTagsPerDay} Symbole pro Tag.`));
+  }
+  return section;
+}
+
+// -- popover ----------------------------------------------------------------
 
 export function openDayPopover(day, events) {
   const node = backdrop();
@@ -33,6 +103,8 @@ export function openDayPopover(day, events) {
   close.addEventListener("click", closeDayPopover);
   header.append(close);
   panel.append(header);
+
+  panel.append(buildTagSection(day));
 
   const list = el("ul", "popover-list");
   const shown = events.slice(0, MAX_POPOVER_ITEMS);
@@ -52,6 +124,9 @@ export function openDayPopover(day, events) {
     item.append(text);
     list.append(item);
   }
+  if (events.length === 0) {
+    list.append(el("li", "popover-more", "Keine Termine an diesem Tag."));
+  }
   if (events.length > shown.length) {
     // el() renders via textContent — no HTML sink even for hostile counts.
     list.append(el("li", "popover-more", `… und ${events.length - shown.length} weitere`));
@@ -61,7 +136,8 @@ export function openDayPopover(day, events) {
   node.hidden = false;
 }
 
-export function initPopover() {
+export function initPopover({ onTagsChanged: tagsChangedCallback } = {}) {
+  if (tagsChangedCallback) onTagsChanged = tagsChangedCallback;
   backdrop().addEventListener("click", (clickEvent) => {
     if (clickEvent.target === backdrop()) closeDayPopover();
   });

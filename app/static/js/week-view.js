@@ -182,24 +182,32 @@ function buildDayColumn(day, dayEvents, today, allEvents) {
   return column;
 }
 
-function buildHeader(start, today) {
+function buildHeader(start, today, events, tags) {
   const header = el("div", "week-header");
   header.append(el("span", "week-gutter-spacer"));
   for (let index = 0; index < 7; index += 1) {
     const day = addDays(start, index);
-    const label = el("div", "week-day-label");
+    // The column header is the touch target for the day popover (tag picker).
+    const label = el("button", "week-day-label");
+    label.type = "button";
     if (isSameDay(day, today)) label.classList.add("today");
     label.append(el("span", "week-day-name", WEEKDAY_NAMES_SHORT[index]));
     label.append(el("span", "week-day-date", `${day.getDate()}.${day.getMonth() + 1}.`));
+    const dayTags = tags[toISODate(day)] ?? [];
+    if (dayTags.length > 0) {
+      // Emojis come from the server whitelist and go through textContent.
+      label.append(el("span", "day-tags", dayTags.join("")));
+    }
+    label.addEventListener("click", () => openDayPopover(day, eventsForDay(events, day)));
     header.append(label);
   }
   return header;
 }
 
-export function renderWeekView(container, anchor, events, today) {
+export function renderWeekView(container, anchor, events, today, tags = {}) {
   const { start } = weekRange(anchor);
   const view = el("div", "week-view");
-  view.append(buildHeader(start, today));
+  view.append(buildHeader(start, today, events, tags));
   view.append(buildAllDaySection(events, start));
 
   const scroll = el("div", "week-scroll");

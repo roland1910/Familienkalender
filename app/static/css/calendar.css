@@ -207,14 +207,42 @@ body {
   border-width: 2px;
 }
 
+.day-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+/* Button: tapping the day number opens the day popover with the tag picker. */
 .day-number {
+  min-width: 40px;
+  min-height: 30px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
   font-size: 16px;
   font-weight: 600;
+  text-align: left;
   padding: 0 2px 2px;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 .day-cell.today .day-number {
   color: var(--accent);
+}
+
+/* Day tags (emoji), top right next to the day number / in the week header. */
+.day-tags {
+  font-size: 16px;
+  line-height: 1.4;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  padding: 2px 2px 0 0;
 }
 
 .day-chips {
@@ -361,6 +389,61 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* -- tag picker in the day popover ------------------------------------------ */
+
+.popover-tags {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.popover-tags-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-button {
+  min-width: 48px;
+  min-height: 48px;
+  font-size: 24px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.tag-button.tag-current {
+  background: var(--today-bg);
+  border-color: var(--accent);
+}
+
+.tag-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tag-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.tag-error {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--warn-text);
+}
+
 /* -- week view -------------------------------------------------------------- */
 
 .week-view {
@@ -376,11 +459,22 @@ body {
   gap: 2px;
 }
 
+/* Button: tapping the column header opens the day popover with the tag picker. */
 .week-day-label {
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 48px;
   padding: 4px 0;
+  font-family: inherit;
   font-size: 16px;
+  color: inherit;
+  border: none;
+  background: none;
   border-radius: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 .week-day-label.today {
@@ -390,7 +484,6 @@ body {
 
 .week-day-name {
   font-weight: 600;
-  margin-right: 6px;
 }
 
 .week-allday {

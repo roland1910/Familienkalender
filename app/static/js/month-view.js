@@ -3,6 +3,7 @@
 import { colorForSource } from "./colors.js";
 import {
   addDays,
+  formatDayMonth,
   formatTime,
   isSameDay,
   startOfMonth,
@@ -35,12 +36,24 @@ function buildChip(event, day) {
   return chip;
 }
 
-function buildCell(day, dayEvents, anchor, today) {
+function buildCell(day, dayEvents, anchor, today, dayTags) {
   const cell = el("div", "day-cell");
   cell.dataset.date = toISODate(day);
   if (day.getMonth() !== anchor.getMonth()) cell.classList.add("other-month");
   if (isSameDay(day, today)) cell.classList.add("today");
-  cell.append(el("div", "day-number", String(day.getDate())));
+
+  // Day number is the touch target for the day popover (tag picker).
+  const head = el("div", "day-head");
+  const number = el("button", "day-number", String(day.getDate()));
+  number.type = "button";
+  number.setAttribute("aria-label", `Tag ${formatDayMonth(day)} öffnen`);
+  number.addEventListener("click", () => openDayPopover(day, dayEvents));
+  head.append(number);
+  if (dayTags.length > 0) {
+    // Emojis come from the server whitelist and go through textContent.
+    head.append(el("span", "day-tags", dayTags.join("")));
+  }
+  cell.append(head);
 
   const chips = el("div", "day-chips");
   let visible = dayEvents;
@@ -64,7 +77,7 @@ function buildCell(day, dayEvents, anchor, today) {
   return cell;
 }
 
-export function renderMonthView(container, anchor, events, today) {
+export function renderMonthView(container, anchor, events, today, tags = {}) {
   const { start, end } = monthGridRange(anchor);
   const byDay = groupEventsByDay(events, start, end);
 
@@ -78,7 +91,8 @@ export function renderMonthView(container, anchor, events, today) {
   const grid = el("div", "month-grid");
   for (let index = 0; index < GRID_DAYS; index += 1) {
     const day = addDays(start, index);
-    grid.append(buildCell(day, byDay.get(toISODate(day)) ?? [], anchor, today));
+    const iso = toISODate(day);
+    grid.append(buildCell(day, byDay.get(iso) ?? [], anchor, today, tags[iso] ?? []));
   }
   view.append(grid);
   container.replaceChildren(view);

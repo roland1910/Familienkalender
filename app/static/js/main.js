@@ -1,6 +1,6 @@
 // App wiring: navigation, data loading, auto-refresh, view rendering.
 
-import { fetchEvents } from "./api.js";
+import { fetchEvents, fetchTagOptions, fetchTags } from "./api.js";
 import {
   addDays,
   addMonths,
@@ -44,9 +44,9 @@ function render() {
   if (!state.loaded) return; // keep the loading indicator until first data
   const container = document.getElementById("calendar");
   if (state.view === "month") {
-    renderMonthView(container, state.anchor, state.events, today());
+    renderMonthView(container, state.anchor, state.events, today(), state.tags);
   } else {
-    renderWeekView(container, state.anchor, state.events, today());
+    renderWeekView(container, state.anchor, state.events, today(), state.tags);
   }
 }
 
@@ -55,13 +55,30 @@ function setStale(stale) {
   document.getElementById("status-badge").hidden = !stale;
 }
 
+async function loadTagOptions() {
+  // The symbol catalog is fixed per server version; failures are non-fatal
+  // (the picker shows a hint) and refresh() retries while it is empty.
+  try {
+    const payload = await fetchTagOptions();
+    state.tagOptions = payload.options;
+    state.maxTagsPerDay = payload.max_per_day;
+  } catch {
+    // keep the previous (possibly empty) catalog
+  }
+}
+
 async function refresh() {
   const { start, end } = visibleRange();
   const fromISO = toISODate(addDays(start, -FETCH_BUFFER_DAYS));
   const toISO = toISODate(addDays(end, FETCH_BUFFER_DAYS));
+  if (state.tagOptions.length === 0) loadTagOptions();
   let rawEvents;
+  let rawTags;
   try {
-    rawEvents = await fetchEvents(fromISO, toISO);
+    [rawEvents, rawTags] = await Promise.all([
+      fetchEvents(fromISO, toISO),
+      fetchTags(fromISO, toISO),
+    ]);
   } catch {
     // Keep showing the last known data, just flag it as possibly outdated.
     setStale(true);
@@ -69,11 +86,13 @@ async function refresh() {
   }
   setStale(false);
   // Light DOM diff: skip re-rendering entirely when nothing changed, so the
-  // 60s auto-refresh never causes flicker on the kiosk display.
-  const fingerprint = `${fromISO}|${toISO}|${JSON.stringify(rawEvents)}`;
+  // 60s auto-refresh never causes flicker on the kiosk display. Tags are part
+  // of the fingerprint so changes made on other devices show up too.
+  const fingerprint = `${fromISO}|${toISO}|${JSON.stringify(rawEvents)}|${JSON.stringify(rawTags)}`;
   if (state.loaded && fingerprint === state.fingerprint) return;
   state.fingerprint = fingerprint;
   state.events = rawEvents.map(parseEvent);
+  state.tags = rawTags;
   state.loaded = true;
   render();
 }
@@ -102,7 +121,7 @@ function switchView(view) {
 }
 
 function init() {
-  initPopover();
+  initPopover({ onTagsChanged: render });
   document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
   document.getElementById("btn-next").addEventListener("click", () => navigate(1));
   document.getElementById("btn-today").addEventListener("click", goToToday);
