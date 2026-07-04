@@ -21,6 +21,12 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 - Verpackt als lokales HA-Add-on (`aarch64`, HA OS auf Raspberry Pi 5), Web-UI über **Ingress**
 - Add-on-Root = Repo-Root (`config.yaml`, `Dockerfile` auf oberster Ebene), damit Deployment = Repo nach `/addons/familienkalender` auf den Pi synchronisieren
 
+## Rechtemodell (Etappe 8)
+
+- **Normale HA-Benutzer** (z. B. Marina, `familiendisplay` — darf Nicht-Admin sein): sehen das Panel (`panel_admin: false` in config.yaml) und nutzen Kalender, Tages-Symbole und Strom-Ansicht.
+- **HA-Admins:** zusätzlich Verwaltung (`/admin`, `/api/admin/*`). Nicht-Admins bekommen dort 403 „Nur für Administratoren." (auf `/admin` als deutsche HTML-Seite); das Zahnrad im Header erscheint nur nach Bestätigung durch `GET /api/me`.
+- **Vertrauenskette** (app/auth.py): Die IP-Allowlist lässt nur den Ingress-Proxy (172.30.32.2) und 127.0.0.1 zu → deshalb sind die vom Supervisor gesetzten Header `X-Remote-User-Id/-Name/-Display-Name` glaubwürdig (Quelle: supervisor/api/ingress.py `_init_header`). Einen Admin-Header gibt es nicht; die Admin-Gruppe wird per HA-WebSocket `config/auth/list` (`ws://supervisor/core/websocket`) aufgelöst, 60 s gecacht, Fehler = Nicht-Admin (fail closed). Anfragen von 127.0.0.1 **ohne** User-Header gelten als Admin (lokale Entwicklung, E2E, Healthcheck — echter Ingress setzt den Header immer).
+
 ## Arbeitsregeln (verbindlich für alle Agenten und Sessions)
 
 1. **TDD:** Erst Test schreiben, dann implementieren. Keine Etappe ist fertig ohne grüne Tests (`pytest`).
