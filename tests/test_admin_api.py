@@ -189,6 +189,50 @@ class TestPowerDevicesSettings:
         response = client.put("/api/admin/settings/power", json={"devices": devices})
         assert response.status_code == 422
 
+    def test_put_overlong_entity_id_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        overlong = "sensor." + "a" * 250
+        response = client.put(
+            "/api/admin/settings/power",
+            json={"devices": [{"entity_id": overlong, "name": "Zu lang"}]},
+        )
+        assert response.status_code == 400
+        assert "Entity-ID" in response.json()["detail"]
+
+    def test_put_entity_id_colliding_with_aggregate_sensor_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings/power",
+            json={
+                "devices": [
+                    {
+                        "entity_id": "sensor.stromverbrauch_gesamt",
+                        "name": "Doppelt",
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 400
+        assert "bereits" in response.json()["detail"]
+
+    def test_put_duplicate_entity_id_in_list_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings/power",
+            json={
+                "devices": [
+                    {"entity_id": "sensor.a_leistung", "name": "A"},
+                    {"entity_id": "sensor.a_leistung", "name": "A wieder"},
+                ]
+            },
+        )
+        assert response.status_code == 400
+        assert "Zeile 2" in response.json()["detail"]
+        assert "doppelt" in response.json()["detail"]
+
 
 class TestSourcesList:
     def test_lists_sources_with_status_and_counts(

@@ -10,7 +10,6 @@ a PATCH sending the placeholder back keeps the stored secret.
 """
 
 import logging
-import re
 import secrets
 from datetime import time
 from pathlib import Path
@@ -52,9 +51,6 @@ _CONFIG_KEYS_BY_TYPE = {
 # bloating the DB and the admin UI.
 MAX_NAME_LENGTH = 200
 
-# Power-view device list: HA entity ids are lowercase domain.object_id.
-# Only sensors make sense here — anything else is a configuration error.
-_ENTITY_ID_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 MAX_POWER_DEVICES = 30
 MAX_POWER_DEVICE_NAME_LENGTH = 100
 
@@ -230,15 +226,37 @@ async def update_google_credentials(credentials: GoogleCredentials) -> dict:
 
 @router.put("/settings/power")
 async def update_power_devices(update: PowerDevicesUpdate) -> dict:
-    """Replace the power-view device list (an empty list is valid)."""
+    """Replace the power-view device list (an empty list is valid).
+
+    Rejects (400, German message, with the 1-based line/position where it
+    helps) anything that would not make sense to send to HA as a sensor
+    entity id, plus two list-level conflicts: an id already used by one of
+    the fixed aggregate sensors (app.power.AGGREGATE_ENTITIES), and an id
+    repeated within the submitted list.
+    """
     devices = []
-    for item in update.devices:
+    seen_entity_ids: set[str] = set()
+    for index, item in enumerate(update.devices, start=1):
         entity_id = item.entity_id.strip()
         name = item.name.strip()
-        if not _ENTITY_ID_PATTERN.fullmatch(entity_id):
+        if not settings.is_valid_power_entity_id(entity_id):
             raise HTTPException(
-                status_code=400, detail=f"Ungültige Entity-ID: {item.entity_id!r}"
+                status_code=400,
+                detail=f"Zeile {index}: Ungültige Entity-ID: {item.entity_id!r}",
             )
+        if entity_id in power.AGGREGATE_ENTITIES.values():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Zeile {index}: Die Entity-ID {entity_id!r} wird bereits"
+                " für eine feste Kennzahl der Strom-Ansicht verwendet.",
+            )
+        if entity_id in seen_entity_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Zeile {index}: Die Entity-ID {entity_id!r} ist doppelt"
+                " in der Liste.",
+            )
+        seen_entity_ids.add(entity_id)
         if not name:
             raise HTTPException(
                 status_code=400, detail="Der Anzeigename darf nicht leer sein."

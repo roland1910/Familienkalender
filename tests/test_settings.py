@@ -83,3 +83,22 @@ class TestPowerDevices:
     def test_wrong_shape_falls_back_to_defaults(self, storage: Storage) -> None:
         storage.set_setting(POWER_DEVICES_KEY, json.dumps([{"foo": "bar"}]))
         assert get_power_devices(storage) == list(DEFAULT_POWER_DEVICES)
+
+    def test_entries_with_invalid_entity_id_are_skipped_defensively(
+        self, storage: Storage
+    ) -> None:
+        # Defense in depth: even though the admin API validates on write,
+        # get_power_devices re-checks on read and drops anything that
+        # slipped through (e.g. a manually edited DB) instead of sending
+        # it to HA or failing the whole list.
+        storage.set_setting(
+            POWER_DEVICES_KEY,
+            json.dumps(
+                [
+                    {"entity_id": "sensor.ok_leistung", "name": "OK"},
+                    {"entity_id": "<script>alert(1)</script>", "name": "Böse"},
+                ]
+            ),
+        )
+        devices = get_power_devices(storage)
+        assert devices == [PowerDevice("sensor.ok_leistung", "OK")]

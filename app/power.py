@@ -25,14 +25,17 @@ hitting a slow or down HA instance.
 """
 
 import asyncio
+import logging
 import os
 import time
 
 import httpx
 from fastapi import APIRouter, HTTPException
 
-from app.settings import get_power_devices
+from app.settings import get_power_devices, is_valid_power_entity_id
 from app.storage import get_storage
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/power")
 
@@ -162,9 +165,29 @@ async def _fetch_metric(client: httpx.AsyncClient, entity_id: str) -> dict:
     return {"value": value, "available": available}
 
 
+def _valid_devices(devices: list) -> list:
+    """devices with a plausible entity_id; invalid ones are skipped and logged.
+
+    get_power_devices() already applies this same check when reading the
+    setting — this second check right before the fetch is defense in depth,
+    so a device never reaches the HA request purely because some future
+    code path bypassed get_power_devices.
+    """
+    valid = []
+    for device in devices:
+        if is_valid_power_entity_id(device.entity_id):
+            valid.append(device)
+        else:
+            logger.warning(
+                "Skipping power device with invalid entity_id before fetch: %r",
+                device.entity_id,
+            )
+    return valid
+
+
 async def _fetch_snapshot_uncached() -> dict:
     """Fetch all sensors concurrently and build the /api/power payload."""
-    devices = get_power_devices(get_storage())
+    devices = _valid_devices(get_power_devices(get_storage()))
     entity_ids = [*AGGREGATE_ENTITIES.values(), *(device.entity_id for device in devices)]
     async with create_client() as client:
         results = await asyncio.gather(
