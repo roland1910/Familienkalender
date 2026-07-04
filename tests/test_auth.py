@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from app import auth
@@ -66,6 +67,29 @@ def ingress_client() -> TestClient:
     return TestClient(app, client=(HA_INGRESS_IP, 50000))
 
 
+def fake_request(
+    client: tuple[str, int] | None, headers: dict[str, str] | None = None
+) -> Request:
+    """Minimal ASGI Request for unit-testing is_admin_request directly.
+
+    Bypasses ClientIPAllowlistMiddleware (which would 403 a foreign IP
+    before app code ever sees the request over HTTP) so the auth logic
+    itself can be exercised for client IPs the allowlist would reject.
+    """
+    raw_headers = [
+        (key.lower().encode(), value.encode()) for key, value in (headers or {}).items()
+    ]
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/me",
+        "headers": raw_headers,
+        "client": client,
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
 def fake_lookup(monkeypatch: pytest.MonkeyPatch, admin_ids: set[str]) -> list[int]:
     """Replace the WS lookup with a canned result; returns a call counter."""
     calls: list[int] = []
@@ -110,6 +134,14 @@ class TestUserIsAdmin:
         # An unexpected shape for group_ids (anything but a list/None) must
         # not raise — treat it like "no admin group membership" instead.
         user = {"id": "x", "is_active": True, "is_owner": False, "group_ids": 42}
+        assert auth._user_is_admin(user) is False
+
+    def test_group_ids_none_is_not_admin(self) -> None:
+        user = {"id": "x", "is_active": True, "is_owner": False, "group_ids": None}
+        assert auth._user_is_admin(user) is False
+
+    def test_group_ids_missing_entirely_is_not_admin(self) -> None:
+        user = {"id": "x", "is_active": True, "is_owner": False}
         assert auth._user_is_admin(user) is False
 
 
@@ -208,6 +240,19 @@ class TestFetchAdminUserIds:
         monkeypatch.setattr(auth, "connect", FakeConnect(websocket))
         with pytest.raises(auth.AdminLookupError):
             await auth._fetch_admin_user_ids()
+
+    @pytest.mark.anyio
+    async def test_missing_token_at_default_url_raises_before_connecting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Neither SUPERVISOR_TOKEN nor HA_API_TOKEN set: fail fast with
+        # AdminLookupError instead of opening a WebSocket handshake with a
+        # silent "" access_token that HA would only reject later.
+        connect = FakeConnect(FakeWebSocket([]))
+        monkeypatch.setattr(auth, "connect", connect)
+        with pytest.raises(auth.AdminLookupError):
+            await auth._fetch_admin_user_ids()
+        assert connect.url is None  # never even attempted to connect
 
     @pytest.mark.anyio
     async def test_overridden_ws_url_requires_explicit_token(
@@ -401,6 +446,38 @@ class TestLocalhostFallbackDisabledInProduction:
         # environment means this is not the production container.
         response = localhost_client().get("/api/me")
         assert response.json() == {"is_admin": True}
+
+
+class TestIsAdminRequestUnit:
+    """Direct unit tests of is_admin_request for cases the IP allowlist
+    would otherwise mask over HTTP (e.g. a foreign IP never reaches app
+    code — it gets a 403 from ClientIPAllowlistMiddleware first, see
+    app.main.ClientIPAllowlistMiddleware). fake_request bypasses that.
+    """
+
+    @pytest.mark.anyio
+    async def test_arbitrary_foreign_ip_without_header_is_not_admin(self) -> None:
+        request = fake_request(("203.0.113.5", 12345))
+        assert await auth.is_admin_request(request) is False
+
+    @pytest.mark.anyio
+    async def test_missing_client_is_not_admin(self) -> None:
+        # ASGI allows scope["client"] to be None (e.g. some test/proxy
+        # setups); must not raise and must not be treated as localhost.
+        request = fake_request(None)
+        assert await auth.is_admin_request(request) is False
+
+    @pytest.mark.anyio
+    async def test_whitespace_only_header_is_treated_as_missing(self) -> None:
+        # A whitespace-only header is not a real user id; localhost without
+        # a real header falls back to the dev/E2E admin shortcut.
+        request = fake_request(("127.0.0.1", 12345), {"X-Remote-User-Id": "   "})
+        assert await auth.is_admin_request(request) is True
+
+    @pytest.mark.anyio
+    async def test_whitespace_only_header_on_foreign_ip_is_not_admin(self) -> None:
+        request = fake_request(("203.0.113.5", 12345), {"X-Remote-User-Id": "   "})
+        assert await auth.is_admin_request(request) is False
 
 
 class TestAdminGate:

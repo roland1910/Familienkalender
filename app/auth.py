@@ -115,10 +115,17 @@ def _ws_token() -> str:
 
     The SUPERVISOR_TOKEN is coupled to the default supervisor URL; once
     HA_WS_URL is overridden, only an explicit HA_API_TOKEN is accepted so
-    the supervisor token is never sent to a different host.
+    the supervisor token is never sent to a different host. Either way, a
+    missing token raises immediately instead of attempting a WebSocket
+    handshake with an empty access_token that HA would only reject later.
     """
     if _ws_url() == DEFAULT_HA_WS_URL:
-        return os.environ.get("HA_API_TOKEN") or os.environ.get("SUPERVISOR_TOKEN", "")
+        token = os.environ.get("HA_API_TOKEN") or os.environ.get("SUPERVISOR_TOKEN", "")
+        if not token:
+            raise AdminLookupError(
+                "Kein SUPERVISOR_TOKEN und kein HA_API_TOKEN gesetzt."
+            )
+        return token
     token = os.environ.get("HA_API_TOKEN", "")
     if not token:
         raise AdminLookupError(
