@@ -14,6 +14,34 @@ DISPLAY_MODES = ("full", "filtered")
 
 
 @dataclass(frozen=True, slots=True)
+class TagOption:
+    """One selectable day-tag symbol (id is stable, emoji is the display)."""
+
+    id: str
+    emoji: str
+
+
+# Fixed catalog of day-tag symbols. Single source of truth for the backend
+# whitelist (storage validation) and the frontend picker (served via
+# GET /api/tags/options). Planned to become admin-configurable later.
+TAG_OPTIONS = (
+    TagOption("happy", "😀"),
+    TagOption("heart", "❤️"),
+    TagOption("star", "⭐"),
+    TagOption("party", "🎉"),
+    TagOption("soccer", "⚽"),
+    TagOption("birthday", "🎂"),
+    TagOption("travel", "✈️"),
+    TagOption("sun", "🌞"),
+    TagOption("sad", "🙁"),
+)
+
+# Cap per day: the tags must fit next to the day number in a month cell,
+# and more than a handful of symbols per day carries no meaning anyway.
+MAX_TAGS_PER_DAY = 3
+
+
+@dataclass(frozen=True, slots=True)
 class CalendarEvent:
     """A single (already recurrence-expanded) calendar event occurrence.
 

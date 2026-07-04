@@ -21,7 +21,9 @@ from pathlib import Path
 
 from app.models import (
     DISPLAY_MODES,
+    MAX_TAGS_PER_DAY,
     SOURCE_TYPES,
+    TAG_OPTIONS,
     CalendarEvent,
     Source,
     StoredEvent,
@@ -58,7 +60,17 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS day_tags (
+    date TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    emoji TEXT NOT NULL,
+    PRIMARY KEY (date, position)
+);
 """
+
+# Emojis allowed in day_tags — everything else is rejected before it ever
+# reaches the database (guards against XSS payloads and junk strings).
+_ALLOWED_TAG_EMOJIS = frozenset(option.emoji for option in TAG_OPTIONS)
 
 
 def resolve_data_dir() -> Path:
@@ -276,6 +288,47 @@ class Storage:
     def delete_setting(self, key: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+    # -- day tags --------------------------------------------------------
+
+    def set_day_tags(self, day: date, emojis: list[str]) -> list[str]:
+        """Replace the tags of one day with the given emoji list.
+
+        Only whitelisted emojis (TAG_OPTIONS) are accepted, duplicates are
+        collapsed (first occurrence wins) and at most MAX_TAGS_PER_DAY tags
+        are allowed. Returns the stored list. Raises ValueError on invalid
+        input — before anything is written.
+        """
+        deduped = list(dict.fromkeys(emojis))
+        for emoji in deduped:
+            if emoji not in _ALLOWED_TAG_EMOJIS:
+                raise ValueError(f"emoji not in whitelist: {emoji!r}")
+        if len(deduped) > MAX_TAGS_PER_DAY:
+            raise ValueError(f"at most {MAX_TAGS_PER_DAY} tags per day")
+        day_iso = day.isoformat()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM day_tags WHERE date = ?", (day_iso,))
+            conn.executemany(
+                "INSERT INTO day_tags (date, position, emoji) VALUES (?, ?, ?)",
+                [(day_iso, position, emoji) for position, emoji in enumerate(deduped)],
+            )
+        return deduped
+
+    def get_day_tags(self, from_date: date, to_date: date) -> dict[str, list[str]]:
+        """Tags per ISO date for [from_date, to_date] (inclusive), in set order.
+
+        Only days that actually have tags appear in the result.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT date, emoji FROM day_tags WHERE date >= ? AND date <= ?"
+                " ORDER BY date, position",
+                (from_date.isoformat(), to_date.isoformat()),
+            ).fetchall()
+        result: dict[str, list[str]] = {}
+        for row in rows:
+            result.setdefault(row["date"], []).append(row["emoji"])
+        return result
 
     # -- events ----------------------------------------------------------
 

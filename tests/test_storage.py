@@ -402,3 +402,90 @@ class TestConnectionSettings:
         with storage._connect() as conn:
             timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
         assert timeout_ms == 5000
+
+
+class TestDayTags:
+    def test_no_tags_initially(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        assert storage.get_day_tags(date(2026, 7, 1), date(2026, 7, 31)) == {}
+
+    def test_set_and_get_tags_for_a_day(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_day_tags(date(2026, 7, 10), ["😀", "⭐"])
+        tags = storage.get_day_tags(date(2026, 7, 1), date(2026, 7, 31))
+        assert tags == {"2026-07-10": ["😀", "⭐"]}
+
+    def test_order_is_preserved(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_day_tags(date(2026, 7, 10), ["⭐", "😀", "🎉"])
+        tags = storage.get_day_tags(date(2026, 7, 10), date(2026, 7, 10))
+        assert tags["2026-07-10"] == ["⭐", "😀", "🎉"]
+
+    def test_set_replaces_previous_tags(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_day_tags(date(2026, 7, 10), ["😀", "⭐"])
+        storage.set_day_tags(date(2026, 7, 10), ["🎂"])
+        tags = storage.get_day_tags(date(2026, 7, 10), date(2026, 7, 10))
+        assert tags == {"2026-07-10": ["🎂"]}
+
+    def test_empty_list_clears_the_day(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_day_tags(date(2026, 7, 10), ["😀"])
+        storage.set_day_tags(date(2026, 7, 10), [])
+        assert storage.get_day_tags(date(2026, 7, 10), date(2026, 7, 10)) == {}
+
+    def test_range_is_inclusive_and_filters_outside_days(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_day_tags(date(2026, 6, 30), ["😀"])
+        storage.set_day_tags(date(2026, 7, 1), ["⭐"])
+        storage.set_day_tags(date(2026, 7, 31), ["🎉"])
+        storage.set_day_tags(date(2026, 8, 1), ["🎂"])
+        tags = storage.get_day_tags(date(2026, 7, 1), date(2026, 7, 31))
+        assert tags == {"2026-07-01": ["⭐"], "2026-07-31": ["🎉"]}
+
+    def test_unknown_emoji_is_rejected(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        with pytest.raises(ValueError):
+            storage.set_day_tags(date(2026, 7, 10), ["💩"])
+
+    def test_free_text_is_rejected(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        with pytest.raises(ValueError):
+            storage.set_day_tags(date(2026, 7, 10), ["<script>alert(1)</script>"])
+
+    def test_rejected_set_leaves_existing_tags_untouched(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_day_tags(date(2026, 7, 10), ["😀"])
+        with pytest.raises(ValueError):
+            storage.set_day_tags(date(2026, 7, 10), ["💩"])
+        assert storage.get_day_tags(date(2026, 7, 10), date(2026, 7, 10)) == {
+            "2026-07-10": ["😀"]
+        }
+
+    def test_more_than_max_tags_is_rejected(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        with pytest.raises(ValueError):
+            storage.set_day_tags(date(2026, 7, 10), ["😀", "⭐", "🎉", "🎂"])
+
+    def test_duplicates_are_collapsed(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.set_day_tags(date(2026, 7, 10), ["😀", "😀", "⭐"])
+        tags = storage.get_day_tags(date(2026, 7, 10), date(2026, 7, 10))
+        assert tags["2026-07-10"] == ["😀", "⭐"]
+
+    def test_tags_survive_reopening(self, tmp_path: Path) -> None:
+        make_storage(tmp_path).set_day_tags(date(2026, 7, 10), ["🌞"])
+        tags = make_storage(tmp_path).get_day_tags(date(2026, 7, 10), date(2026, 7, 10))
+        assert tags == {"2026-07-10": ["🌞"]}
+
+
+class TestTagOptions:
+    def test_catalog_has_named_unique_entries(self) -> None:
+        from app.models import TAG_OPTIONS
+
+        ids = [option.id for option in TAG_OPTIONS]
+        emojis = [option.emoji for option in TAG_OPTIONS]
+        assert len(ids) == len(set(ids))
+        assert len(emojis) == len(set(emojis))
+        assert "😀" in emojis
+        assert "🙁" in emojis
