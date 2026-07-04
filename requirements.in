@@ -10,5 +10,7 @@ uvicorn==0.49.0
 httpx==0.28.1
 icalendar==7.2.0
 recurring-ical-events==3.8.2
+# HA WebSocket API client (admin lookup via config/auth/list, app/auth.py)
+websockets==16.0
 # zoneinfo data for Europe/Berlin (Alpine base image has no system tzdata)
 tzdata==2026.2

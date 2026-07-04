@@ -8,13 +8,14 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import sync as sync_module
 from app.admin import router as admin_router
+from app.auth import is_admin_request
 from app.filtering import filter_events
 from app.models import LOCAL_TZ, StoredEvent
 from app.power import router as power_router
@@ -203,6 +204,13 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/me")
+async def me(request: Request) -> dict[str, bool]:
+    """Role of the requesting HA user — the frontend hides the admin gear
+    for non-admins (the server-side gate is require_admin, not this)."""
+    return {"is_admin": await is_admin_request(request)}
+
+
 def _serialize_event(item: StoredEvent) -> dict:
     """JSON shape for the frontend; timed events in local time, all-day as dates.
 
@@ -295,6 +303,15 @@ async def index() -> HTMLResponse:
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page() -> HTMLResponse:
-    """Serve the admin page (same relative-URL rules as the calendar)."""
+async def admin_page(request: Request) -> HTMLResponse:
+    """Serve the admin page (same relative-URL rules as the calendar).
+
+    Non-admins get a proper German 403 page instead of raw JSON — the
+    gear is hidden for them, but the URL is guessable.
+    """
+    if not await is_admin_request(request):
+        return HTMLResponse(
+            (STATIC_DIR / "admin" / "forbidden.html").read_text(encoding="utf-8"),
+            status_code=403,
+        )
     return HTMLResponse((STATIC_DIR / "admin" / "admin.html").read_text(encoding="utf-8"))

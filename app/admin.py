@@ -1,7 +1,10 @@
 """Admin API (/api/admin/*): sources CRUD, settings, OAuth connect.
 
 Reachability: like every other route, these endpoints sit behind HA
-ingress plus the client-IP allowlist middleware — no separate auth layer.
+ingress plus the client-IP allowlist middleware. On top of that the
+whole router requires an HA admin user (require_admin dependency —
+resolved from the ingress user headers, see app.auth); non-admins get
+403 "Nur für Administratoren.".
 
 Secret handling: app passwords and the Google client secret are stored
 (source config JSON / settings table) but never returned by any endpoint.
@@ -14,10 +17,11 @@ import secrets
 from datetime import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app import google_oauth, power, settings
+from app.auth import require_admin
 from app.models import DISPLAY_MODES, SOURCE_TYPES, Source
 from app.sanitize import sanitize_error
 from app.settings import get_evening_boundary
@@ -27,7 +31,7 @@ from app.url_validation import SourceURLError, validate_source_url
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/admin")
+router = APIRouter(prefix="/api/admin", dependencies=[Depends(require_admin)])
 
 # Placeholder returned instead of stored secrets; a PATCH echoing it back
 # means "keep the stored value".
