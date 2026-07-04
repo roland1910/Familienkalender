@@ -16,3 +16,7 @@ ingress_port: 8099
 homeassistant_api: true
 panel_icon: mdi:calendar-heart
 panel_title: Familienkalender
+# Show the sidebar entry to non-admin HA users too (default is true =
+# admins only). The admin area stays protected server-side: /admin and
+# /api/admin/* check the ingress user headers (see app/auth.py).
+panel_admin: false
