@@ -41,6 +41,14 @@ TAG_OPTIONS = (
 MAX_TAGS_PER_DAY = 3
 
 
+class UnknownTagError(ValueError):
+    """Raised when a day-tag write contains an emoji outside TAG_OPTIONS."""
+
+
+class TagLimitError(ValueError):
+    """Raised when a day-tag write would exceed MAX_TAGS_PER_DAY."""
+
+
 @dataclass(frozen=True, slots=True)
 class CalendarEvent:
     """A single (already recurrence-expanded) calendar event occurrence.

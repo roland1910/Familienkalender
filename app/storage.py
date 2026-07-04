@@ -27,6 +27,8 @@ from app.models import (
     CalendarEvent,
     Source,
     StoredEvent,
+    TagLimitError,
+    UnknownTagError,
     as_local_datetime,
 )
 
@@ -296,15 +298,17 @@ class Storage:
 
         Only whitelisted emojis (TAG_OPTIONS) are accepted, duplicates are
         collapsed (first occurrence wins) and at most MAX_TAGS_PER_DAY tags
-        are allowed. Returns the stored list. Raises ValueError on invalid
-        input — before anything is written.
+        are allowed. Returns the stored list. Raises UnknownTagError or
+        TagLimitError on invalid input — before anything is written. This is
+        the single place that enforces these rules; callers (the API layer)
+        only translate the exception types into HTTP responses.
         """
         deduped = list(dict.fromkeys(emojis))
         for emoji in deduped:
             if emoji not in _ALLOWED_TAG_EMOJIS:
-                raise ValueError(f"emoji not in whitelist: {emoji!r}")
+                raise UnknownTagError(f"emoji not in whitelist: {emoji!r}")
         if len(deduped) > MAX_TAGS_PER_DAY:
-            raise ValueError(f"at most {MAX_TAGS_PER_DAY} tags per day")
+            raise TagLimitError(f"at most {MAX_TAGS_PER_DAY} tags per day")
         day_iso = day.isoformat()
         with self._connect() as conn:
             conn.execute("DELETE FROM day_tags WHERE date = ?", (day_iso,))

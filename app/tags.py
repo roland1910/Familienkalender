@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.models import MAX_TAGS_PER_DAY, TAG_OPTIONS
+from app.models import MAX_TAGS_PER_DAY, TAG_OPTIONS, TagLimitError, UnknownTagError
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api/tags")
@@ -46,14 +46,18 @@ async def list_tags(
 
 @router.put("/{day}")
 async def set_tags(day: date, update: DayTagsUpdate) -> dict:
-    """Replace the tags of one day (an empty list clears it)."""
-    deduped = list(dict.fromkeys(update.emojis))
-    if len(deduped) > MAX_TAGS_PER_DAY:
+    """Replace the tags of one day (an empty list clears it).
+
+    Dedup and the per-day cap are enforced by the storage layer alone
+    (single source of truth); this handler only maps its two specific
+    exception types onto the existing German error messages.
+    """
+    try:
+        stored = get_storage().set_day_tags(day, update.emojis)
+    except TagLimitError as error:
         raise HTTPException(
             status_code=400, detail=f"Höchstens {MAX_TAGS_PER_DAY} Symbole pro Tag."
-        )
-    try:
-        stored = get_storage().set_day_tags(day, deduped)
-    except ValueError as error:
+        ) from error
+    except UnknownTagError as error:
         raise HTTPException(status_code=400, detail="Unbekanntes Symbol.") from error
     return {"date": day.isoformat(), "emojis": stored}
