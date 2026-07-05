@@ -219,6 +219,15 @@ body {
   overflow-wrap: anywhere;
 }
 
+.source-feed-warning {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
 .source-controls {
   display: flex;
   align-items: center;

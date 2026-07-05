@@ -342,6 +342,33 @@ class TestFeedToggle:
         ).to_be_checked()
 
 
+class TestFeedModeWarning:
+    def test_switching_to_full_mode_warns_while_feed_toggle_is_active(
+        self, page: Page, server_url: str
+    ) -> None:
+        # Demo data: Kunde is filtered and already feeds the ICS subscription.
+        # Switching it to "Alle Termine" while that toggle stays on means the
+        # feed would now carry it unfiltered — the UI should warn (not block).
+        goto_admin(page, server_url)
+        kunde = page.locator(".source-item", has_text="Kunde")
+        expect(kunde.locator(".feed-toggle")).to_be_checked()
+        warning = kunde.locator(".source-feed-warning")
+        expect(warning).to_be_hidden()
+
+        kunde.locator(".mode-select").select_option("full")
+        expect(warning).to_be_visible()
+        expect(warning).to_contain_text("vollständig")
+
+        # Switching back to filtered clears the warning again.
+        kunde.locator(".mode-select").select_option("filtered")
+        expect(warning).to_be_hidden()
+
+        # Restore so the shared demo DB keeps its default state.
+        page.reload()
+        kunde = page.locator(".source-item", has_text="Kunde")
+        expect(kunde.locator(".mode-select")).to_have_value("filtered")
+
+
 class TestFeedSection:
     def test_feed_url_is_shown_and_rotates_with_confirmation(
         self, page: Page, server_url: str
