@@ -36,10 +36,7 @@ export function initFeed() {
     try {
       const { feed } = await api.rotateFeed();
       applyFeed(feed);
-      showMessage(
-        messageNode,
-        "Neuer Abo-Link erzeugt — der alte Link ist ab sofort ungültig.",
-      );
+      showMessage(messageNode, "Neuer Abo-Link erzeugt — der alte Link ist ab sofort ungültig.");
     } catch (error) {
       showMessage(messageNode, error.message, true);
     }
