@@ -121,6 +121,26 @@ class TestFeedExceptionForForeignIPs:
         assert lan_client.post("/api/sync").status_code == 403
         assert lan_client.put("/api/admin/settings", json={}).status_code == 403
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/feed/%2e%2e/api/admin/settings",  # encoded traversal
+            "/feed/token.ics/extra",  # extra path segment after the file
+            "/feed/token.ics/",  # trailing slash after the file
+            "/feed/tok en.ics",  # space is not URL-safe-token alphabet
+            "/feed/.ics",  # empty token
+            "/feed/token.txt",  # wrong extension
+        ],
+    )
+    def test_foreign_ip_stays_403_for_feed_lookalikes(
+        self, lan_client: TestClient, storage: Storage, path: str
+    ) -> None:
+        # The allowlist exception must only ever match the exact feed shape
+        # (/feed/<token>.ics with a URL-safe token) — not traversal attempts
+        # or trailing extra path segments that might reach other routes.
+        ensure_feed_token(storage)
+        assert lan_client.get(path).status_code == 403
+
     def test_ingress_ip_keeps_full_access_including_the_feed(
         self, storage: Storage
     ) -> None:

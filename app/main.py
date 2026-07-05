@@ -36,12 +36,13 @@ INGRESS_PATH_PATTERN = re.compile(r"^/api/hassio_ingress/[A-Za-z0-9_-]+$")
 # HA ingress proxy plus localhost for the container-internal healthcheck.
 DEFAULT_ALLOWED_CLIENT_IPS = "172.30.32.2,127.0.0.1"
 
-# The only path prefix reachable from IPs outside the allowlist: the
+# The only path shape reachable from IPs outside the allowlist: the
 # subscribable ICS feed. LAN clients reach the app via host port 8098;
 # the token is the sole auth for the feed, everything else stays
-# ingress-only. The trailing slash is part of the prefix so sibling
-# paths (/feedx/...) or the bare /feed never match.
-FEED_PATH_PREFIX = "/feed/"
+# ingress-only. A full-match regex (rather than a startswith prefix)
+# rejects traversal, extra path segments and stray characters up front —
+# defense in depth alongside the route's own non-ASCII/compare_digest check.
+FEED_PATH_PATTERN = re.compile(r"/feed/[A-Za-z0-9_-]+\.ics")
 
 # Global cap for request bodies: no endpoint of this app takes payloads
 # anywhere near this size (the largest are small JSON settings updates).
@@ -72,10 +73,10 @@ class ClientIPAllowlistMiddleware:
     (172.30.32.2); ingress itself handles HA authentication. Everything
     else (e.g. direct access to the container port) is answered with 403.
 
-    Single exception: paths under FEED_PATH_PREFIX are allowed from any
-    IP. Subscription clients (ICSx5/DAVx5 on Marina's phone) cannot log
-    in to HA — LAN clients reach the app via host port 8098; the token
-    is the sole auth for the feed, everything else stays ingress-only.
+    Single exception: paths matching FEED_PATH_PATTERN are allowed from
+    any IP. Subscription clients (ICSx5/DAVx5 on Marina's phone) cannot
+    log in to HA — LAN clients reach the app via host port 8098; the
+    token is the sole auth for the feed, everything else stays ingress-only.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -86,9 +87,9 @@ class ClientIPAllowlistMiddleware:
         if scope["type"] == "http":
             client = scope.get("client")
             client_host = client[0] if client else None
-            if client_host not in self.allowed_ips and not scope.get(
-                "path", ""
-            ).startswith(FEED_PATH_PREFIX):
+            if client_host not in self.allowed_ips and not FEED_PATH_PATTERN.fullmatch(
+                scope.get("path", "")
+            ):
                 response = PlainTextResponse("Forbidden", status_code=403)
                 await response(scope, receive, send)
                 return
