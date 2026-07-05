@@ -108,6 +108,27 @@ class TestFeedContent:
         assert not any("Standup" in title for title in titles)  # daytime meeting
         assert not any("Elternabend" in title for title in titles)  # full source
 
+    def test_weekend_daytime_event_is_included(self, storage: Storage) -> None:
+        # The feed uses the same filter_events as the calendar views: on
+        # non-workdays (here a Saturday) even intra-day events are shown.
+        work_id, _ = seed(storage)
+        storage.sync_events(
+            work_id,
+            [
+                _timed(
+                    "work-saturday",
+                    "Samstagsschulung",
+                    datetime(2026, 7, 11, 10, 0, tzinfo=BERLIN),  # Saturday
+                    datetime(2026, 7, 11, 11, 0, tzinfo=BERLIN),
+                )
+            ],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        titles = summaries(parse_feed(build_feed(storage, now=NOW)))
+        assert "RMV Samstagsschulung" in titles
+
     def test_respects_the_persisted_evening_boundary(self, storage: Storage) -> None:
         seed(storage)
         storage.set_setting("evening_boundary", "18:30")

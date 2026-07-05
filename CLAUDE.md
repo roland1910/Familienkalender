@@ -8,7 +8,7 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
   - Marina (Google Calendar API): wird **komplett** angezeigt
   - Kunde (Google Calendar API, Workspace-Konto): **gefiltert**
   - Firma (Nextcloud CalDAV): **gefiltert**
-- **Filterregel** für Kunde + Firma: Es erscheinen nur Termine, die für die Familie relevant sind — Termine, die in die Abendstunden hineinreichen oder dort beginnen (Grenze: 17:00 Uhr, im Admin konfigurierbar) sowie mehrtägige/übernachtende Termine. Reine Untertags-Meetings werden ausgeblendet. Echte Termintitel werden angezeigt.
+- **Filterregel** für Kunde + Firma: Es erscheinen nur Termine, die für die Familie relevant sind — Termine, die in die Abendstunden hineinreichen oder dort beginnen (Grenze: 17:00 Uhr, im Admin konfigurierbar) sowie mehrtägige/übernachtende Termine. Reine Untertags-Meetings werden ausgeblendet — aber nur an Arbeitstagen: an Wochenenden und an gesetzlichen Feiertagen in Bayern (`app/holidays_bavaria.py`, Gauß-Osterformel, keine externe Dependency) werden alle Termine gezeigt; es zählt das lokale Startdatum (Europe/Berlin). Echte Termintitel werden angezeigt.
 - **Aggregation intern** (kein Zurückschreiben in externe Kalender). Sync-Intervall ~5 Minuten.
 - **Tages-Tags:** Pro Tag können Symbole (Smileys/Icons, kleine Auswahl) gesetzt werden — per Touch und Web. Nur lokale Speicherung.
 - **Ansichten:** Monats- und Wochenansicht, blätterbar, touch-optimiert. Zusätzlich eine Strom-Ansicht (Balkonkraftwerk/Steckdosen via HA-API), zwischen der und dem Kalender man am Display umschalten kann.

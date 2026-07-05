@@ -134,8 +134,9 @@
     <section class="admin-section" aria-labelledby="settings-heading">
       <h2 id="settings-heading">Einstellungen</h2>
       <div class="form-grid">
-        <label for="evening-boundary">Abendgrenze (gefilterte Kalender zeigen Termine,
-          die über diese Uhrzeit hinausreichen)</label>
+        <label for="evening-boundary">Abendgrenze (an Arbeitstagen zeigen gefilterte
+          Kalender nur Termine, die über diese Uhrzeit hinausreichen; am Wochenende
+          und an bayerischen Feiertagen werden alle Termine gezeigt)</label>
         <input id="evening-boundary" type="time" step="60">
       </div>
       <div class="button-row">
@@ -162,7 +163,8 @@
       <h2 id="feed-heading">Kalender-Abo</h2>
       <p>Abonnierbarer Kalender &#8222;Familie &#8211; Roland&#8220;: alle
         familienrelevanten Termine aus den gefilterten Quellen
-        (Abendgrenze/mehrt&auml;gig), Titel mit Quellen-K&uuml;rzel als Pr&auml;fix.</p>
+        (Abendgrenze/mehrt&auml;gig, an Nicht-Arbeitstagen alle), Titel mit
+        Quellen-K&uuml;rzel als Pr&auml;fix.</p>
       <div class="form-grid">
         <label for="feed-url">Abo-Adresse (https, auch von unterwegs erreichbar)</label>
         <input id="feed-url" type="text" readonly spellcheck="false">
