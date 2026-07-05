@@ -329,3 +329,26 @@ class TestRateLimiterUnit:
             limiter.check(f"10.{i // 65536}.{(i // 256) % 256}.{i % 256}")
             clock.advance(61)  # keep the global backstop out of the way
         assert limiter.tracked_ip_count <= MAX_TRACKED_IPS
+
+    def test_lockout_survives_lru_flooding(self, clock: FakeClock) -> None:
+        # An attacker must not be able to reset their own lockout by
+        # flooding the LRU-bounded IP table with fresh source addresses
+        # until the lockout entry is evicted. Realistic pacing: the
+        # global backstop admits at most 300 new IPs per minute, so the
+        # table fills within ~4 minutes — well inside the 15-minute
+        # lockout window.
+        limiter = RateLimiter(clock=clock)
+        for _ in range(FAILED_TOKEN_ATTEMPTS_BEFORE_LOCKOUT):
+            limiter.register_failed_token(CLIENT_IP)
+        assert limiter.check(CLIENT_IP) is not None  # locked out
+        flooded = 0
+        while flooded < MAX_TRACKED_IPS + 50:
+            for _ in range(GLOBAL_MAX_REQUESTS_PER_MINUTE):
+                limiter.check(f"10.{flooded // 65536}.{(flooded // 256) % 256}.{flooded % 256}")
+                flooded += 1
+            clock.advance(61)  # next batch once the global window slides
+        assert clock.now - 1000.0 < LOCKOUT_SECONDS  # still inside the lockout
+        # The lockout must still hold — and the table must stay bounded
+        # apart from the protected lockout entries.
+        assert limiter.check(CLIENT_IP) is not None
+        assert limiter.tracked_ip_count <= MAX_TRACKED_IPS + 1

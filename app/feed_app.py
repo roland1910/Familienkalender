@@ -174,8 +174,30 @@ class RateLimiter:
         self._purge(entry.requests, now - RATE_WINDOW_SECONDS)
         self._purge(entry.failures, now - LOCKOUT_SECONDS)
         while len(self._entries) > MAX_TRACKED_IPS:
-            self._entries.popitem(last=False)
+            if not self._evict_lru_unlocked(keep=ip, now=now):
+                break
         return entry
+
+    def _evict_lru_unlocked(self, *, keep: str, now: float) -> bool:
+        """Evict the least recently seen entry that is NOT locked out.
+
+        Locked-out entries are exempt from LRU eviction — otherwise an
+        attacker could reset their own lockout by flooding the table
+        with fresh source addresses until their entry falls out. Memory
+        stays bounded regardless: a lockout costs 10 failed requests and
+        the global backstop admits at most 300 requests per minute, so
+        no more than ~30 lockouts per minute can exist, each expiring
+        after 15 minutes (~450 protected entries on top of the cap,
+        worst case). Returns False when everything left is locked out.
+        """
+        for key, candidate in self._entries.items():
+            if key == keep:
+                continue
+            self._purge(candidate.failures, now - LOCKOUT_SECONDS)
+            if len(candidate.failures) < FAILED_TOKEN_ATTEMPTS_BEFORE_LOCKOUT:
+                del self._entries[key]
+                return True
+        return False
 
     @staticmethod
     def _purge(timestamps: deque[float], cutoff: float) -> None:
