@@ -20,6 +20,9 @@ from app.filtering import filter_events
 from app.models import LOCAL_TZ, StoredEvent
 from app.power import router as power_router
 from app.settings import get_evening_boundary
+from app.slideshow import admin_router as slideshow_admin_router
+from app.slideshow import periodic_photo_scan
+from app.slideshow import router as slideshow_router
 from app.storage import get_storage
 from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
 from app.tags import router as tags_router
@@ -173,18 +176,32 @@ def _sync_interval_seconds() -> float:
         return DEFAULT_SYNC_INTERVAL_SECONDS
 
 
+def _photo_scan_enabled() -> bool:
+    """Whether the periodic photo scan runs (disabled for tests/local dev).
+
+    Off by default unless SLIDESHOW_SCAN=1, so the test/E2E servers and a
+    local dev machine without a real /media share never kick off a scan.
+    """
+    return os.environ.get("SLIDESHOW_SCAN") == "1"
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Run the periodic sync as a background task while the app is up."""
+    """Run the periodic sync and photo scan as background tasks while up."""
     interval = _sync_interval_seconds()
-    task: asyncio.Task | None = None
+    tasks: list[asyncio.Task] = []
     if interval > 0:
-        task = asyncio.create_task(sync_module.periodic_sync(get_storage(), interval))
+        tasks.append(
+            asyncio.create_task(sync_module.periodic_sync(get_storage(), interval))
+        )
+    if _photo_scan_enabled():
+        tasks.append(asyncio.create_task(periodic_photo_scan()))
     try:
         yield
     finally:
-        if task is not None:
+        for task in tasks:
             task.cancel()
+        for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
 
@@ -193,6 +210,8 @@ app = FastAPI(title="Familienkalender", docs_url=None, redoc_url=None, lifespan=
 app.include_router(admin_router)
 app.include_router(tags_router)
 app.include_router(power_router)
+app.include_router(slideshow_router)
+app.include_router(slideshow_admin_router)
 # Innermost (added first): runs after allowlist and ingress handling.
 app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(IngressPathMiddleware)

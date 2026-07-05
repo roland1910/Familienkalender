@@ -22,8 +22,12 @@ ports_description:
   8100/tcp: "Kalender-Abo (ICS-Feed, HTTPS, Token-geschützt) — extern freigebbar"
 # Read-only access to the HA SSL directory: the feed listener serves the
 # Let's Encrypt certificate (fullchain.pem/privkey.pem) directly.
+# Read-only access to /media: the photo slideshow reads image files from
+# the CIFS network share mounted there (see app/slideshow.py). Read-only —
+# the add-on never writes to the share.
 map:
   - ssl:ro
+  - media:ro
 # Certificate file paths for the feed listener (paths, not secrets).
 options:
   ssl_certfile: /ssl/fullchain.pem

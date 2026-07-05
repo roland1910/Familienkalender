@@ -13,7 +13,7 @@ column decides how to decode.
 import json
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from functools import cache
@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS day_tags (
     position INTEGER NOT NULL,
     emoji TEXT NOT NULL,
     PRIMARY KEY (date, position)
+);
+CREATE TABLE IF NOT EXISTS photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL UNIQUE,
+    mtime REAL NOT NULL,
+    shown INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -408,6 +414,85 @@ class Storage:
         for row in rows:
             result.setdefault(row["date"], []).append(row["emoji"])
         return result
+
+    # -- photos (slideshow) ----------------------------------------------
+
+    def replace_photos(self, photos: list[tuple[str, float]]) -> int:
+        """Replace the photo index with the given (path, mtime) pairs.
+
+        Called after a filesystem scan. Rebuilds the table wholesale in a
+        single transaction: paths that vanished disappear, new ones are
+        added, and the ``shown`` rotation state is reset for everyone (a
+        fresh scan starts a fresh rotation cycle). Returns the number of
+        rows stored. Duplicate paths in the input are collapsed by the
+        UNIQUE constraint via INSERT OR IGNORE.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM photos")
+            conn.executemany(
+                "INSERT OR IGNORE INTO photos (path, mtime, shown) VALUES (?, ?, 0)",
+                photos,
+            )
+            row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()
+        return int(row["n"])
+
+    def count_photos(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()
+        return int(row["n"])
+
+    def get_photo_path(self, photo_id: int) -> str | None:
+        """The stored filesystem path for a photo id, or None if unknown."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT path FROM photos WHERE id = ?", (photo_id,)
+            ).fetchone()
+        return row["path"] if row else None
+
+    def delete_photo(self, photo_id: int) -> None:
+        """Drop a single photo from the index (e.g. its file vanished)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+
+    def pick_next_photo(self, rng_random: Callable[[], float] | None = None) -> dict | None:
+        """Pick a random not-yet-shown photo, mark it shown, return it.
+
+        Rotation with memory: only photos with ``shown = 0`` are eligible.
+        When none are left the whole index is reset to ``shown = 0`` and a
+        pick is retried once — one full pass through all photos before any
+        repeats, surviving restarts because the state lives in the DB.
+
+        ``rng_random`` is an injectable ``random.random``-style callable
+        (returns a float in [0, 1)) so tests get deterministic ordering;
+        production passes ``None`` and SQLite's own ``RANDOM()`` is used.
+        Returns ``{"id", "name"}`` (name = basename for display) or None
+        when the index is empty.
+        """
+        with self._connect() as conn:
+            row = self._pick_unshown(conn, rng_random)
+            if row is None:
+                conn.execute("UPDATE photos SET shown = 0")
+                row = self._pick_unshown(conn, rng_random)
+            if row is None:
+                return None
+            conn.execute("UPDATE photos SET shown = 1 WHERE id = ?", (row["id"],))
+            return {"id": row["id"], "name": Path(row["path"]).name}
+
+    @staticmethod
+    def _pick_unshown(
+        conn: sqlite3.Connection, rng_random: Callable[[], float] | None
+    ) -> sqlite3.Row | None:
+        """One random unshown photo row, or None if all are shown."""
+        if rng_random is None:
+            return conn.execute(
+                "SELECT id, path FROM photos WHERE shown = 0 ORDER BY RANDOM() LIMIT 1"
+            ).fetchone()
+        rows = conn.execute(
+            "SELECT id, path FROM photos WHERE shown = 0 ORDER BY id"
+        ).fetchall()
+        if not rows:
+            return None
+        return rows[int(rng_random() * len(rows)) % len(rows)]
 
     # -- events ----------------------------------------------------------
 

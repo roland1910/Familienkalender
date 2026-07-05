@@ -28,7 +28,6 @@ profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   deny /config/{,**} rwklx,
   deny /backup/{,**} rwklx,
   deny /share/{,**} rwklx,
-  deny /media/{,**} rwklx,
   deny mount,
   deny umount,
   deny ptrace,
@@ -97,4 +96,13 @@ profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   deny /ssl/{,**} wklx,
   /ssl/ r,
   /ssl/** r,
+
+  # HA media share for the photo slideshow: strictly read-only. The broad
+  # `file,` above would grant write/exec too, so writes, locks and
+  # execution are denied explicitly — the mount is ro (map: media:ro) as
+  # well, this is defense in depth. Reading (r) is all the slideshow needs
+  # to scan directories and stream image files.
+  deny /media/{,**} wklx,
+  /media/ r,
+  /media/** r,
 }
