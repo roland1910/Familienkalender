@@ -18,6 +18,7 @@ and run.sh stages fresh copies and restarts it.
 """
 
 import asyncio
+import logging
 import os
 import shutil
 import subprocess
@@ -36,6 +37,7 @@ from app.serve import (
     FEED_PORT,
     MAIN_PORT,
     FeedListener,
+    QuietSignalServer,
     SSLPaths,
     build_feed_config,
     build_main_config,
@@ -307,6 +309,35 @@ async def test_run_returns_once_source_certificates_appear(
         sources.keyfile.write_text("key")
         await asyncio.wait_for(asyncio.shield(task), timeout=15)
         assert task.exception() is None
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+async def test_listener_crash_is_logged_immediately(
+    feed_storage: Storage,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A crashing feed server must surface in the add-on log right away —
+    # not only when the next (hourly) certificate check reaps the task.
+    paths = SSLPaths(tmp_path / "fullchain.pem", tmp_path / "privkey.pem")
+    paths.certfile.write_text("cert")
+    paths.keyfile.write_text("key")
+
+    async def boom(self) -> None:
+        raise RuntimeError("kaputt")
+
+    # No real TLS: the server task crashes before uvicorn would load
+    # the (dummy) certificate files.
+    monkeypatch.setattr(QuietSignalServer, "serve", boom)
+    caplog.set_level(logging.ERROR, logger="app.serve")
+    listener = FeedListener(paths, host="127.0.0.1", port=0, check_interval=1000)
+    task = asyncio.create_task(listener.run())
+    try:
+        await _wait_for(lambda: "kaputt" in caplog.text, timeout=5)
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):

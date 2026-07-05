@@ -193,6 +193,20 @@ class QuietSignalServer(uvicorn.Server):
         yield
 
 
+def _log_server_crash(task: asyncio.Task) -> None:
+    """Done callback for the feed server task: log a crash immediately.
+
+    Orderly endings (cancellation, clean shutdown) stay quiet; retrieving
+    the exception here also silences asyncio's "exception was never
+    retrieved" noise for tasks that die between certificate checks.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Feed listener terminated unexpectedly: %r", exc)
+
+
 class FeedListener:
     """Owns the TLS feed server and watches the certificate sources.
 
@@ -292,12 +306,10 @@ class FeedListener:
         return False
 
     def _reap_crashed_server(self) -> None:
-        """Log and clear a server task that ended on its own (crash)."""
+        """Clear a server task that ended on its own; the crash itself
+        was already logged immediately by the task's done callback."""
         if self._task is None or not self._task.done():
             return
-        exc = None if self._task.cancelled() else self._task.exception()
-        if exc is not None:
-            logger.error("Feed listener terminated unexpectedly: %s", exc)
         self._task = None
         self._server = None
 
@@ -305,6 +317,10 @@ class FeedListener:
         config = build_feed_config(self._paths, host=self._host, port=self._port)
         self._server = QuietSignalServer(config)
         self._task = asyncio.create_task(self._server.serve())
+        # Surface a crash in the log the moment it happens — the periodic
+        # certificate check would notice the dead task only up to an hour
+        # later, leaving the feed silently down in between.
+        self._task.add_done_callback(_log_server_crash)
         logger.info(
             "Feed listener starting on port %d (TLS, certificate %s).",
             self._port,
@@ -320,7 +336,7 @@ class FeedListener:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Feed listener shut down with an error")
+                pass  # already logged by the task's done callback
         self._task = None
         self._server = None
 
