@@ -103,3 +103,13 @@ class TestFeedRoute:
         new = rotate_feed_token(storage)
         assert client.get(f"/feed/{old}.ics").status_code == 404
         assert client.get(f"/feed/{new}.ics").status_code == 200
+
+    def test_non_ascii_token_is_404_not_500(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # secrets.compare_digest raises TypeError on non-ASCII str input;
+        # the route must reject it with 404 (like any other wrong token)
+        # instead of letting that turn into an unhandled 500.
+        ensure_feed_token(storage)
+        response = client.get("/feed/ä.ics")
+        assert response.status_code == 404

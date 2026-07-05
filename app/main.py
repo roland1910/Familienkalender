@@ -320,9 +320,12 @@ async def feed(token: str) -> Response:
     ClientIPAllowlistMiddleware); it is generated for the admin UI and
     compared in constant time. Missing token setup or a wrong token both
     answer 404 so probing reveals nothing about the feed's existence.
+    Non-ASCII input is rejected before that comparison: secrets.compare_digest
+    only accepts ASCII str and raises TypeError otherwise, which would
+    otherwise surface as an unhandled 500 to arbitrary LAN clients.
     """
     stored = get_feed_token(get_storage())
-    if not stored or not secrets.compare_digest(token, stored):
+    if not stored or not token.isascii() or not secrets.compare_digest(token, stored):
         raise HTTPException(status_code=404, detail="Nicht gefunden.")
     return Response(
         content=build_feed(get_storage()),
