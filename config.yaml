@@ -10,14 +10,27 @@ startup: application
 boot: auto
 ingress: true
 ingress_port: 8099
-# Direkter LAN-Zugriff am Ingress vorbei — ausschließlich für das
-# Kalender-Abo (GET /feed/<token>.ics, Token ist dort die einzige Auth).
-# Alle anderen Pfade bleiben für fremde IPs gesperrt (IP-Allowlist in
-# app/main.py). Host-Port 8098 mappt auf denselben Container-Port 8099.
+# Direkter Zugriff am Ingress vorbei — ausschließlich für das Kalender-Abo
+# (GET /feed/<token>.ics, Token ist dort die einzige Auth). Der Feed läuft
+# als eigener TLS-Listener (app/serve.py -> app/feed_app.py) auf
+# Container-Port 8100: auf diesem Port ist nichts anderes gebunden. Der
+# Router darf extern 8098 auf den Host-Port 8098 weiterleiten
+# (https://rnd.ignorelist.com:8098/...).
 ports:
-  8099/tcp: 8098
+  8100/tcp: 8098
 ports_description:
-  8099/tcp: "Kalender-Abo (ICS-Feed, Token-geschützt) im Heimnetz"
+  8100/tcp: "Kalender-Abo (ICS-Feed, HTTPS, Token-geschützt) — extern freigebbar"
+# Read-only access to the HA SSL directory: the feed listener serves the
+# Let's Encrypt certificate (fullchain.pem/privkey.pem) directly.
+map:
+  - ssl:ro
+# Certificate file paths for the feed listener (paths, not secrets).
+options:
+  ssl_certfile: /ssl/fullchain.pem
+  ssl_keyfile: /ssl/privkey.pem
+schema:
+  ssl_certfile: str
+  ssl_keyfile: str
 # Needed for the power view: /api/power reads sensor states from the HA Core
 # API (http://supervisor/core/api with the SUPERVISOR_TOKEN). Was removed in
 # the stage-1 security review while nothing used it — the need is here now.

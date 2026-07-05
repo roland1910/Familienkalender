@@ -13,9 +13,10 @@
 # chain on the device in ways that are hard to debug without host dmesg
 # access, so we use the template's broad `file,` grant instead. The
 # effective confinement comes from the explicit deny rules (deny beats
-# allow in AppArmor): no access to other add-ons, HA config, SSL certs,
-# backups or shares, no mounts, no ptrace. Capabilities and network are
-# still enumerated narrowly.
+# allow in AppArmor): no access to other add-ons, HA config, backups or
+# shares, no writes to the SSL certs (read-only for the TLS feed
+# listener), no mounts, no ptrace. Capabilities and network are still
+# enumerated narrowly.
 
 #include <tunables/global>
 
@@ -25,7 +26,6 @@ profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   # Explicit denials: these hold even against the broad `file,` below.
   deny /addons/{,**} rwklx,
   deny /config/{,**} rwklx,
-  deny /ssl/{,**} rwklx,
   deny /backup/{,**} rwklx,
   deny /share/{,**} rwklx,
   deny /media/{,**} rwklx,
@@ -89,4 +89,12 @@ profile familienkalender flags=(attach_disconnected,mediate_deleted) {
   # its journal/WAL siblings; token files live here too.
   /data/ rw,
   /data/** rwk,
+
+  # HA certificates for the TLS feed listener: strictly read-only. The
+  # broad `file,` above would also grant write, so writes (and lock/exec)
+  # are denied explicitly — the mount is ro (map: ssl:ro) as well, this
+  # is defense in depth.
+  deny /ssl/{,**} wklx,
+  /ssl/ r,
+  /ssl/** r,
 }
