@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 import shutil
+import ssl
 import subprocess
 import time
 from contextlib import suppress
@@ -203,6 +204,24 @@ class TestConfigs:
         paths = SSLPaths(tmp_path / "c.pem", tmp_path / "k.pem")
         config = build_feed_config(paths)
         assert config.limit_concurrency == serve_module.FEED_LIMIT_CONCURRENCY == 32
+
+    def test_feed_config_hardens_tls(self, tmp_path: Path) -> None:
+        paths = SSLPaths(tmp_path / "c.pem", tmp_path / "k.pem")
+        config = build_feed_config(paths)
+        # TLS-1.2 handshakes are restricted to forward-secret AEAD suites;
+        # TLS-1.3 suites are managed separately by OpenSSL and stay on.
+        assert config.ssl_ciphers == "ECDHE+AESGCM:ECDHE+CHACHA20"
+        # The factory (uvicorn 0.49 hook) raises the minimum TLS version —
+        # there is no plain Config field for that.
+        assert config.ssl_context_factory is serve_module.hardened_ssl_context
+
+
+class TestHardenedSSLContext:
+    def test_factory_raises_the_minimum_tls_version(self) -> None:
+        base = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context = serve_module.hardened_ssl_context(None, lambda: base)
+        assert context is base
+        assert context.minimum_version == ssl.TLSVersion.TLSv1_2
 
 
 # -- live listener tests -----------------------------------------------------

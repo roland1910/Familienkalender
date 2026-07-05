@@ -45,8 +45,9 @@ import contextlib
 import logging
 import os
 import signal
+import ssl
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,6 +84,30 @@ CERT_CHECK_INTERVAL_SECONDS = 3600
 # descriptors; the handful of legitimate calendar subscribers never get
 # anywhere near 32 concurrent connections.
 FEED_LIMIT_CONCURRENCY = 32
+
+# TLS hardening for the internet-facing feed listener: no TLS 1.0/1.1
+# handshakes, and TLS 1.2 restricted to forward-secret AEAD suites
+# (ECDHE key exchange + AES-GCM/ChaCha20). TLS 1.3 cipher suites are
+# configured separately by OpenSSL (set_ciphersuites) and stay at their
+# already-safe defaults, so 1.3 clients are unaffected.
+FEED_SSL_MINIMUM_TLS = ssl.TLSVersion.TLSv1_2
+FEED_SSL_CIPHERS = "ECDHE+AESGCM:ECDHE+CHACHA20"
+
+
+def hardened_ssl_context(
+    _config: "uvicorn.Config | None",  # signature dictated by the hook
+    default_factory: Callable[[], ssl.SSLContext],
+) -> ssl.SSLContext:
+    """ssl_context_factory hook for uvicorn.
+
+    uvicorn 0.49 has no plain Config field for the minimum TLS version;
+    this factory is the clean way in: the default factory builds the
+    context from the config's ssl_* fields (certificates, ciphers), then
+    the minimum protocol version is raised on top.
+    """
+    context = default_factory()
+    context.minimum_version = FEED_SSL_MINIMUM_TLS
+    return context
 
 
 @dataclass(frozen=True)
@@ -186,6 +211,9 @@ def build_feed_config(
         proxy_headers=False,
         # Slowloris guard, see FEED_LIMIT_CONCURRENCY.
         limit_concurrency=FEED_LIMIT_CONCURRENCY,
+        # TLS hardening, see FEED_SSL_CIPHERS / hardened_ssl_context.
+        ssl_ciphers=FEED_SSL_CIPHERS,
+        ssl_context_factory=hardened_ssl_context,
     )
 
 
