@@ -83,6 +83,11 @@ def _marina_events(today: date) -> list[CalendarEvent]:
                time(15, 30), time(18)),
         _all_day("demo-marina-besuch", "Oma & Opa zu Besuch", today + timedelta(days=5), 3),
         _all_day("demo-marina-geburtstag", "Geburtstag Tante Käthe", next_month_first, 1),
+        # Early-morning event in a week of its own (offset >= 7 guarantees a
+        # different week than today's): the week view's collapsed night hours
+        # must expand to 06:00 for it (E2E test_week_view.py).
+        _timed("demo-marina-fruehdienst", "Frühdienst", today + timedelta(days=21),
+               time(6, 30), time(7, 30)),
         # Hostile titles: stored as-is, the frontend must render them as text.
         _timed("demo-marina-xss-img", '<img src=x onerror=alert("xss")> Böser Termin',
                today + timedelta(days=1), time(10), time(11)),

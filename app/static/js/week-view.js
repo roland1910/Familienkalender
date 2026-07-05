@@ -1,6 +1,9 @@
 // Week view: 7 columns Mon-Sun. Full-day and multi-day events appear as
 // bars in a lane-stacked section on top; timed single-day events are
-// positioned on a scrollable 24h grid (06:00-22:00 initially visible).
+// positioned on a scrollable time grid. Empty night hours are collapsed:
+// the grid starts at 08:00, or at the full hour of the week's earliest
+// timed event if that is earlier (see gridStartHour). The evening
+// (until 24:00) is always shown.
 
 import { colorForEvent } from "./colors.js";
 import {
@@ -16,7 +19,7 @@ import { groupEventsByDay, spansFullDays } from "./events.js";
 import { openDayPopover } from "./popover.js";
 
 export const HOUR_HEIGHT_PX = 60;
-const SCROLL_TO_HOUR = 6;
+const DEFAULT_GRID_START_HOUR = 8;
 const MIN_EVENT_HEIGHT_PX = 24;
 // Rendering caps: foreign calendars can deliver arbitrarily many events, so
 // the DOM size per view stays bounded. Overflow goes to the day popover.
@@ -144,7 +147,21 @@ function minutesIntoDay(moment, day) {
   return moment.getHours() * 60 + moment.getMinutes();
 }
 
-function buildDayColumn(day, dayEvents, today, allEvents) {
+// First hour of the time grid: DEFAULT_GRID_START_HOUR with the empty
+// night collapsed, or the full hour of the week's earliest timed event if
+// one starts earlier. Only events on the grid count — all-day/multi-day
+// events (spansFullDays) live in the bar section above it.
+export function gridStartHour(events, start) {
+  const end = addDays(start, 6);
+  let startHour = DEFAULT_GRID_START_HOUR;
+  for (const event of events) {
+    if (spansFullDays(event) || event.startDay < start || event.startDay > end) continue;
+    startHour = Math.min(startHour, event.start.getHours());
+  }
+  return startHour;
+}
+
+function buildDayColumn(day, dayEvents, today, allEvents, startHour) {
   const column = el("div", "week-day-column");
   column.dataset.date = toISODate(day);
   if (isSameDay(day, today)) column.classList.add("today");
@@ -164,7 +181,7 @@ function buildDayColumn(day, dayEvents, today, allEvents) {
     );
     const node = el("div", "timed-event");
     node.style.setProperty("--source-color", colorForEvent(item.event));
-    node.style.top = `${(startMinutes / 60) * HOUR_HEIGHT_PX}px`;
+    node.style.top = `${((startMinutes - startHour * 60) / 60) * HOUR_HEIGHT_PX}px`;
     node.style.height = `${((endMinutes - startMinutes) / 60) * HOUR_HEIGHT_PX}px`;
     const width = 100 / item.laneCount;
     node.style.left = `${item.lane * width}%`;
@@ -210,22 +227,23 @@ export function renderWeekView(container, anchor, events, today, tags = {}) {
   view.append(buildHeader(start, today, events, tags));
   view.append(buildAllDaySection(events, start));
 
+  const startHour = gridStartHour(events, start);
   const scroll = el("div", "week-scroll");
   const grid = el("div", "week-grid");
-  grid.style.height = `${24 * HOUR_HEIGHT_PX}px`;
+  grid.style.height = `${(24 - startHour) * HOUR_HEIGHT_PX}px`;
 
   const gutter = el("div", "week-gutter");
-  for (let hour = 0; hour < 24; hour += 1) {
+  for (let hour = startHour; hour < 24; hour += 1) {
     const label = el("div", "hour-label", `${String(hour).padStart(2, "0")}:00`);
-    label.style.top = `${hour * HOUR_HEIGHT_PX}px`;
+    label.style.top = `${(hour - startHour) * HOUR_HEIGHT_PX}px`;
     gutter.append(label);
   }
   grid.append(gutter);
 
   const lines = el("div", "hour-lines");
-  for (let hour = 1; hour < 24; hour += 1) {
+  for (let hour = startHour + 1; hour < 24; hour += 1) {
     const line = el("div", "hour-line");
-    line.style.top = `${hour * HOUR_HEIGHT_PX}px`;
+    line.style.top = `${(hour - startHour) * HOUR_HEIGHT_PX}px`;
     lines.append(line);
   }
   grid.append(lines);
@@ -235,10 +253,9 @@ export function renderWeekView(container, anchor, events, today, tags = {}) {
     const dayEvents = events.filter(
       (event) => !spansFullDays(event) && event.startDay <= day && event.endDayInclusive >= day,
     );
-    grid.append(buildDayColumn(day, dayEvents, today, events));
+    grid.append(buildDayColumn(day, dayEvents, today, events, startHour));
   }
   scroll.append(grid);
   view.append(scroll);
   container.replaceChildren(view);
-  scroll.scrollTop = SCROLL_TO_HOUR * HOUR_HEIGHT_PX;
 }

@@ -20,16 +20,44 @@ def test_week_view_shows_seven_columns_and_time_grid(page: Page, server_url: str
     labels = page.locator(".week-day-label")
     expect(labels).to_have_count(7)
     expect(labels.first).to_contain_text("Mo")
-    expect(page.locator(".hour-label", has_text="06:00")).to_be_attached()
+    expect(page.locator(".hour-label", has_text="08:00")).to_be_attached()
     expect(page.locator("#period-title")).to_contain_text("KW")
 
 
-def test_time_grid_is_scrolled_to_morning(page: Page, server_url: str) -> None:
+def test_night_hours_are_collapsed_without_early_events(
+    page: Page, server_url: str
+) -> None:
+    """No demo event in the current week starts before 08:00, so the grid
+    hides 00:00-08:00 entirely and starts at 08:00 (replaces the old,
+    flaky initial-scroll-to-morning mechanism)."""
     goto_calendar(page, server_url)
     page.locator("#btn-week").click()
     expect(page.locator(".week-view")).to_be_visible()
-    scroll_top = page.locator(".week-scroll").evaluate("node => node.scrollTop")
-    assert scroll_top == 6 * HOUR_HEIGHT_PX
+    labels = page.locator(".hour-label")
+    expect(labels.first).to_have_text("08:00")
+    expect(page.locator(".hour-label", has_text="07:00")).to_have_count(0)
+    expect(labels).to_have_count(24 - 8)  # 08:00 .. 23:00, evening kept
+    grid_height = page.locator(".week-grid").evaluate(
+        "node => parseFloat(node.style.height)"
+    )
+    assert grid_height == (24 - 8) * HOUR_HEIGHT_PX
+
+
+def test_early_event_expands_the_grid_to_its_full_hour(
+    page: Page, server_url: str
+) -> None:
+    """The demo week three weeks ahead has a 06:30 event: the grid starts
+    at 06:00 (full hour of the earliest event) and positions it there."""
+    target = date.today() + timedelta(days=21)
+    goto_week_containing(page, server_url, target)
+    labels = page.locator(".hour-label")
+    expect(labels.first).to_have_text("06:00")
+    expect(page.locator(".hour-label", has_text="05:00")).to_have_count(0)
+    column = page.locator(f'.week-day-column[data-date="{target.isoformat()}"]')
+    event = column.locator(".timed-event", has_text="Frühdienst")
+    expect(event).to_be_visible()
+    top = event.evaluate("node => parseFloat(node.style.top)")
+    assert top == 0.5 * HOUR_HEIGHT_PX  # 06:30 in a grid starting at 06:00
 
 
 def test_timed_event_is_positioned_by_time(page: Page, server_url: str) -> None:
@@ -40,7 +68,7 @@ def test_timed_event_is_positioned_by_time(page: Page, server_url: str) -> None:
     expect(event).to_be_visible()
     top = event.evaluate("node => parseFloat(node.style.top)")
     height = event.evaluate("node => parseFloat(node.style.height)")
-    assert top == 15 * HOUR_HEIGHT_PX  # starts 15:00
+    assert top == (15 - 8) * HOUR_HEIGHT_PX  # starts 15:00, grid starts 08:00
     assert height == HOUR_HEIGHT_PX  # one hour long
 
 
