@@ -196,6 +196,14 @@ class TestConfigs:
         # must never override the peer IP the rate limiter keys on.
         assert config.proxy_headers is False
 
+    def test_feed_config_caps_concurrent_connections(self, tmp_path: Path) -> None:
+        # Slowloris guard: half-open connections held before the first
+        # request would never time out in uvicorn; a hard concurrency cap
+        # (503 beyond it) keeps them from starving the Pi.
+        paths = SSLPaths(tmp_path / "c.pem", tmp_path / "k.pem")
+        config = build_feed_config(paths)
+        assert config.limit_concurrency == serve_module.FEED_LIMIT_CONCURRENCY == 32
+
 
 # -- live listener tests -----------------------------------------------------
 

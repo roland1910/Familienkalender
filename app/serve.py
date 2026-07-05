@@ -76,6 +76,14 @@ CERT_RELOAD_EXIT_CODE = 86
 # certificate becoming active up to an hour late is harmless.
 CERT_CHECK_INTERVAL_SECONDS = 3600
 
+# Slowloris guard for the internet-facing feed listener: uvicorn never
+# times out half-open connections that have not sent their first request,
+# so an attacker could hold sockets open indefinitely. The cap makes
+# uvicorn answer 503 beyond it, protecting the Pi's memory and file
+# descriptors; the handful of legitimate calendar subscribers never get
+# anywhere near 32 concurrent connections.
+FEED_LIMIT_CONCURRENCY = 32
+
 
 @dataclass(frozen=True)
 class SSLPaths:
@@ -176,6 +184,8 @@ def build_feed_config(
         # Clients connect directly (router port forward) — X-Forwarded-For
         # must never override the peer IP the rate limiter keys on.
         proxy_headers=False,
+        # Slowloris guard, see FEED_LIMIT_CONCURRENCY.
+        limit_concurrency=FEED_LIMIT_CONCURRENCY,
     )
 
 
