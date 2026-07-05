@@ -17,6 +17,7 @@ import { monthGridRange, renderMonthView } from "./month-view.js";
 import { closeDayPopover, initPopover } from "./popover.js";
 import { startPowerView, stopPowerView } from "./power-view.js";
 import { state } from "./state.js";
+import { loadViewState, saveViewState } from "./view-memory.js";
 import { renderWeekView, weekRange } from "./week-view.js";
 
 const REFRESH_INTERVAL_MS = 60000;
@@ -124,17 +125,27 @@ async function refresh() {
   render();
 }
 
+// Persist the current UI position (per device via localStorage) so a
+// reload — kiosk restart, browser revisit — returns to the same place.
+function persistViewState() {
+  saveViewState({ view: state.view, anchor: state.anchor, mode: state.mode });
+}
+
 function navigate(step) {
   closeDayPopover();
   state.anchor =
     state.view === "month" ? addMonths(state.anchor, step) : addDays(state.anchor, step * 7);
+  persistViewState();
   render();
   refresh();
 }
 
 function goToToday() {
   closeDayPopover();
+  // Also resets the saved anchor, so a later reload stays on today
+  // instead of jumping back to a previously paged period.
   state.anchor = today();
+  persistViewState();
   render();
   refresh();
 }
@@ -143,6 +154,7 @@ function switchView(view) {
   if (state.view === view) return;
   closeDayPopover();
   state.view = view;
+  persistViewState();
   render();
   refresh();
 }
@@ -151,6 +163,7 @@ function switchMode(mode) {
   if (state.mode === mode) return;
   closeDayPopover();
   state.mode = mode;
+  persistViewState();
   const isPower = mode === "power";
   // The body class hides the calendar-only toolbar controls via CSS.
   document.body.classList.toggle("mode-power", isPower);
@@ -179,9 +192,22 @@ async function applyAdminVisibility() {
   }
 }
 
+// Restore the persisted UI position before the first render. The mode is
+// deliberately included: the kiosk may live on the power view for hours,
+// and a reload (watchdog, HA restart) should bring it back there instead
+// of silently falling back to the calendar.
+function restoreViewState() {
+  const saved = loadViewState();
+  if (!saved) return; // missing or invalid -> keep the defaults
+  state.view = saved.view;
+  state.anchor = saved.anchor;
+  if (saved.mode === "power") switchMode("power");
+}
+
 function init() {
   initPopover({ onTagsChanged: render });
   applyAdminVisibility();
+  restoreViewState();
   document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
   document.getElementById("btn-next").addEventListener("click", () => navigate(1));
   document.getElementById("btn-today").addEventListener("click", goToToday);
