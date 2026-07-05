@@ -1,6 +1,7 @@
 """Tests for the SQLite storage layer (sources and events)."""
 
 import os
+import sqlite3
 import stat
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -136,6 +137,77 @@ class TestSources:
         storage.update_sync_status(source_id, synced_at=NOW, error="HTTP 500")
         source = storage.list_sources()[0]
         assert source.last_sync_error == "HTTP 500"
+
+
+class TestShortcode:
+    """The per-source shortcode used as a title prefix in the ICS feed."""
+
+    def test_shortcode_defaults_to_empty(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_source(type="google", name="Marina", config={})
+        assert storage.list_sources()[0].shortcode == ""
+
+    def test_shortcode_roundtrip_via_add_and_update(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, shortcode="RMV"
+        )
+        assert storage.get_source(source_id).shortcode == "RMV"
+        assert storage.update_source(source_id, shortcode="RX") is True
+        assert storage.get_source(source_id).shortcode == "RX"
+
+    def test_shortcode_can_be_cleared(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, shortcode="RMV"
+        )
+        storage.update_source(source_id, shortcode="")
+        assert storage.get_source(source_id).shortcode == ""
+
+    @pytest.mark.parametrize("bad", ["TOOLONG", "rx", "R X", "R<b>", "ÄÖ", "R-1"])
+    def test_invalid_shortcodes_are_rejected(self, tmp_path: Path, bad: str) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        with pytest.raises(ValueError):
+            storage.update_source(source_id, shortcode=bad)
+        with pytest.raises(ValueError):
+            storage.add_source(type="caldav", name="X", config={}, shortcode=bad)
+
+    def test_update_without_shortcode_keeps_it(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, shortcode="RMV"
+        )
+        storage.update_source(source_id, name="Firma neu")
+        assert storage.get_source(source_id).shortcode == "RMV"
+
+    def test_existing_db_without_column_is_migrated(self, tmp_path: Path) -> None:
+        """A database from an older version gains the column (default empty)."""
+        db_path = tmp_path / "familienkalender.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                display_mode TEXT NOT NULL DEFAULT 'full',
+                last_sync_at TEXT,
+                last_sync_error TEXT
+            );
+            INSERT INTO sources (type, name) VALUES ('google', 'Marina');
+            """
+        )
+        conn.commit()
+        conn.close()
+        storage = Storage(db_path)
+        source = storage.list_sources()[0]
+        assert source.name == "Marina"
+        assert source.shortcode == ""
+        assert storage.update_source(source.id, shortcode="RX") is True
+        assert storage.get_source(source.id).shortcode == "RX"
 
 
 class TestSourceCrud:

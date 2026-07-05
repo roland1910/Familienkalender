@@ -388,6 +388,50 @@ class TestUpdateAndDeleteSource:
         assert source.display_mode == "filtered"
         assert source.enabled is False
 
+    def test_patch_shortcode_normalizes_and_stores(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(type="caldav", name="Firma", config=CALDAV_CONFIG)
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"shortcode": " rmv "}
+        )
+        assert response.status_code == 200
+        assert response.json()["source"]["shortcode"] == "RMV"
+        assert storage.get_source(source_id).shortcode == "RMV"
+
+    def test_patch_shortcode_can_be_cleared(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, shortcode="RMV"
+        )
+        response = client.patch(f"/api/admin/sources/{source_id}", json={"shortcode": ""})
+        assert response.status_code == 200
+        assert storage.get_source(source_id).shortcode == ""
+
+    @pytest.mark.parametrize("bad", ["TOOLONG", "R X", "R<b>#", "ÄÖ"])
+    def test_patch_invalid_shortcode_is_400_german(
+        self, client: TestClient, storage: Storage, bad: str
+    ) -> None:
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, shortcode="RMV"
+        )
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"shortcode": bad}
+        )
+        assert response.status_code == 400
+        assert "Kürzel" in response.json()["detail"]
+        assert storage.get_source(source_id).shortcode == "RMV"  # unchanged
+
+    def test_sources_list_includes_shortcode(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, shortcode="RMV"
+        )
+        response = client.get("/api/admin/sources")
+        assert response.json()["sources"][0]["shortcode"] == "RMV"
+
     def test_patch_config_keeps_stored_password_when_masked(
         self, client: TestClient, storage: Storage
     ) -> None:

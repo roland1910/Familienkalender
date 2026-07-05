@@ -22,7 +22,13 @@ from pydantic import BaseModel, Field
 
 from app import google_oauth, power, settings
 from app.auth import require_admin
-from app.models import DISPLAY_MODES, SOURCE_TYPES, Source
+from app.models import (
+    DISPLAY_MODES,
+    SHORTCODE_MAX_LENGTH,
+    SOURCE_TYPES,
+    Source,
+    is_valid_shortcode,
+)
 from app.sanitize import sanitize_error
 from app.settings import get_evening_boundary
 from app.sources import caldav, google
@@ -91,6 +97,8 @@ class SourceUpdate(BaseModel):
     display_mode: str | None = None
     enabled: bool | None = None
     config: dict | None = None
+    # Title prefix for the ICS feed; "" clears it, None leaves it untouched.
+    shortcode: str | None = None
 
 
 class CaldavProbe(BaseModel):
@@ -136,6 +144,18 @@ def _validated_name(name: str) -> str:
     return stripped
 
 
+def _validated_shortcode(raw: str) -> str:
+    """Normalized (trimmed, uppercased) shortcode, or 400 for invalid input."""
+    shortcode = raw.strip().upper()
+    if not is_valid_shortcode(shortcode):
+        raise HTTPException(
+            status_code=400,
+            detail="Ungültiges Kürzel — höchstens"
+            f" {SHORTCODE_MAX_LENGTH} Zeichen aus A-Z und 0-9.",
+        )
+    return shortcode
+
+
 def _filtered_config(source_type: str, config: dict) -> dict:
     """The config restricted to the whitelisted keys for this source type."""
     allowed = _CONFIG_KEYS_BY_TYPE[source_type]
@@ -158,6 +178,7 @@ def _serialize_source(source: Source, event_count: int) -> dict:
         "name": source.name,
         "enabled": source.enabled,
         "display_mode": source.display_mode,
+        "shortcode": source.shortcode,
         "config": _masked_config(source.config),
         "last_sync_at": source.last_sync_at.isoformat() if source.last_sync_at else None,
         "last_sync_error": source.last_sync_error,
@@ -385,6 +406,7 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
     if body.display_mode is not None:
         _validate_display_mode(body.display_mode)
     name = _validated_name(body.name) if body.name is not None else None
+    shortcode = _validated_shortcode(body.shortcode) if body.shortcode is not None else None
     config = None
     if body.config is not None:
         config = _filtered_config(existing.type, body.config)
@@ -407,6 +429,7 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
         config=config,
         enabled=body.enabled,
         display_mode=body.display_mode,
+        shortcode=shortcode,
     )
     updated = storage.get_source(source_id)
     counts = storage.count_events_by_source()

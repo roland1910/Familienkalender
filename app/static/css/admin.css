@@ -226,12 +226,25 @@ body {
   flex-wrap: wrap;
 }
 
-.mode-label {
+.mode-label,
+.shortcode-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 14px;
   color: var(--text-muted);
+}
+
+.shortcode-input {
+  width: 5.5em;
+  min-height: 40px;
+  padding: 4px 8px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-transform: uppercase;
 }
 
 .mode-select,

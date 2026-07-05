@@ -218,6 +218,48 @@ class TestSettings:
         expect(page.locator("#settings-message")).to_have_text("Gespeichert.")
 
 
+class TestShortcode:
+    def test_shortcode_roundtrip_in_the_source_row(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        field = page.locator(".source-item", has_text="Kunde").locator(
+            ".shortcode-input"
+        )
+        expect(field).to_have_value("")
+        field.fill("rx")
+        field.press("Enter")  # change event -> PATCH -> list re-render
+        # The server normalizes to uppercase; the re-rendered row shows it.
+        expect(
+            page.locator(".source-item", has_text="Kunde").locator(".shortcode-input")
+        ).to_have_value("RX")
+
+        page.reload()
+        kunde_field = page.locator(".source-item", has_text="Kunde").locator(
+            ".shortcode-input"
+        )
+        expect(kunde_field).to_have_value("RX")
+
+        # Reset so the demo data stays as other tests expect it.
+        kunde_field.fill("")
+        kunde_field.press("Enter")
+        page.reload()
+        expect(
+            page.locator(".source-item", has_text="Kunde").locator(".shortcode-input")
+        ).to_have_value("")
+
+    def test_invalid_shortcode_shows_german_error(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        field = page.locator(".source-item", has_text="Firma").locator(
+            ".shortcode-input"
+        )
+        field.fill("A B")
+        field.press("Enter")
+        expect(page.locator("#page-message")).to_contain_text("Ungültiges Kürzel")
+
+
 class TestManualSync:
     def test_sync_button_reports_failures_of_demo_sources(
         self, page: Page, server_url: str

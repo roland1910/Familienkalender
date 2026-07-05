@@ -1,5 +1,6 @@
 """Shared domain models for calendar sources and events."""
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Any
@@ -11,6 +12,16 @@ LOCAL_TZ = ZoneInfo("Europe/Berlin")
 
 SOURCE_TYPES = ("google", "caldav")
 DISPLAY_MODES = ("full", "filtered")
+
+# Optional per-source shortcode, used as a title prefix in the subscribable
+# ICS feed (e.g. "RX Kundentermin"). Empty means "no prefix".
+SHORTCODE_MAX_LENGTH = 6
+SHORTCODE_PATTERN = re.compile(rf"^[A-Z0-9]{{0,{SHORTCODE_MAX_LENGTH}}}$")
+
+
+def is_valid_shortcode(value: str) -> bool:
+    """Whether ``value`` is an acceptable source shortcode (may be empty)."""
+    return SHORTCODE_PATTERN.fullmatch(value) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +136,8 @@ class Source:
     display_mode: str
     last_sync_at: datetime | None
     last_sync_error: str | None
+    # Title prefix for the ICS feed; empty = no prefix (see is_valid_shortcode).
+    shortcode: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,3 +148,5 @@ class StoredEvent:
     source_name: str
     display_mode: str
     event: CalendarEvent
+    # Source shortcode (title prefix in the ICS feed); empty = none.
+    shortcode: str = ""

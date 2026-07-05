@@ -37,6 +37,25 @@ function modeSelect(source) {
   return select;
 }
 
+function shortcodeControl(source) {
+  // Title prefix for the ICS feed; saved on change (blur/Enter). The
+  // server normalizes (trim, uppercase) and validates (max 6, A-Z/0-9).
+  const label = el("label", "shortcode-label", "Kürzel: ");
+  const input = el("input", "shortcode-input");
+  input.type = "text";
+  input.maxLength = 6;
+  input.value = source.shortcode;
+  input.title = "Präfix vor Termintiteln im Kalender-Abo (max. 6 Zeichen, A–Z/0–9)";
+  input.addEventListener("change", () => {
+    withPageError(async () => {
+      await api.patchSource(source.id, { shortcode: input.value });
+      await refreshSources();
+    });
+  });
+  label.append(input);
+  return label;
+}
+
 function renameControl(source, container) {
   const button = el("button", "small-button", "Umbenennen");
   button.type = "button";
@@ -128,6 +147,7 @@ function renderSource(source) {
   modeLabel.append(modeSelect(source));
   controls.append(
     modeLabel,
+    shortcodeControl(source),
     toggleControl(source),
     renameControl(source, item),
     deleteControl(source),
