@@ -279,6 +279,12 @@ body {
 
 /* -- messages ------------------------------------------------------------ */
 
+.hint {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
 .message {
   margin: 8px 0 0;
   padding: 8px 12px;

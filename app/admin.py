@@ -17,7 +17,7 @@ import secrets
 from datetime import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app import google_oauth, power, settings
@@ -63,6 +63,10 @@ MAX_NAME_LENGTH = 200
 
 MAX_POWER_DEVICES = 30
 MAX_POWER_DEVICE_NAME_LENGTH = 100
+
+# Host port mapped to the container port in config.yaml (ports:). The feed
+# is the only thing reachable there — keep the two places in sync.
+FEED_HOST_PORT = 8098
 
 
 class SettingsUpdate(BaseModel):
@@ -297,6 +301,51 @@ async def update_power_devices(update: PowerDevicesUpdate) -> dict:
     # The next /api/power request must already reflect the new list.
     power.reset_cache()
     return _settings_payload()
+
+
+# -- feed subscription -------------------------------------------------------
+
+
+def _request_hostname(request: Request) -> str | None:
+    """Best-effort hostname of the HA instance as the browser sees it.
+
+    Behind ingress the browser talks to the HA frontend, so its host
+    (X-Forwarded-Host if the proxy set it, else Host) is the best guess
+    for where port 8098 is reachable too. This is a convenience for the
+    displayed URL only — the admin UI tells the user to fix the host if
+    it does not match.
+    """
+    raw = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not raw:
+        return None
+    raw = raw.split(",")[0].strip()
+    if raw.startswith("["):
+        # IPv6 literal: keep the brackets, drop a trailing :port.
+        return raw.split("]")[0] + "]"
+    return raw.split(":")[0] or None
+
+
+def _feed_payload(request: Request, token: str) -> dict:
+    path = f"/feed/{token}.ics"
+    hostname = _request_hostname(request)
+    return {
+        "feed": {
+            "path": path,
+            "url": f"http://{hostname}:{FEED_HOST_PORT}{path}" if hostname else None,
+        }
+    }
+
+
+@router.get("/feed")
+async def get_feed(request: Request) -> dict:
+    """Subscription URL for the ICS feed; generates the token on first call."""
+    return _feed_payload(request, settings.ensure_feed_token(get_storage()))
+
+
+@router.post("/feed/rotate")
+async def rotate_feed(request: Request) -> dict:
+    """Replace the feed token — every previously shared feed URL stops working."""
+    return _feed_payload(request, settings.rotate_feed_token(get_storage()))
 
 
 # -- sources ---------------------------------------------------------------

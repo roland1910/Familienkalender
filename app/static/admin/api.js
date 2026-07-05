@@ -76,6 +76,14 @@ export function deleteGooglePending(flowId) {
   return request("DELETE", `api/admin/google/pending/${encodeURIComponent(flowId)}`);
 }
 
+export function getFeed() {
+  return request("GET", "api/admin/feed");
+}
+
+export function rotateFeed() {
+  return request("POST", "api/admin/feed/rotate");
+}
+
 export function triggerSync() {
   return request("POST", "api/sync");
 }

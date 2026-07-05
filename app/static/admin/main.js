@@ -4,6 +4,7 @@
 
 import * as api from "./api.js";
 import { byId, showMessage, withPageError } from "./dom.js";
+import { initFeed, loadFeed } from "./feed.js";
 import { initGoogleWizard, resetGoogleWizard } from "./google-wizard.js";
 import { initNextcloudWizard, resetNextcloudWizard } from "./nextcloud-wizard.js";
 import { initSettings, loadSettings } from "./settings.js";
@@ -42,9 +43,10 @@ function init() {
   initNextcloudWizard({ onCreated: refreshSources, beforeOpen: resetGoogleWizard });
   initGoogleWizard({ onCreated: refreshSources, beforeOpen: resetNextcloudWizard });
   initSettings();
+  initFeed();
   initSync();
   withPageError(async () => {
-    await Promise.all([refreshSources(), loadSettings()]);
+    await Promise.all([refreshSources(), loadSettings(), loadFeed()]);
   });
 }
 

@@ -516,6 +516,47 @@ class TestUpdateAndDeleteSource:
         assert client.delete("/api/admin/sources/99").status_code == 404
 
 
+class TestFeedAdminEndpoints:
+    def test_get_feed_generates_the_token_and_returns_url_and_path(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app.settings import get_feed_token
+
+        assert get_feed_token(storage) is None
+        response = client.get("/api/admin/feed")
+        assert response.status_code == 200
+        feed = response.json()["feed"]
+        token = get_feed_token(storage)
+        assert token is not None
+        assert feed["path"] == f"/feed/{token}.ics"
+        # Best-effort absolute URL from the request host + the mapped port.
+        assert feed["url"] == f"http://testserver:8098/feed/{token}.ics"
+        # Idempotent: a second call keeps the same token.
+        assert client.get("/api/admin/feed").json()["feed"]["path"] == feed["path"]
+
+    def test_feed_url_prefers_the_forwarded_host_without_its_port(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.get(
+            "/api/admin/feed", headers={"X-Forwarded-Host": "homeassistant.local:8123"}
+        )
+        url = response.json()["feed"]["url"]
+        assert url.startswith("http://homeassistant.local:8098/feed/")
+
+    def test_rotate_replaces_the_token_and_old_url_dies(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app.settings import get_feed_token
+
+        old_path = client.get("/api/admin/feed").json()["feed"]["path"]
+        response = client.post("/api/admin/feed/rotate")
+        assert response.status_code == 200
+        new_path = response.json()["feed"]["path"]
+        assert new_path != old_path
+        assert get_feed_token(storage) is not None
+        assert get_feed_token(storage) in new_path
+
+
 class TestCaldavCalendarsEndpoint:
     def test_lists_calendars_via_client(
         self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch

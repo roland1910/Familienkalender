@@ -5,6 +5,7 @@ connection test is intercepted in the browser (no external network).
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -258,6 +259,25 @@ class TestShortcode:
         field.fill("A B")
         field.press("Enter")
         expect(page.locator("#page-message")).to_contain_text("Ungültiges Kürzel")
+
+
+class TestFeedSection:
+    def test_feed_url_is_shown_and_rotates_with_confirmation(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        url_field = page.locator("#feed-url")
+        expect(url_field).to_have_value(re.compile(r"/feed/[A-Za-z0-9_-]+\.ics$"))
+        old_value = url_field.input_value()
+
+        # Two-step confirmation: first click arms, second click rotates.
+        rotate = page.locator("#btn-feed-rotate")
+        rotate.click()
+        expect(rotate).to_contain_text("Wirklich")
+        rotate.click()
+        expect(page.locator("#feed-message")).to_contain_text("Neuer Abo-Link")
+        expect(url_field).not_to_have_value(old_value)
+        expect(url_field).to_have_value(re.compile(r"/feed/[A-Za-z0-9_-]+\.ics$"))
 
 
 class TestManualSync:

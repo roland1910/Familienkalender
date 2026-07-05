@@ -157,6 +157,29 @@
       </div>
       <p id="power-devices-message" class="message" hidden></p>
     </section>
+
+    <section class="admin-section" aria-labelledby="feed-heading">
+      <h2 id="feed-heading">Kalender-Abo</h2>
+      <p>Abonnierbarer Kalender &#8222;Familie &#8211; Roland&#8220;: alle
+        familienrelevanten Termine aus den gefilterten Quellen
+        (Abendgrenze/mehrt&auml;gig), Titel mit Quellen-K&uuml;rzel als Pr&auml;fix.</p>
+      <div class="form-grid">
+        <label for="feed-url">Abo-Adresse (nur im Heimnetz erreichbar)</label>
+        <input id="feed-url" type="text" readonly spellcheck="false">
+      </div>
+      <p class="hint">Anleitung f&uuml;r Android: App &#8222;ICSx&#8309;&#8220;
+        installieren, dort mit &#8222;+&#8220; ein neues Abo anlegen und die
+        Abo-Adresse einf&uuml;gen. Stimmt der Host-Teil der Adresse nicht,
+        einfach die IP-Adresse von Home Assistant einsetzen &#8211; der Rest
+        (Port 8098 und Pfad) bleibt gleich. Der Link enth&auml;lt den geheimen
+        Zugriffs-Token: nur innerhalb der Familie weitergeben.</p>
+      <div class="button-row">
+        <button id="btn-feed-rotate" class="action-button" type="button">
+          Neuen Link erzeugen
+        </button>
+      </div>
+      <p id="feed-message" class="message" hidden></p>
+    </section>
   </main>
   <script type="module" src="static/admin/main.js"></script>
 </body>
