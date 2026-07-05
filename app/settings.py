@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import time
 
@@ -25,6 +26,10 @@ GOOGLE_CLIENT_SECRET_KEY = "google_client_secret"
 # Smart-plug sensors shown as the device list in the power view, stored as
 # a JSON array of {"entity_id", "name"} objects.
 POWER_DEVICES_KEY = "power_devices"
+# URL token protecting the subscribable ICS feed (GET /feed/<token>.ics).
+# It is the sole auth on the direct LAN port, so it is generated with
+# plenty of entropy and never returned by any non-admin endpoint.
+FEED_TOKEN_KEY = "feed_token"
 
 # HA entity ids are lowercase domain.object_id. Shared between the admin API
 # (validates on write) and get_power_devices (defense in depth on read, in
@@ -77,6 +82,26 @@ def get_evening_boundary(storage: Storage) -> time:
             except ValueError:
                 continue
     return DEFAULT_EVENING_BOUNDARY
+
+
+def get_feed_token(storage: Storage) -> str | None:
+    """The current feed token, or None while none has been generated yet."""
+    return storage.get_setting(FEED_TOKEN_KEY)
+
+
+def ensure_feed_token(storage: Storage) -> str:
+    """The current feed token, generating (and persisting) one if missing."""
+    token = storage.get_setting(FEED_TOKEN_KEY)
+    if token:
+        return token
+    return rotate_feed_token(storage)
+
+
+def rotate_feed_token(storage: Storage) -> str:
+    """Replace the feed token with a fresh one — old feed URLs stop working."""
+    token = secrets.token_urlsafe(32)
+    storage.set_setting(FEED_TOKEN_KEY, token)
+    return token
 
 
 def get_power_devices(storage: Storage) -> list[PowerDevice]:

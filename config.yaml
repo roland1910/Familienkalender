@@ -10,6 +10,14 @@ startup: application
 boot: auto
 ingress: true
 ingress_port: 8099
+# Direkter LAN-Zugriff am Ingress vorbei — ausschließlich für das
+# Kalender-Abo (GET /feed/<token>.ics, Token ist dort die einzige Auth).
+# Alle anderen Pfade bleiben für fremde IPs gesperrt (IP-Allowlist in
+# app/main.py). Host-Port 8098 mappt auf denselben Container-Port 8099.
+ports:
+  8099/tcp: 8098
+ports_description:
+  8099/tcp: "Kalender-Abo (ICS-Feed, Token-geschützt) im Heimnetz"
 # Needed for the power view: /api/power reads sensor states from the HA Core
 # API (http://supervisor/core/api with the SUPERVISOR_TOKEN). Was removed in
 # the stage-1 security review while nothing used it — the need is here now.
