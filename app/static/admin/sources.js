@@ -59,6 +59,24 @@ function shortcodeControl(source) {
   return label;
 }
 
+function feedToggle(source) {
+  // Per-source switch: does this source feed the subscribable ICS
+  // calendar? (The family relevance filter still applies there.)
+  const label = el("label", "feed-toggle-label");
+  const input = el("input", "feed-toggle");
+  input.type = "checkbox";
+  input.checked = source.include_in_feed;
+  input.title = "Termine dieser Quelle erscheinen im abonnierbaren Kalender-Abo";
+  input.addEventListener("change", () => {
+    withPageError(async () => {
+      await api.patchSource(source.id, { include_in_feed: input.checked });
+      await refreshSources();
+    });
+  });
+  label.append(input, el("span", "", "Im Kalender-Abo"));
+  return label;
+}
+
 function colorControl(source) {
   // Native color picker, prefilled with the effective color (custom or
   // palette default). Saving sends the picked #rrggbb value; the reset
@@ -182,6 +200,7 @@ function renderSource(source) {
     modeLabel,
     shortcodeControl(source),
     colorControl(source),
+    feedToggle(source),
     toggleControl(source),
     renameControl(source, item),
     deleteControl(source),

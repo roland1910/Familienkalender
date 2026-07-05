@@ -3,3 +3,8 @@
 * text=auto
 *.sh text eol=lf
 Dockerfile text eol=lf
+# Frontend assets keep LF too: Biome formats with LF, and mixed endings
+# would churn diffs between the Windows dev machine and the Pi.
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf

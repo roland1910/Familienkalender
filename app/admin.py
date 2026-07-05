@@ -20,7 +20,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import google_oauth, power, settings
+from app import feed_constants, google_oauth, power, settings
 from app.auth import require_admin
 from app.models import (
     DISPLAY_MODES,
@@ -65,9 +65,9 @@ MAX_NAME_LENGTH = 200
 MAX_POWER_DEVICES = 30
 MAX_POWER_DEVICE_NAME_LENGTH = 100
 
-# Host port mapped to the container port in config.yaml (ports:). The feed
-# is the only thing reachable there — keep the two places in sync.
-FEED_HOST_PORT = 8098
+# Host port for the public subscription URL — shared constant, see
+# app/feed_constants.py (re-exported here so existing imports keep working).
+FEED_HOST_PORT = feed_constants.FEED_HOST_PORT
 
 
 class SettingsUpdate(BaseModel):
@@ -107,6 +107,8 @@ class SourceUpdate(BaseModel):
     # Display color "#rrggbb"; "" resets to the default palette, None
     # leaves it untouched.
     color: str | None = None
+    # Whether the source's family-relevant events appear in the ICS feed.
+    include_in_feed: bool | None = None
 
 
 class CaldavProbe(BaseModel):
@@ -204,6 +206,7 @@ def _serialize_source(source: Source, event_count: int) -> dict:
         "display_mode": source.display_mode,
         "shortcode": source.shortcode,
         "color": source.color,
+        "include_in_feed": source.include_in_feed,
         "config": _masked_config(source.config),
         "last_sync_at": source.last_sync_at.isoformat() if source.last_sync_at else None,
         "last_sync_error": source.last_sync_error,
@@ -528,6 +531,7 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
         display_mode=body.display_mode,
         shortcode=shortcode,
         color=color,
+        include_in_feed=body.include_in_feed,
     )
     updated = storage.get_source(source_id)
     counts = storage.count_events_by_source()

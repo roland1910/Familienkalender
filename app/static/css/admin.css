@@ -228,7 +228,8 @@ body {
 
 .mode-label,
 .shortcode-label,
-.color-label {
+.color-label,
+.feed-toggle-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -243,6 +244,12 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  cursor: pointer;
+}
+
+.feed-toggle {
+  width: 20px;
+  height: 20px;
   cursor: pointer;
 }
 
