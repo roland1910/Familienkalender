@@ -55,8 +55,15 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 
 ## Frontend
 
-- Vanilla-ES-Module in `app/static/js/` (api, state, dates, events, colors, dom, popover, month-view, week-view, tag-picker, power-view, power-format, gestures, main), CSS in `app/static/css/`. **Kein Build-Schritt** — die Module laufen direkt im Browser.
+- Vanilla-ES-Module in `app/static/js/` (api, state, dates, events, colors, dom, popover, month-view, week-view, tag-picker, power-view, power-format, gestures, legend, main), CSS in `app/static/css/`. **Kein Build-Schritt** — die Module laufen direkt im Browser.
+- Quellen-Legende (`legend.js`): Farbpunkt + Name je aktivierter Quelle unter Monats-/Wochenansicht (nicht in der Strom-Ansicht), Farben identisch zu den Event-Chips (`colorForSource`), Daten aus `GET /api/sources`.
 - Strom-Ansicht: Umschalter oben rechts (`#mode-slot`), Daten von `GET /api/power` (`app/power.py`, HA Core API via `http://supervisor/core/api` + SUPERVISOR_TOKEN; lokal per `HA_API_URL`/`HA_API_TOKEN` übersteuerbar). Geräteliste als Setting `power_devices`, gepflegt im Admin unter Einstellungen.
 - Adminbereich unter `/admin` (`app/static/admin/`: admin.html, main.js, api.js; Stile in `app/static/css/admin.css`), erreichbar über das Zahnrad im Kalender-Header. Gleiche Regeln: relative URLs, `textContent`-only, Deutsch. Backend-Endpunkte unter `/api/admin/*` (`app/admin.py`).
 - JS-Lint/-Format: **Biome** (einzelne Dev-Dependency in `package.json`, `biome.json` als Konfiguration). `npx biome check --write app/static` formatiert.
 - Alle URLs im Frontend sind relativ (Ingress!). Fremde Strings (Titel, Ort) ausschließlich via `textContent` — abgesichert durch `tests/test_frontend_static.py` (verbietet HTML-Injection-Sinks) und den XSS-E2E-Test.
+
+## Kalender-Abo (ICS-Feed)
+
+- `GET /feed/<token>.ics` (`app/feed.py`, Route in `app/main.py`): abonnierbarer Kalender „Familie – Roland" für Marinas Handy (ICSx⁵/DAVx⁵). Inhalt: nur Quellen mit `display_mode=filtered`, gefiltert mit derselben Familienlogik wie die Ansichten (`filter_events`, Abendgrenze), Fenster −7/+90 Tage; Titel mit Quellen-Kürzel (`shortcode`, max. 6 Zeichen A–Z/0–9, gepflegt in der Admin-Quellenzeile) als Präfix. Stabile UIDs (Hash über source_id|uid|start), REFRESH-INTERVAL/X-PUBLISHED-TTL PT15M.
+- **Zugriff am Ingress vorbei:** Host-Port 8098 → Container-Port 8099 (`ports` in config.yaml). Die IP-Allowlist lässt fremde IPs ausschließlich auf `/feed/…` — der URL-Token (settings-Key `feed_token`, `secrets.token_urlsafe(32)`, Vergleich per `compare_digest`) ist dort die einzige Auth; falsches/fehlendes Token → 404. Abo-URL + Rotation („Neuen Link erzeugen") in der Admin-Sektion „Kalender-Abo" (`/api/admin/feed`).
+- Bewusst HTTP ohne TLS im LAN — Risiko-Abwägung in `docs/backlog.md`.
