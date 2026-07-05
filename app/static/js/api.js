@@ -10,6 +10,15 @@ export async function fetchEvents(fromISO, toISO) {
   return payload.events;
 }
 
+export async function fetchSources() {
+  const response = await fetch("api/sources");
+  if (!response.ok) {
+    throw new Error(`Quellen laden fehlgeschlagen: HTTP ${response.status}`);
+  }
+  const payload = await response.json();
+  return payload.sources;
+}
+
 export async function fetchMe() {
   const response = await fetch("api/me");
   if (!response.ok) {

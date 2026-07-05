@@ -1,6 +1,6 @@
 // App wiring: navigation, data loading, auto-refresh, view rendering.
 
-import { fetchEvents, fetchMe, fetchTagOptions, fetchTags } from "./api.js";
+import { fetchEvents, fetchMe, fetchSources, fetchTagOptions, fetchTags } from "./api.js";
 import {
   addDays,
   addMonths,
@@ -12,6 +12,7 @@ import {
 } from "./dates.js";
 import { parseEvent } from "./events.js";
 import { attachSwipe } from "./gestures.js";
+import { renderLegend } from "./legend.js";
 import { monthGridRange, renderMonthView } from "./month-view.js";
 import { closeDayPopover, initPopover } from "./popover.js";
 import { startPowerView, stopPowerView } from "./power-view.js";
@@ -50,6 +51,13 @@ function render() {
   } else {
     renderWeekView(container, state.anchor, state.events, today(), state.tags);
   }
+  // The legend belongs to the calendar views only, never to the power view.
+  const legend = document.getElementById("legend");
+  if (state.mode === "power") {
+    legend.hidden = true;
+  } else {
+    renderLegend(legend, state.sources);
+  }
 }
 
 function setStale(stale) {
@@ -76,14 +84,16 @@ async function refresh() {
   // Intentionally not awaited: the tag catalog is fetched independently of
   // events/tags below and must not block or fail the calendar refresh.
   if (state.tagOptions.length === 0) loadTagOptions();
-  // Events and tags are fetched independently (Promise.allSettled, not
-  // Promise.all): if only one of the two requests fails — e.g. a flaky
-  // network hiccup hits just the tags endpoint — we still want to show the
-  // events that did load instead of throwing away both. Only a complete
-  // failure of both requests marks the data as stale.
-  const [eventsResult, tagsResult] = await Promise.allSettled([
+  // Events, tags and sources are fetched independently (Promise.allSettled,
+  // not Promise.all): if only one request fails — e.g. a flaky network
+  // hiccup hits just the tags endpoint — we still want to show the data
+  // that did load instead of throwing away everything. Only a complete
+  // failure of the two main requests marks the data as stale (the sources
+  // legend is decorative and never flags staleness on its own).
+  const [eventsResult, tagsResult, sourcesResult] = await Promise.allSettled([
     fetchEvents(fromISO, toISO),
     fetchTags(fromISO, toISO),
+    fetchSources(),
   ]);
   if (eventsResult.status === "rejected" && tagsResult.status === "rejected") {
     // Keep showing the last known data, just flag it as possibly outdated.
@@ -91,20 +101,25 @@ async function refresh() {
     return;
   }
   // On a partial failure, fall back to the last successfully fetched raw
-  // payload for the half that failed instead of losing it entirely.
+  // payload for the part that failed instead of losing it entirely.
   const rawEvents = eventsResult.status === "fulfilled" ? eventsResult.value : state.lastRawEvents;
   const rawTags = tagsResult.status === "fulfilled" ? tagsResult.value : state.lastRawTags;
+  const rawSources =
+    sourcesResult.status === "fulfilled" ? sourcesResult.value : state.lastRawSources;
   setStale(false);
   // Light DOM diff: skip re-rendering entirely when nothing changed, so the
-  // 60s auto-refresh never causes flicker on the kiosk display. Tags are part
-  // of the fingerprint so changes made on other devices show up too.
-  const fingerprint = `${fromISO}|${toISO}|${JSON.stringify(rawEvents)}|${JSON.stringify(rawTags)}`;
+  // 60s auto-refresh never causes flicker on the kiosk display. Tags and
+  // sources are part of the fingerprint so changes made on other devices
+  // (or in the admin UI) show up too.
+  const fingerprint = `${fromISO}|${toISO}|${JSON.stringify(rawEvents)}|${JSON.stringify(rawTags)}|${JSON.stringify(rawSources)}`;
   if (state.loaded && fingerprint === state.fingerprint) return;
   state.fingerprint = fingerprint;
   state.lastRawEvents = rawEvents;
   state.lastRawTags = rawTags;
+  state.lastRawSources = rawSources;
   state.events = rawEvents.map(parseEvent);
   state.tags = rawTags;
+  state.sources = rawSources;
   state.loaded = true;
   render();
 }

@@ -7,8 +7,10 @@ export const state = {
   anchor: new Date(), // any day inside the visible period
   events: [], // parsed events (see events.js)
   tags: {}, // day tags: ISO date -> emoji list (from /api/tags)
+  sources: [], // configured sources for the legend (from /api/sources)
   lastRawEvents: [], // raw /api/events payload behind state.events (partial-failure fallback)
   lastRawTags: {}, // raw /api/tags payload behind state.tags (partial-failure fallback)
+  lastRawSources: [], // raw /api/sources payload behind state.sources (partial-failure fallback)
   tagOptions: [], // fixed symbol catalog for the picker (from /api/tags/options)
   maxTagsPerDay: 3, // server-side cap, delivered with the catalog
   fingerprint: "", // range + raw payload; skips re-render when unchanged
