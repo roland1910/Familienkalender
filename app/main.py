@@ -3,25 +3,23 @@
 import asyncio
 import os
 import re
-import secrets
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import sync as sync_module
 from app.admin import router as admin_router
 from app.auth import is_admin_request
-from app.feed import build_feed
 from app.filtering import filter_events
 from app.models import LOCAL_TZ, StoredEvent
 from app.power import router as power_router
-from app.settings import get_evening_boundary, get_feed_token
+from app.settings import get_evening_boundary
 from app.storage import get_storage
 from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
 from app.tags import router as tags_router
@@ -35,14 +33,6 @@ INGRESS_PATH_PATTERN = re.compile(r"^/api/hassio_ingress/[A-Za-z0-9_-]+$")
 
 # HA ingress proxy plus localhost for the container-internal healthcheck.
 DEFAULT_ALLOWED_CLIENT_IPS = "172.30.32.2,127.0.0.1"
-
-# The only path shape reachable from IPs outside the allowlist: the
-# subscribable ICS feed. LAN clients reach the app via host port 8098;
-# the token is the sole auth for the feed, everything else stays
-# ingress-only. A full-match regex (rather than a startswith prefix)
-# rejects traversal, extra path segments and stray characters up front —
-# defense in depth alongside the route's own non-ASCII/compare_digest check.
-FEED_PATH_PATTERN = re.compile(r"/feed/[A-Za-z0-9_-]+\.ics")
 
 # Global cap for request bodies: no endpoint of this app takes payloads
 # anywhere near this size (the largest are small JSON settings updates).
@@ -69,14 +59,12 @@ def _is_valid_ingress_path(value: str) -> bool:
 class ClientIPAllowlistMiddleware:
     """Reject requests whose client IP is not on the allowlist.
 
-    The add-on must only be reachable through the HA ingress proxy
+    The main app must only be reachable through the HA ingress proxy
     (172.30.32.2); ingress itself handles HA authentication. Everything
-    else (e.g. direct access to the container port) is answered with 403.
-
-    Single exception: paths matching FEED_PATH_PATTERN are allowed from
-    any IP. Subscription clients (ICSx5/DAVx5 on Marina's phone) cannot
-    log in to HA — LAN clients reach the app via host port 8098; the
-    token is the sole auth for the feed, everything else stays ingress-only.
+    else (e.g. direct access to the container port) is answered with 403
+    — without exceptions: the ICS feed, which needs to be reachable past
+    ingress, runs as its own app tree on a separate port (app.feed_app,
+    started by app.serve), so no allowlist hole exists here anymore.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -87,9 +75,7 @@ class ClientIPAllowlistMiddleware:
         if scope["type"] == "http":
             client = scope.get("client")
             client_host = client[0] if client else None
-            if client_host not in self.allowed_ips and not FEED_PATH_PATTERN.fullmatch(
-                scope.get("path", "")
-            ):
+            if client_host not in self.allowed_ips:
                 response = PlainTextResponse("Forbidden", status_code=403)
                 await response(scope, receive, send)
                 return
@@ -311,28 +297,6 @@ async def trigger_sync() -> dict:
         )
     results = await sync_all(get_storage())
     return {"results": {str(source_id): error for source_id, error in results.items()}}
-
-
-@app.get("/feed/{token}.ics")
-async def feed(token: str) -> Response:
-    """Subscribable ICS feed — reachable from the LAN via host port 8098.
-
-    The URL token is the only authentication on this path (see
-    ClientIPAllowlistMiddleware); it is generated for the admin UI and
-    compared in constant time. Missing token setup or a wrong token both
-    answer 404 so probing reveals nothing about the feed's existence.
-    Non-ASCII input is rejected before that comparison: secrets.compare_digest
-    only accepts ASCII str and raises TypeError otherwise, which would
-    otherwise surface as an unhandled 500 to arbitrary LAN clients.
-    """
-    stored = get_feed_token(get_storage())
-    if not stored or not token.isascii() or not secrets.compare_digest(token, stored):
-        raise HTTPException(status_code=404, detail="Nicht gefunden.")
-    return Response(
-        content=build_feed(get_storage()),
-        media_type="text/calendar; charset=utf-8",
-        headers={"Content-Disposition": 'inline; filename="familie-roland.ics"'},
-    )
 
 
 @app.get("/", response_class=HTMLResponse)

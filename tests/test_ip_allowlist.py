@@ -1,13 +1,13 @@
 """Tests for the client IP allowlist.
 
-The add-on must only be reachable through the HA ingress proxy
+The main app must only be reachable through the HA ingress proxy
 (172.30.32.2). Direct requests from any other client IP get a 403 —
-with exactly one exception: /feed/... is reachable from any IP, because
-subscription clients on LAN phones cannot authenticate against HA; the
-URL token is the sole auth there (see test_feed_route.py). For tests and
-local development the allowlist is configurable via the
-ALLOWED_CLIENT_IPS environment variable (default allows the ingress
-proxy and 127.0.0.1 for local healthchecks).
+without exceptions: the ICS feed has moved to its own listener
+(app.feed_app, served by app.serve on a separate port), so the former
+/feed allowlist exception is gone and feed paths are blocked here like
+everything else. For tests and local development the allowlist is
+configurable via the ALLOWED_CLIENT_IPS environment variable (default
+allows the ingress proxy and 127.0.0.1 for local healthchecks).
 """
 
 from pathlib import Path
@@ -59,11 +59,12 @@ def test_request_from_foreign_ip_is_rejected_for_admin_api() -> None:
     )
 
 
-class TestFeedExceptionForForeignIPs:
-    """LAN clients reach only /feed/... — everything else stays 403.
+class TestNoFeedExceptionAnymore:
+    """The feed lives on its own listener now — no allowlist holes here.
 
-    Security-critical: the feed path carries its own auth (URL token),
-    every other route relies on the allowlist + HA ingress.
+    Security-critical: since Etappe 10 the main app is ingress-only
+    again. Even a valid feed URL must be 403 on this app; subscription
+    clients talk to the dedicated feed port instead (app.feed_app).
     """
 
     @pytest.fixture
@@ -75,20 +76,12 @@ class TestFeedExceptionForForeignIPs:
     def lan_client(self, storage: Storage) -> TestClient:
         return TestClient(app, client=("192.168.1.42", 50000))
 
-    def test_foreign_ip_reaches_the_feed_with_a_valid_token(
+    def test_foreign_ip_gets_403_even_with_a_valid_feed_token(
         self, lan_client: TestClient, storage: Storage
     ) -> None:
         token = ensure_feed_token(storage)
         response = lan_client.get(f"/feed/{token}.ics")
-        assert response.status_code == 200
-        assert "BEGIN:VCALENDAR" in response.text
-
-    def test_foreign_ip_with_wrong_token_gets_404_not_content(
-        self, lan_client: TestClient, storage: Storage
-    ) -> None:
-        ensure_feed_token(storage)
-        response = lan_client.get("/feed/geraten.ics")
-        assert response.status_code == 404
+        assert response.status_code == 403
         assert "VCALENDAR" not in response.text
 
     @pytest.mark.parametrize(
@@ -104,50 +97,26 @@ class TestFeedExceptionForForeignIPs:
             "/static/js/main.js",
             "/static/admin/main.js",
             "/",
-            "/feed",  # only /feed/<token>.ics, not the bare prefix
-            "/feedx/etwas.ics",  # prefix must not match sibling paths
+            "/feed",
+            "/feed/irgendwas.ics",
         ],
     )
-    def test_foreign_ip_stays_403_everywhere_else(
+    def test_foreign_ip_stays_403_everywhere(
         self, lan_client: TestClient, storage: Storage, path: str
     ) -> None:
         ensure_feed_token(storage)
         assert lan_client.get(path).status_code == 403
 
-    def test_foreign_ip_cannot_post_to_the_feed_namespace_endpoints(
-        self, lan_client: TestClient, storage: Storage
-    ) -> None:
-        # Write endpoints stay blocked regardless of the feed exception.
-        assert lan_client.post("/api/sync").status_code == 403
-        assert lan_client.put("/api/admin/settings", json={}).status_code == 403
-
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "/feed/%2e%2e/api/admin/settings",  # encoded traversal
-            "/feed/token.ics/extra",  # extra path segment after the file
-            "/feed/token.ics/",  # trailing slash after the file
-            "/feed/tok en.ics",  # space is not URL-safe-token alphabet
-            "/feed/.ics",  # empty token
-            "/feed/token.txt",  # wrong extension
-        ],
-    )
-    def test_foreign_ip_stays_403_for_feed_lookalikes(
-        self, lan_client: TestClient, storage: Storage, path: str
-    ) -> None:
-        # The allowlist exception must only ever match the exact feed shape
-        # (/feed/<token>.ics with a URL-safe token) — not traversal attempts
-        # or trailing extra path segments that might reach other routes.
-        ensure_feed_token(storage)
-        assert lan_client.get(path).status_code == 403
-
-    def test_ingress_ip_keeps_full_access_including_the_feed(
+    def test_ingress_ip_keeps_full_access_but_the_feed_route_is_gone(
         self, storage: Storage
     ) -> None:
+        # The feed route itself was removed from the main app: ingress
+        # users get a plain 404 (nothing to fetch here), feed clients use
+        # the dedicated listener.
         token = ensure_feed_token(storage)
         ingress = TestClient(app, client=(HA_INGRESS_IP, 50000))
         assert ingress.get("/api/health").status_code == 200
-        assert ingress.get(f"/feed/{token}.ics").status_code == 200
+        assert ingress.get(f"/feed/{token}.ics").status_code == 404
 
 
 @pytest.mark.anyio
