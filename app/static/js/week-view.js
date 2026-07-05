@@ -2,7 +2,7 @@
 // bars in a lane-stacked section on top; timed single-day events are
 // positioned on a scrollable 24h grid (06:00-22:00 initially visible).
 
-import { colorForSource } from "./colors.js";
+import { colorForEvent } from "./colors.js";
 import {
   addDays,
   formatTime,
@@ -84,7 +84,7 @@ function buildAllDaySection(events, start) {
   for (const bar of bars) {
     if (bar.lane >= visibleLanes) continue;
     const node = el("div", "allday-bar");
-    node.style.setProperty("--source-color", colorForSource(bar.event.source_id));
+    node.style.setProperty("--source-color", colorForEvent(bar.event));
     // +2: column 1 is the hour gutter.
     node.style.gridColumn = `${bar.startCol + 2} / ${bar.endCol + 3}`;
     node.style.gridRow = String(bar.lane + 1);
@@ -163,7 +163,7 @@ function buildDayColumn(day, dayEvents, today, allEvents) {
       startMinutes + (MIN_EVENT_HEIGHT_PX / HOUR_HEIGHT_PX) * 60,
     );
     const node = el("div", "timed-event");
-    node.style.setProperty("--source-color", colorForSource(item.event.source_id));
+    node.style.setProperty("--source-color", colorForEvent(item.event));
     node.style.top = `${(startMinutes / 60) * HOUR_HEIGHT_PX}px`;
     node.style.height = `${((endMinutes - startMinutes) / 60) * HOUR_HEIGHT_PX}px`;
     const width = 100 / item.laneCount;

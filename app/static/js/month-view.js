@@ -1,6 +1,6 @@
 // Classic month grid: 6 weeks x 7 days, weeks starting Monday.
 
-import { colorForSource } from "./colors.js";
+import { colorForEvent } from "./colors.js";
 import {
   addDays,
   formatDayMonth,
@@ -26,7 +26,7 @@ export function monthGridRange(anchor) {
 
 function buildChip(event, day) {
   const chip = el("div", "chip");
-  chip.style.setProperty("--source-color", colorForSource(event.source_id));
+  chip.style.setProperty("--source-color", colorForEvent(event));
   if (spansFullDays(event)) chip.classList.add("chip-allday");
   if (!spansFullDays(event) && isSameDay(event.startDay, day)) {
     chip.append(el("span", "chip-time", formatTime(event.start)));

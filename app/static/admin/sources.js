@@ -1,6 +1,9 @@
 // Source list: rendering with status/counts plus the inline controls
-// (display mode, enable/disable, rename, two-step delete).
+// (display mode, color, enable/disable, rename, two-step delete).
 
+// The calendar's color resolution — the admin picker must show exactly
+// the color the views use (custom color or palette default).
+import { colorForSource } from "../js/colors.js";
 import * as api from "./api.js";
 import { byId, el, withPageError } from "./dom.js";
 
@@ -53,6 +56,36 @@ function shortcodeControl(source) {
     });
   });
   label.append(input);
+  return label;
+}
+
+function colorControl(source) {
+  // Native color picker, prefilled with the effective color (custom or
+  // palette default). Saving sends the picked #rrggbb value; the reset
+  // button clears the custom color so the palette applies again.
+  const label = el("label", "color-label", "Farbe: ");
+  const input = el("input", "color-input");
+  input.type = "color";
+  input.value = colorForSource(source);
+  input.title = "Farbe der Termine dieser Quelle im Kalender";
+  input.addEventListener("change", () => {
+    withPageError(async () => {
+      await api.patchSource(source.id, { color: input.value });
+      await refreshSources();
+    });
+  });
+  label.append(input);
+  const reset = el("button", "small-button subtle color-reset", "Standardfarbe");
+  reset.type = "button";
+  reset.title = "Eigene Farbe entfernen — es gilt wieder die Standardfarbe";
+  reset.hidden = source.color === "";
+  reset.addEventListener("click", () => {
+    withPageError(async () => {
+      await api.patchSource(source.id, { color: "" });
+      await refreshSources();
+    });
+  });
+  label.append(reset);
   return label;
 }
 
@@ -148,6 +181,7 @@ function renderSource(source) {
   controls.append(
     modeLabel,
     shortcodeControl(source),
+    colorControl(source),
     toggleControl(source),
     renameControl(source, item),
     deleteControl(source),

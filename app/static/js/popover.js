@@ -2,7 +2,7 @@
 // from "+N weitere", from the day number (month) or the column header (week).
 
 import { putDayTags } from "./api.js";
-import { colorForSource } from "./colors.js";
+import { colorForEvent } from "./colors.js";
 import { formatDayMonth, formatTime, isSameDay, toISODate, WEEKDAY_NAMES_SHORT } from "./dates.js";
 import { el } from "./dom.js";
 import { spansFullDays } from "./events.js";
@@ -125,7 +125,7 @@ export function openDayPopover(day, events) {
   const shown = events.slice(0, MAX_POPOVER_ITEMS);
   for (const event of shown) {
     const item = el("li", "popover-item");
-    item.style.setProperty("--source-color", colorForSource(event.source_id));
+    item.style.setProperty("--source-color", colorForEvent(event));
     const time =
       spansFullDays(event) || !isSameDay(event.startDay, day)
         ? "ganztägig"

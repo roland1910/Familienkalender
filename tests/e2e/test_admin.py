@@ -261,6 +261,57 @@ class TestShortcode:
         expect(page.locator("#page-message")).to_contain_text("Ungültiges Kürzel")
 
 
+class TestSourceColor:
+    MARINA_DEFAULT = "#d97706"  # palette color for source id 1 (colors.js)
+
+    def _marina_color_input(self, page: Page):
+        return page.locator(".source-item", has_text="Marina").locator(".color-input")
+
+    def _set_color(self, page: Page, value: str) -> None:
+        # Playwright cannot type into <input type="color">; set the value
+        # and fire the change event like the native picker would.
+        self._marina_color_input(page).evaluate(
+            "(node, value) => {"
+            "  node.value = value;"
+            "  node.dispatchEvent(new Event('change', { bubbles: true }));"
+            "}",
+            value,
+        )
+
+    def test_color_change_shows_up_in_chip_and_legend(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        expect(self._marina_color_input(page)).to_have_value(self.MARINA_DEFAULT)
+        self._set_color(page, "#ff0066")
+        # The PATCH re-renders the list with the stored custom color.
+        expect(self._marina_color_input(page)).to_have_value("#ff0066")
+
+        # Calendar: chip and legend dot of the source use the new color.
+        page.locator(".back-link").click()
+        chip = page.locator(".chip", has_text="Zahnarzt Emil")
+        expect(chip).to_be_visible()
+        assert (
+            chip.evaluate("node => getComputedStyle(node).backgroundColor")
+            == "rgb(255, 0, 102)"
+        )
+        legend_dot = page.locator(".legend-item", has_text="Marina").locator(".legend-dot")
+        assert (
+            legend_dot.evaluate("node => getComputedStyle(node).backgroundColor")
+            == "rgb(255, 0, 102)"
+        )
+
+        # Reset: back to the palette default (leaves the shared DB clean).
+        page.goto(f"{server_url}/admin")
+        marina = page.locator(".source-item", has_text="Marina")
+        expect(marina.locator(".color-reset")).to_be_visible()
+        marina.locator(".color-reset").click()
+        expect(self._marina_color_input(page)).to_have_value(self.MARINA_DEFAULT)
+        expect(
+            page.locator(".source-item", has_text="Marina").locator(".color-reset")
+        ).to_be_hidden()
+
+
 class TestFeedSection:
     def test_feed_url_is_shown_and_rotates_with_confirmation(
         self, page: Page, server_url: str

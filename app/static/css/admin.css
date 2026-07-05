@@ -227,12 +227,23 @@ body {
 }
 
 .mode-label,
-.shortcode-label {
+.shortcode-label,
+.color-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 14px;
   color: var(--text-muted);
+}
+
+.color-input {
+  width: 48px;
+  min-height: 40px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
 }
 
 .shortcode-input {

@@ -11,7 +11,7 @@ export function renderLegend(container, sources) {
   for (const source of enabled) {
     const item = el("span", "legend-item");
     const dot = el("span", "legend-dot");
-    dot.style.setProperty("--source-color", colorForSource(source.id));
+    dot.style.setProperty("--source-color", colorForSource(source));
     // Source names come from admin input — textContent only (rule 4).
     item.append(dot, el("span", "legend-name", source.name));
     container.append(item);
