@@ -9,14 +9,17 @@ to the family's evening and weekend planning:
   business trips), and
 - all-day events.
 
-Plain intra-day meetings are dropped. All decisions are made in the local
-timezone (Europe/Berlin): source calendars may deliver events in UTC or
-any other timezone.
+Plain intra-day meetings are dropped — but only on workdays: on weekends
+and Bavarian public holidays the family plans around every appointment,
+so all events are shown. All decisions are made in the local timezone
+(Europe/Berlin): source calendars may deliver events in UTC or any other
+timezone.
 """
 
 from collections.abc import Iterable
 from datetime import datetime, time, timedelta
 
+from app.holidays_bavaria import is_workday
 from app.models import LOCAL_TZ, CalendarEvent
 
 DEFAULT_EVENING_BOUNDARY = time(17, 0)
@@ -34,6 +37,13 @@ def is_family_relevant(
 
     start_local = event.start_as_datetime().astimezone(LOCAL_TZ)
     end_local = event.end_as_datetime().astimezone(LOCAL_TZ)
+
+    # The evening-boundary restriction only applies on workdays: on
+    # weekends and Bavarian public holidays even intra-day appointments
+    # are family-relevant. The local start date decides which day the
+    # event belongs to.
+    if not is_workday(start_local.date()):
+        return True
 
     # More than one local calendar day (overnight or longer) is always
     # relevant. An event ending exactly at midnight is treated as ending on

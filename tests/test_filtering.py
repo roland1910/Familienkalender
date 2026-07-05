@@ -2,9 +2,10 @@
 
 Sources with display_mode=filtered only show events that matter to the
 family: events reaching into (or lying in) the evening, multi-day events,
-and all-day events. Plain intra-day meetings are hidden. All comparisons
-happen in the local timezone (Europe/Berlin), regardless of the timezone
-the event was delivered in.
+and all-day events. Plain intra-day meetings are hidden — but only on
+workdays: on weekends and Bavarian public holidays every event is shown.
+All comparisons happen in the local timezone (Europe/Berlin), regardless
+of the timezone the event was delivered in.
 """
 
 from datetime import date, datetime, time
@@ -138,29 +139,102 @@ class TestTimezoneHandling:
 
 
 class TestDaylightSavingTransitions:
-    def test_spring_forward_day_event_in_local_evening_is_shown(self) -> None:
-        # 2026-03-29 is the CET→CEST switch: 15:30 UTC = 17:30 CEST.
+    # DST switches always happen on a Sunday, where the non-workday rule
+    # shows everything anyway. The Monday right after the switch still
+    # exercises the changed UTC offset, so the tests use that day.
+
+    def test_event_after_spring_forward_in_local_evening_is_shown(self) -> None:
+        # 2026-03-29 is the CET→CEST switch: on Monday the 30th,
+        # 15:30 UTC = 17:30 CEST.
         event = timed(
-            datetime(2026, 3, 29, 15, 30, tzinfo=UTC),
-            datetime(2026, 3, 29, 16, 30, tzinfo=UTC),
+            datetime(2026, 3, 30, 15, 30, tzinfo=UTC),
+            datetime(2026, 3, 30, 16, 30, tzinfo=UTC),
         )
         assert is_family_relevant(event) is True
 
-    def test_fall_back_day_event_before_boundary_is_dropped(self) -> None:
-        # 2026-10-25 is the CEST→CET switch: 15:00-16:00 UTC = 16:00-17:00 CET.
+    def test_event_after_fall_back_before_boundary_is_dropped(self) -> None:
+        # 2026-10-25 is the CEST→CET switch: on Monday the 26th,
+        # 15:00-16:00 UTC = 16:00-17:00 CET.
         event = timed(
-            datetime(2026, 10, 25, 15, 0, tzinfo=UTC),
-            datetime(2026, 10, 25, 16, 0, tzinfo=UTC),
+            datetime(2026, 10, 26, 15, 0, tzinfo=UTC),
+            datetime(2026, 10, 26, 16, 0, tzinfo=UTC),
         )
         assert is_family_relevant(event) is False
 
-    def test_fall_back_day_event_after_boundary_is_shown(self) -> None:
+    def test_event_after_fall_back_after_boundary_is_shown(self) -> None:
         # 16:30 UTC = 17:30 CET after the switch.
         event = timed(
-            datetime(2026, 10, 25, 16, 30, tzinfo=UTC),
-            datetime(2026, 10, 25, 17, 30, tzinfo=UTC),
+            datetime(2026, 10, 26, 16, 30, tzinfo=UTC),
+            datetime(2026, 10, 26, 17, 30, tzinfo=UTC),
         )
         assert is_family_relevant(event) is True
+
+
+class TestNonWorkdays:
+    """On weekends and Bavarian holidays even intra-day events are shown."""
+
+    def test_saturday_morning_meeting_is_shown(self) -> None:
+        event = timed(
+            datetime(2026, 7, 11, 10, 0, tzinfo=BERLIN),  # Saturday
+            datetime(2026, 7, 11, 11, 0, tzinfo=BERLIN),
+        )
+        assert is_family_relevant(event) is True
+
+    def test_sunday_morning_meeting_is_shown(self) -> None:
+        event = timed(
+            datetime(2026, 7, 12, 10, 0, tzinfo=BERLIN),  # Sunday
+            datetime(2026, 7, 12, 11, 0, tzinfo=BERLIN),
+        )
+        assert is_family_relevant(event) is True
+
+    def test_friday_morning_meeting_is_still_dropped(self) -> None:
+        event = timed(
+            datetime(2026, 7, 10, 10, 0, tzinfo=BERLIN),  # Friday
+            datetime(2026, 7, 10, 11, 0, tzinfo=BERLIN),
+        )
+        assert is_family_relevant(event) is False
+
+    def test_weekday_holiday_morning_meeting_is_shown(self) -> None:
+        # Fronleichnam 2026 falls on Thursday, June 4.
+        event = timed(
+            datetime(2026, 6, 4, 10, 0, tzinfo=BERLIN),
+            datetime(2026, 6, 4, 11, 0, tzinfo=BERLIN),
+        )
+        assert is_family_relevant(event) is True
+
+    def test_custom_boundary_is_irrelevant_on_non_workdays(self) -> None:
+        event = timed(
+            datetime(2026, 7, 11, 8, 0, tzinfo=BERLIN),  # Saturday
+            datetime(2026, 7, 11, 8, 30, tzinfo=BERLIN),
+        )
+        assert is_family_relevant(event, boundary=time(23, 59)) is True
+
+    def test_friday_night_into_saturday_is_shown_as_multi_day(self) -> None:
+        # Starts on a workday but crosses into Saturday: the existing
+        # multi-day rule shows it regardless of the workday check.
+        event = timed(
+            datetime(2026, 7, 10, 23, 0, tzinfo=BERLIN),  # Friday night
+            datetime(2026, 7, 11, 2, 0, tzinfo=BERLIN),
+        )
+        assert is_family_relevant(event) is True
+
+    def test_utc_start_that_falls_on_saturday_local_is_shown(self) -> None:
+        # Friday 22:30 UTC in summer = Saturday 00:30 Berlin: the local
+        # date decides, so this counts as a weekend event.
+        event = timed(
+            datetime(2026, 7, 10, 22, 30, tzinfo=UTC),
+            datetime(2026, 7, 10, 23, 30, tzinfo=UTC),
+        )
+        assert is_family_relevant(event) is True
+
+    def test_utc_start_that_falls_on_monday_local_is_dropped(self) -> None:
+        # Sunday 22:30 UTC in summer = Monday 00:30 Berlin: a workday
+        # intra-day event before the boundary, dropped.
+        event = timed(
+            datetime(2026, 7, 12, 22, 30, tzinfo=UTC),
+            datetime(2026, 7, 12, 23, 30, tzinfo=UTC),
+        )
+        assert is_family_relevant(event) is False
 
 
 class TestConfigurableBoundary:
@@ -198,3 +272,12 @@ class TestFilterEvents:
         )
         result = filter_events([morning, evening], display_mode="filtered")
         assert [event.uid for event in result] == ["evening"]
+
+    def test_filtered_mode_keeps_intra_day_events_on_weekends(self) -> None:
+        saturday = timed(
+            datetime(2026, 7, 11, 10, 0, tzinfo=BERLIN),  # Saturday
+            datetime(2026, 7, 11, 11, 0, tzinfo=BERLIN),
+            uid="saturday",
+        )
+        result = filter_events([saturday], display_mode="filtered")
+        assert [event.uid for event in result] == ["saturday"]
