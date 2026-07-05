@@ -1,5 +1,5 @@
 name: Familienkalender
-version: "0.9.0"
+version: "0.10.0"
 slug: familienkalender
 description: Aggregierter Familienkalender für die HA-Seitenleiste und das Touch-Display
 url: https://github.com/roland1910/Familienkalender
