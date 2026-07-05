@@ -154,6 +154,11 @@ class Source:
     # Display color "#rrggbb"; empty = frontend palette default
     # (see is_valid_source_color).
     color: str = ""
+    # Whether this source's (family-relevant) events appear in the
+    # subscribable ICS feed. Independent of display_mode; the historical
+    # default (filtered sources feed the subscription) is applied when a
+    # source is created and by the storage migration.
+    include_in_feed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,3 +173,5 @@ class StoredEvent:
     shortcode: str = ""
     # Source display color "#rrggbb"; empty = frontend palette default.
     color: str = ""
+    # Whether the source participates in the subscribable ICS feed.
+    include_in_feed: bool = False

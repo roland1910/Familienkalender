@@ -432,6 +432,31 @@ class TestUpdateAndDeleteSource:
         response = client.get("/api/admin/sources")
         assert response.json()["sources"][0]["shortcode"] == "RMV"
 
+    def test_patch_include_in_feed_toggles(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, display_mode="filtered"
+        )
+        assert storage.get_source(source_id).include_in_feed is True
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"include_in_feed": False}
+        )
+        assert response.status_code == 200
+        assert response.json()["source"]["include_in_feed"] is False
+        assert storage.get_source(source_id).include_in_feed is False
+        client.patch(f"/api/admin/sources/{source_id}", json={"include_in_feed": True})
+        assert storage.get_source(source_id).include_in_feed is True
+
+    def test_sources_list_includes_the_feed_flag(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.add_source(
+            type="google", name="Valentin", config={}, display_mode="full"
+        )
+        response = client.get("/api/admin/sources")
+        assert response.json()["sources"][0]["include_in_feed"] is False
+
     def test_patch_color_normalizes_and_stores(
         self, client: TestClient, storage: Storage
     ) -> None:

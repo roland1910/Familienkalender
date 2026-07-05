@@ -1,9 +1,10 @@
 """Tests for the subscribable ICS feed (app/feed.py).
 
-The feed contains only events from sources with display_mode=filtered
-(Roland's work/private calendars), passed through the same family
-relevance filter as the calendar views. Sources with display_mode=full
-(Marina) are excluded — she subscribes to the feed herself.
+The feed contains only events from sources with include_in_feed=True
+(default: filtered work calendars, see the storage migration), passed
+through the same family relevance filter as the calendar views. Sources
+with include_in_feed=False (Marina, Valentin) are excluded — Marina
+subscribes to the feed herself.
 """
 
 from datetime import UTC, date, datetime, timedelta
@@ -143,6 +144,25 @@ class TestFeedContent:
         )
         titles = summaries(parse_feed(build_feed(storage, now=NOW)))
         assert "Abendtermin" in titles
+
+    def test_filtered_source_excluded_from_the_feed_when_opted_out(
+        self, storage: Storage
+    ) -> None:
+        # The Valentin case: a source whose events the calendar shows
+        # (filtered or not) but that must not appear in the subscription.
+        work_id, _ = seed(storage)
+        storage.update_source(work_id, include_in_feed=False)
+        calendar = parse_feed(build_feed(storage, now=NOW))
+        assert list(calendar.walk("VEVENT")) == []
+
+    def test_full_source_contributes_when_opted_in(self, storage: Storage) -> None:
+        # include_in_feed decides participation; the family relevance
+        # filter still applies per the source's display mode (full = all).
+        _, full_id = seed(storage)
+        storage.update_source(full_id, include_in_feed=True)
+        titles = summaries(parse_feed(build_feed(storage, now=NOW)))
+        assert "Elternabend" in titles
+        assert "RMV Kundentermin" in titles  # the work source stays included
 
     def test_events_outside_the_sync_window_are_excluded(
         self, storage: Storage

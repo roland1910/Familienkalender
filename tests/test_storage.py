@@ -328,6 +328,105 @@ class TestSourceColor:
         assert stored[0].color == "#ff0066"
 
 
+class TestIncludeInFeed:
+    """Per-source switch deciding whether the source feeds the ICS feed."""
+
+    def test_default_follows_display_mode(self, tmp_path: Path) -> None:
+        # Historical behaviour as default: filtered sources (Roland's work
+        # calendars) feed the subscription, full sources (Marina, Valentin)
+        # do not — she subscribes to the feed herself.
+        storage = make_storage(tmp_path)
+        filtered_id = storage.add_source(
+            type="caldav", name="Firma", config={}, display_mode="filtered"
+        )
+        full_id = storage.add_source(
+            type="google", name="Valentin", config={}, display_mode="full"
+        )
+        assert storage.get_source(filtered_id).include_in_feed is True
+        assert storage.get_source(full_id).include_in_feed is False
+
+    def test_explicit_value_wins_over_the_display_mode_default(
+        self, tmp_path: Path
+    ) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav",
+            name="Firma",
+            config={},
+            display_mode="filtered",
+            include_in_feed=False,
+        )
+        assert storage.get_source(source_id).include_in_feed is False
+
+    def test_toggle_via_update(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, display_mode="filtered"
+        )
+        assert storage.update_source(source_id, include_in_feed=False) is True
+        assert storage.get_source(source_id).include_in_feed is False
+        storage.update_source(source_id, include_in_feed=True)
+        assert storage.get_source(source_id).include_in_feed is True
+
+    def test_update_without_value_keeps_it(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, display_mode="filtered"
+        )
+        storage.update_source(source_id, name="Firma neu")
+        assert storage.get_source(source_id).include_in_feed is True
+
+    def test_changing_display_mode_does_not_touch_the_flag(
+        self, tmp_path: Path
+    ) -> None:
+        # Once the column exists the flag is independent — switching the
+        # display mode must not silently change what the feed contains.
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="google", name="Valentin", config={}, display_mode="full"
+        )
+        storage.update_source(source_id, display_mode="filtered")
+        assert storage.get_source(source_id).include_in_feed is False
+
+    def test_existing_db_is_migrated_from_display_mode(self, tmp_path: Path) -> None:
+        """Legacy rows get include_in_feed = (display_mode == 'filtered')."""
+        db_path = tmp_path / "familienkalender.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                display_mode TEXT NOT NULL DEFAULT 'full',
+                last_sync_at TEXT,
+                last_sync_error TEXT,
+                shortcode TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO sources (type, name, display_mode)
+            VALUES ('google', 'Marina', 'full'),
+                   ('caldav', 'Firma', 'filtered');
+            """
+        )
+        conn.commit()
+        conn.close()
+        storage = Storage(db_path)
+        by_name = {source.name: source for source in storage.list_sources()}
+        assert by_name["Marina"].include_in_feed is False
+        assert by_name["Firma"].include_in_feed is True
+
+    def test_get_events_carries_the_flag(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, display_mode="filtered"
+        )
+        storage.sync_events(source_id, [timed_event()], WINDOW_START, WINDOW_END, synced_at=NOW)
+        stored = storage.get_events(WINDOW_START, WINDOW_END)
+        assert stored[0].include_in_feed is True
+
+
 class TestSourceCrud:
     def test_get_source_returns_the_source(self, tmp_path: Path) -> None:
         storage = make_storage(tmp_path)

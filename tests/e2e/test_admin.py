@@ -312,6 +312,36 @@ class TestSourceColor:
         ).to_be_hidden()
 
 
+class TestFeedToggle:
+    def test_feed_membership_can_be_toggled_per_source(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        # Demo data: Marina is full (not in the feed), Kunde is filtered
+        # (in the feed) — the migration/default behaviour.
+        marina_toggle = page.locator(".source-item", has_text="Marina").locator(
+            ".feed-toggle"
+        )
+        kunde_toggle = page.locator(".source-item", has_text="Kunde").locator(
+            ".feed-toggle"
+        )
+        expect(marina_toggle).not_to_be_checked()
+        expect(kunde_toggle).to_be_checked()
+
+        kunde_toggle.click()  # opt the source out (the Valentin case)
+        page.reload()
+        kunde_toggle = page.locator(".source-item", has_text="Kunde").locator(
+            ".feed-toggle"
+        )
+        expect(kunde_toggle).not_to_be_checked()
+
+        # Restore so the shared demo DB keeps its default state.
+        kunde_toggle.click()
+        expect(
+            page.locator(".source-item", has_text="Kunde").locator(".feed-toggle")
+        ).to_be_checked()
+
+
 class TestFeedSection:
     def test_feed_url_is_shown_and_rotates_with_confirmation(
         self, page: Page, server_url: str

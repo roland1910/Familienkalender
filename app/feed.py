@@ -1,12 +1,13 @@
 """Subscribable ICS feed: Roland's family-relevant appointments.
 
-Content rule: only sources with display_mode=filtered contribute (Roland's
-work/private calendars), each event passed through the same family
-relevance filter as the calendar views (app.filtering.filter_events, with
-the persisted evening boundary). Sources with display_mode=full are
-Marina's own calendars — she subscribes to this feed on her phone, so
-including them would only duplicate what she already has. The time window
-matches the sync window (-7/+90 days).
+Content rule: only sources with include_in_feed=True contribute (per-source
+admin switch; by default Roland's filtered work calendars), each event
+passed through the same family relevance filter as the calendar views
+(app.filtering.filter_events with the source's display mode and the
+persisted evening boundary). Sources like Marina's or Valentin's calendars
+stay out — Marina subscribes to this feed on her phone, so including them
+would only duplicate what she already has. The time window matches the
+sync window (-7/+90 days).
 """
 
 import hashlib
@@ -58,7 +59,7 @@ def build_feed(storage: Storage, *, now: datetime | None = None) -> bytes:
     # One DTSTAMP for the whole build; required per VEVENT by RFC 5545.
     dtstamp = (now or datetime.now(UTC)).astimezone(UTC)
     for item in storage.get_events(window_start, window_end):
-        if item.display_mode != "filtered":
+        if not item.include_in_feed:
             continue
         if not filter_events(
             [item.event], display_mode=item.display_mode, boundary=boundary

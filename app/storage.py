@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS sources (
     last_sync_at TEXT,
     last_sync_error TEXT,
     shortcode TEXT NOT NULL DEFAULT '',
-    color TEXT NOT NULL DEFAULT ''
+    color TEXT NOT NULL DEFAULT '',
+    include_in_feed INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +137,7 @@ def _row_to_source(row: sqlite3.Row) -> Source:
         last_sync_error=row["last_sync_error"],
         shortcode=row["shortcode"],
         color=row["color"],
+        include_in_feed=bool(row["include_in_feed"]),
     )
 
 
@@ -170,6 +172,17 @@ class Storage:
         if "color" not in columns:
             conn.execute(
                 "ALTER TABLE sources ADD COLUMN color TEXT NOT NULL DEFAULT ''"
+            )
+        if "include_in_feed" not in columns:
+            # Existing installations keep the historical feed content:
+            # until this column existed, exactly the filtered sources
+            # (Roland's work calendars) fed the ICS feed.
+            conn.execute(
+                "ALTER TABLE sources ADD COLUMN include_in_feed"
+                " INTEGER NOT NULL DEFAULT 0"
+            )
+            conn.execute(
+                "UPDATE sources SET include_in_feed = (display_mode = 'filtered')"
             )
 
     def _ensure_private_db_file(self) -> None:
@@ -212,6 +225,7 @@ class Storage:
         display_mode: str = "full",
         shortcode: str = "",
         color: str = "",
+        include_in_feed: bool | None = None,
     ) -> int:
         if type not in SOURCE_TYPES:
             raise ValueError(f"unknown source type: {type!r}")
@@ -221,11 +235,16 @@ class Storage:
             raise ValueError(f"invalid shortcode: {shortcode!r}")
         if not is_valid_source_color(color):
             raise ValueError(f"invalid source color: {color!r}")
+        if include_in_feed is None:
+            # Historical default: filtered sources (work calendars) feed
+            # the ICS subscription, fully displayed ones do not.
+            include_in_feed = display_mode == "filtered"
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO sources"
-                " (type, name, config, enabled, display_mode, shortcode, color)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " (type, name, config, enabled, display_mode, shortcode, color,"
+                " include_in_feed)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     type,
                     name,
@@ -234,6 +253,7 @@ class Storage:
                     display_mode,
                     shortcode,
                     color,
+                    int(include_in_feed),
                 ),
             )
             return int(cursor.lastrowid or 0)
@@ -258,6 +278,7 @@ class Storage:
         display_mode: str | None = None,
         shortcode: str | None = None,
         color: str | None = None,
+        include_in_feed: bool | None = None,
     ) -> bool:
         """Partially update a source; returns False if it does not exist."""
         if display_mode is not None and display_mode not in DISPLAY_MODES:
@@ -286,6 +307,9 @@ class Storage:
         if color is not None:
             assignments.append("color = ?")
             values.append(color)
+        if include_in_feed is not None:
+            assignments.append("include_in_feed = ?")
+            values.append(int(include_in_feed))
         if not assignments:
             return self.get_source(source_id) is not None
         with self._connect() as conn:
@@ -462,7 +486,8 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT e.*, s.name AS source_name, s.display_mode AS source_display_mode,"
-                " s.shortcode AS source_shortcode, s.color AS source_color"
+                " s.shortcode AS source_shortcode, s.color AS source_color,"
+                " s.include_in_feed AS source_include_in_feed"
                 " FROM events e JOIN sources s ON s.id = e.source_id"
                 " WHERE s.enabled = 1"
             ).fetchall()
@@ -481,6 +506,7 @@ class Storage:
                         event=event,
                         shortcode=row["source_shortcode"],
                         color=row["source_color"],
+                        include_in_feed=bool(row["source_include_in_feed"]),
                     )
                 )
         result.sort(key=lambda item: as_local_datetime(item.event.start))
