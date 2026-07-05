@@ -9,10 +9,14 @@ import pytest
 from app.settings import (
     DEFAULT_POWER_DEVICES,
     EVENING_BOUNDARY_KEY,
+    FEED_PUBLIC_HOST_KEY,
     POWER_DEVICES_KEY,
     PowerDevice,
     get_evening_boundary,
+    get_feed_public_host,
     get_power_devices,
+    is_valid_public_host,
+    set_feed_public_host,
     set_power_devices,
 )
 from app.storage import Storage
@@ -102,3 +106,48 @@ class TestPowerDevices:
         )
         devices = get_power_devices(storage)
         assert devices == [PowerDevice("sensor.ok_leistung", "OK")]
+
+
+class TestFeedPublicHost:
+    def test_missing_setting_is_none(self, storage: Storage) -> None:
+        assert get_feed_public_host(storage) is None
+
+    def test_set_and_get_round_trip(self, storage: Storage) -> None:
+        set_feed_public_host(storage, "rnd.ignorelist.com")
+        assert get_feed_public_host(storage) == "rnd.ignorelist.com"
+
+    def test_empty_value_clears_the_host(self, storage: Storage) -> None:
+        set_feed_public_host(storage, "rnd.ignorelist.com")
+        set_feed_public_host(storage, "")
+        assert get_feed_public_host(storage) is None
+
+    def test_stored_garbage_is_ignored_on_read(self, storage: Storage) -> None:
+        # Defense in depth: the admin API validates on write, but a value
+        # written by another path must not leak into a generated URL.
+        storage.set_setting(FEED_PUBLIC_HOST_KEY, "https://böse.example/pfad")
+        assert get_feed_public_host(storage) is None
+
+    @pytest.mark.parametrize(
+        "host",
+        ["rnd.ignorelist.com", "homeassistant.local", "192.168.1.3", "kalender"],
+    )
+    def test_valid_hosts(self, host: str) -> None:
+        assert is_valid_public_host(host)
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "",
+            "https://rnd.ignorelist.com",
+            "host:8098",
+            "host/pfad",
+            "mit leerzeichen",
+            "-strich.de",
+            "strich-.de",
+            "punkt..doppelt",
+            "ümlaut.example",
+            "a" * 300,
+        ],
+    )
+    def test_invalid_hosts(self, host: str) -> None:
+        assert not is_valid_public_host(host)

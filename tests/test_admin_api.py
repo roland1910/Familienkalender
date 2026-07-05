@@ -517,7 +517,7 @@ class TestUpdateAndDeleteSource:
 
 
 class TestFeedAdminEndpoints:
-    def test_get_feed_generates_the_token_and_returns_url_and_path(
+    def test_get_feed_generates_the_token_and_returns_https_url_and_path(
         self, client: TestClient, storage: Storage
     ) -> None:
         from app.settings import get_feed_token
@@ -529,8 +529,10 @@ class TestFeedAdminEndpoints:
         token = get_feed_token(storage)
         assert token is not None
         assert feed["path"] == f"/feed/{token}.ics"
-        # Best-effort absolute URL from the request host + the mapped port.
-        assert feed["url"] == f"http://testserver:8098/feed/{token}.ics"
+        # The feed listener speaks TLS; without a configured public host
+        # the request host is the best-effort guess.
+        assert feed["url"] == f"https://testserver:8098/feed/{token}.ics"
+        assert feed["public_host"] is None
         # Idempotent: a second call keeps the same token.
         assert client.get("/api/admin/feed").json()["feed"]["path"] == feed["path"]
 
@@ -541,7 +543,7 @@ class TestFeedAdminEndpoints:
             "/api/admin/feed", headers={"X-Forwarded-Host": "homeassistant.local:8123"}
         )
         url = response.json()["feed"]["url"]
-        assert url.startswith("http://homeassistant.local:8098/feed/")
+        assert url.startswith("https://homeassistant.local:8098/feed/")
 
     def test_rotate_replaces_the_token_and_old_url_dies(
         self, client: TestClient, storage: Storage
@@ -555,6 +557,51 @@ class TestFeedAdminEndpoints:
         assert new_path != old_path
         assert get_feed_token(storage) is not None
         assert get_feed_token(storage) in new_path
+
+    def test_configured_public_host_wins_over_the_request_host(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/feed/host", json={"host": "rnd.ignorelist.com"}
+        )
+        assert response.status_code == 200
+        feed = response.json()["feed"]
+        assert feed["public_host"] == "rnd.ignorelist.com"
+        assert feed["url"].startswith("https://rnd.ignorelist.com:8098/feed/")
+        # Persisted: later reads (even with a forwarded host) keep using it.
+        again = client.get(
+            "/api/admin/feed", headers={"X-Forwarded-Host": "homeassistant.local"}
+        ).json()["feed"]
+        assert again["url"].startswith("https://rnd.ignorelist.com:8098/feed/")
+
+    def test_empty_host_resets_to_the_request_host(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        client.put("/api/admin/feed/host", json={"host": "rnd.ignorelist.com"})
+        response = client.put("/api/admin/feed/host", json={"host": "  "})
+        assert response.status_code == 200
+        feed = response.json()["feed"]
+        assert feed["public_host"] is None
+        assert feed["url"].startswith("https://testserver:8098/feed/")
+
+    @pytest.mark.parametrize(
+        "bad_host",
+        [
+            "https://rnd.ignorelist.com",  # no scheme
+            "rnd.ignorelist.com:8098",  # no port
+            "rnd.ignorelist.com/feed",  # no path
+            "mit leerzeichen.de",
+            "-beginnt-mit-strich.de",
+            "ümlaut.example",  # non-ASCII (use punycode instead)
+            "a" * 300 + ".de",  # far beyond the DNS length limit
+        ],
+    )
+    def test_invalid_host_is_rejected(
+        self, client: TestClient, storage: Storage, bad_host: str
+    ) -> None:
+        response = client.put("/api/admin/feed/host", json={"host": bad_host})
+        assert response.status_code == 400
+        assert "Host" in response.json()["detail"]
 
 
 class TestCaldavCalendarsEndpoint:

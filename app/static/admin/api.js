@@ -84,6 +84,10 @@ export function rotateFeed() {
   return request("POST", "api/admin/feed/rotate");
 }
 
+export function saveFeedHost(host) {
+  return request("PUT", "api/admin/feed/host", { host });
+}
+
 export function triggerSync() {
   return request("POST", "api/sync");
 }

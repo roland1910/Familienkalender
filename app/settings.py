@@ -27,9 +27,19 @@ GOOGLE_CLIENT_SECRET_KEY = "google_client_secret"
 # a JSON array of {"entity_id", "name"} objects.
 POWER_DEVICES_KEY = "power_devices"
 # URL token protecting the subscribable ICS feed (GET /feed/<token>.ics).
-# It is the sole auth on the direct LAN port, so it is generated with
+# It is the sole auth on the dedicated feed port, so it is generated with
 # plenty of entropy and never returned by any non-admin endpoint.
 FEED_TOKEN_KEY = "feed_token"
+# Public hostname shown in the admin UI's subscription URL (the router
+# forwards external port 8098 to the feed listener). Bare host only —
+# no scheme, port or path; empty/missing falls back to the request host.
+FEED_PUBLIC_HOST_KEY = "feed_public_host"
+
+# DNS limits: 253 chars total, labels of 1-63 chars, letters/digits/
+# hyphens, no leading/trailing hyphen. Also matches plain IPv4 literals.
+MAX_PUBLIC_HOST_LENGTH = 253
+_HOST_LABEL = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
+PUBLIC_HOST_PATTERN = re.compile(rf"^{_HOST_LABEL}(\.{_HOST_LABEL})*$", re.IGNORECASE)
 
 # HA entity ids are lowercase domain.object_id. Shared between the admin API
 # (validates on write) and get_power_devices (defense in depth on read, in
@@ -102,6 +112,38 @@ def rotate_feed_token(storage: Storage) -> str:
     token = secrets.token_urlsafe(32)
     storage.set_setting(FEED_TOKEN_KEY, token)
     return token
+
+
+def is_valid_public_host(host: str) -> bool:
+    """Whether host is a bare hostname/IPv4 usable in the feed URL.
+
+    Deliberately ASCII-only (internationalized names go in as punycode) —
+    the value ends up verbatim in a URL shown by the admin UI.
+    """
+    return (
+        0 < len(host) <= MAX_PUBLIC_HOST_LENGTH
+        and PUBLIC_HOST_PATTERN.fullmatch(host) is not None
+    )
+
+
+def get_feed_public_host(storage: Storage) -> str | None:
+    """The configured public feed host, or None to use the request host.
+
+    Re-validated on read (defense in depth): a value smuggled into the
+    settings table by another write path must not leak into generated URLs.
+    """
+    raw = storage.get_setting(FEED_PUBLIC_HOST_KEY)
+    if raw and is_valid_public_host(raw):
+        return raw
+    if raw:
+        logger.warning("Ignoring invalid stored feed public host: %r", raw)
+    return None
+
+
+def set_feed_public_host(storage: Storage, host: str) -> None:
+    """Persist the public feed host; an empty value clears the override
+    (validation happens in the API layer)."""
+    storage.set_setting(FEED_PUBLIC_HOST_KEY, host)
 
 
 def get_power_devices(storage: Storage) -> list[PowerDevice]:

@@ -1,5 +1,6 @@
-// Feed subscription section: shows the subscription URL (with the URL
-// token) and rotates the token via a two-step confirmation button.
+// Feed subscription section: shows the https subscription URL (with the
+// URL token), lets the admin set the public host for it and rotates the
+// token via a two-step confirmation button.
 
 import * as api from "./api.js";
 import { byId, showMessage } from "./dom.js";
@@ -7,9 +8,10 @@ import { byId, showMessage } from "./dom.js";
 const ROTATE_LABEL = "Neuen Link erzeugen";
 
 function applyFeed(feed) {
-  // Prefer the best-effort absolute URL; fall back to the bare path
-  // (the hint below the field explains how to complete it).
+  // Prefer the absolute URL (configured public host, else the request
+  // host); fall back to the bare path.
   byId("feed-url").value = feed.url || feed.path;
+  byId("feed-host").value = feed.public_host || "";
 }
 
 export async function loadFeed() {
@@ -18,6 +20,17 @@ export async function loadFeed() {
 }
 
 export function initFeed() {
+  byId("btn-feed-host-save").addEventListener("click", async () => {
+    const messageNode = byId("feed-message");
+    try {
+      const { feed } = await api.saveFeedHost(byId("feed-host").value.trim());
+      applyFeed(feed);
+      showMessage(messageNode, "Host gespeichert — die Abo-Adresse ist aktualisiert.");
+    } catch (error) {
+      showMessage(messageNode, error.message, true);
+    }
+  });
+
   const button = byId("btn-feed-rotate");
   let armed = false;
   button.addEventListener("click", async () => {

@@ -164,16 +164,26 @@
         familienrelevanten Termine aus den gefilterten Quellen
         (Abendgrenze/mehrt&auml;gig), Titel mit Quellen-K&uuml;rzel als Pr&auml;fix.</p>
       <div class="form-grid">
-        <label for="feed-url">Abo-Adresse (nur im Heimnetz erreichbar)</label>
+        <label for="feed-url">Abo-Adresse (https, auch von unterwegs erreichbar)</label>
         <input id="feed-url" type="text" readonly spellcheck="false">
+        <label for="feed-host">&Ouml;ffentlicher Host der Abo-Adresse
+          (leer = Adresse von Home Assistant)</label>
+        <input id="feed-host" type="text" autocomplete="off" spellcheck="false"
+               placeholder="rnd.ignorelist.com">
       </div>
-      <p class="hint">Anleitung f&uuml;r Android: App &#8222;ICSx&#8309;&#8220;
-        installieren, dort mit &#8222;+&#8220; ein neues Abo anlegen und die
-        Abo-Adresse einf&uuml;gen. Stimmt der Host-Teil der Adresse nicht,
-        einfach die IP-Adresse von Home Assistant einsetzen &#8211; der Rest
-        (Port 8098 und Pfad) bleibt gleich. Der Link enth&auml;lt den geheimen
-        Zugriffs-Token: nur innerhalb der Familie weitergeben.</p>
+      <p class="hint">Der Feed l&auml;uft verschl&uuml;sselt (TLS mit dem
+        Home-Assistant-Zertifikat) auf einem eigenen Port, auf dem sonst
+        nichts erreichbar ist. Damit das Abo auch au&szlig;erhalb des
+        Heimnetzes funktioniert, im Router eine Portweiterleitung einrichten:
+        externer Port 8098 (TCP) &#8594; IP des Raspberry Pi, Port 8098.
+        Anleitung f&uuml;r Android: App &#8222;ICSx&#8309;&#8220; installieren,
+        dort mit &#8222;+&#8220; ein neues Abo anlegen und die Abo-Adresse
+        einf&uuml;gen. Der Link enth&auml;lt den geheimen Zugriffs-Token:
+        nur innerhalb der Familie weitergeben.</p>
       <div class="button-row">
+        <button id="btn-feed-host-save" class="action-button" type="button">
+          Host speichern
+        </button>
         <button id="btn-feed-rotate" class="action-button" type="button">
           Neuen Link erzeugen
         </button>

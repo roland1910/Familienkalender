@@ -310,10 +310,9 @@ def _request_hostname(request: Request) -> str | None:
     """Best-effort hostname of the HA instance as the browser sees it.
 
     Behind ingress the browser talks to the HA frontend, so its host
-    (X-Forwarded-Host if the proxy set it, else Host) is the best guess
-    for where port 8098 is reachable too. This is a convenience for the
-    displayed URL only — the admin UI tells the user to fix the host if
-    it does not match.
+    (X-Forwarded-Host if the proxy set it, else Host) is the fallback
+    guess for where the feed port is reachable — used only while no
+    public host is configured (settings.get_feed_public_host).
     """
     raw = request.headers.get("x-forwarded-host") or request.headers.get("host")
     if not raw:
@@ -327,13 +326,21 @@ def _request_hostname(request: Request) -> str | None:
 
 def _feed_payload(request: Request, token: str) -> dict:
     path = f"/feed/{token}.ics"
-    hostname = _request_hostname(request)
+    public_host = settings.get_feed_public_host(get_storage())
+    hostname = public_host or _request_hostname(request)
     return {
         "feed": {
             "path": path,
-            "url": f"http://{hostname}:{FEED_HOST_PORT}{path}" if hostname else None,
+            # The feed listener terminates TLS itself (app.serve), so the
+            # subscription URL is https on the forwarded port.
+            "url": f"https://{hostname}:{FEED_HOST_PORT}{path}" if hostname else None,
+            "public_host": public_host,
         }
     }
+
+
+class FeedHostUpdate(BaseModel):
+    host: str
 
 
 @router.get("/feed")
@@ -346,6 +353,25 @@ async def get_feed(request: Request) -> dict:
 async def rotate_feed(request: Request) -> dict:
     """Replace the feed token — every previously shared feed URL stops working."""
     return _feed_payload(request, settings.rotate_feed_token(get_storage()))
+
+
+@router.put("/feed/host")
+async def update_feed_host(update: FeedHostUpdate, request: Request) -> dict:
+    """Set the public hostname for the displayed subscription URL.
+
+    An empty value clears the override (back to the request-host guess).
+    Bare hostname/IPv4 only — the value goes verbatim into the URL.
+    """
+    host = update.host.strip()
+    if host and not settings.is_valid_public_host(host):
+        raise HTTPException(
+            status_code=400,
+            detail="Ungültiger Host — bitte nur den Hostnamen angeben"
+            " (ohne https://, Port oder Pfad), z. B. rnd.ignorelist.com.",
+        )
+    storage = get_storage()
+    settings.set_feed_public_host(storage, host)
+    return _feed_payload(request, settings.ensure_feed_token(storage))
 
 
 # -- sources ---------------------------------------------------------------
