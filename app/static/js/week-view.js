@@ -143,6 +143,11 @@ export function applyWeekAutoZoom(container) {
   const view = container.querySelector(".week-view");
   if (!view) return;
   const scroll = view.querySelector(".week-scroll");
+  // Guard mirrors the .week-view check above: renderWeekView always creates
+  // both together, but this is also called from main.js's debounced resize
+  // handler, which can fire after the view was replaced (e.g. a switch to
+  // month/power) — no-op instead of a TypeError on a stale reference.
+  if (!scroll) return;
   const visibleHours = Number(view.dataset.visibleHours);
   const height = computeHourHeight(scroll.clientHeight, visibleHours);
   view.style.setProperty("--hour-height", `${height}px`);
@@ -298,5 +303,10 @@ export function renderWeekView(container, anchor, events, today, tags = {}) {
   view.append(scroll);
   container.replaceChildren(view);
   // Only measurable once attached: fit the hour rows to the actual space.
+  // Note this call is superseded when the calendar legend is visible: after
+  // renderWeekView returns, main.js's render() calls applyWeekAutoZoom a
+  // second time once the legend has been (re-)rendered, because the legend
+  // changes the space available to the grid above it. The result computed
+  // here is then simply overwritten with the correct one — see main.js.
   applyWeekAutoZoom(container);
 }

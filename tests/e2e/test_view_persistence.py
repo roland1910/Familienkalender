@@ -81,6 +81,34 @@ def test_power_mode_persists_across_reload(page: Page, server_url: str) -> None:
     expect(page.locator("#calendar .month-view")).to_be_visible()
 
 
+def test_week_view_and_power_mode_survive_reload_together(page: Page, server_url: str) -> None:
+    # view and mode are independent enums in the persisted state (see
+    # view-memory.js) — this guards their interaction in
+    # restoreViewState/switchMode, not just each in isolation: restoring
+    # must land on the power view (mode wins on screen) while still
+    # remembering the paged week underneath for when the user switches back.
+    goto_calendar(page, server_url)
+    page.locator("#btn-week").click()
+    page.locator("#btn-next").click()
+    next_monday = monday_of_week(date.today()) + timedelta(days=7)
+    expect(_week_column(page, next_monday)).to_be_attached()
+
+    page.locator("#btn-mode-power").click()
+    expect(page.locator("#power")).to_be_visible()
+
+    page.reload()
+    expect(page.locator("#power")).to_be_visible()
+    expect(page.locator("#btn-mode-power")).to_have_class(ACTIVE)
+    expect(page.locator("#btn-week")).to_have_class(ACTIVE)
+    expect(page.locator("#calendar")).to_be_hidden()
+
+    # Switching back to the calendar must show the previously paged week,
+    # not reset it back to the current one.
+    page.locator("#btn-mode-calendar").click()
+    expect(page.locator(".week-view")).to_be_visible()
+    expect(_week_column(page, next_monday)).to_be_attached()
+
+
 def test_broken_localstorage_falls_back_to_defaults(page: Page, server_url: str) -> None:
     goto_calendar(page, server_url)
     page.evaluate(

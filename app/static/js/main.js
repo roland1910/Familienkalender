@@ -63,6 +63,12 @@ function render() {
   }
   // The legend just changed the space above it — re-fit the week grid to
   // the final layout (first render: the legend appears after the view).
+  // This deliberately re-runs applyWeekAutoZoom a second time: renderWeekView
+  // already called it once (see week-view.js) against the layout without the
+  // legend; when the legend is visible (calendar mode) that first result is
+  // stale and gets overwritten here with the measurement that accounts for
+  // the legend's height. In power mode the legend is hidden and this call is
+  // a harmless no-op re-measurement of the same layout.
   if (state.view === "week") applyWeekAutoZoom(container);
 }
 
@@ -216,6 +222,16 @@ function restoreViewState() {
   if (!saved) return; // missing or invalid -> keep the defaults
   state.view = saved.view;
   state.anchor = saved.anchor;
+  // view and mode are independent enums (see view-memory.js), so restoring
+  // view/anchor above is a plain field assignment. mode instead goes
+  // through switchMode, deliberately: it is the only place that knows how
+  // to toggle the power view's DOM/lifecycle (starting startPowerView,
+  // toggling body classes, hiding #calendar). This means switchMode also
+  // calls persistViewState() and render() again here, writing back and
+  // re-rendering the very view/anchor/mode combination that was just
+  // loaded — a redundant but idempotent re-persist/render (init() calls
+  // render()/refresh() again right after restoreViewState() anyway), not a
+  // real user-triggered transition.
   if (saved.mode === "power") switchMode("power");
 }
 

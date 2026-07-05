@@ -9,6 +9,7 @@ import { test } from "node:test";
 
 import { parseEvent } from "../../app/static/js/events.js";
 import {
+  applyWeekAutoZoom,
   computeHourHeight,
   DEFAULT_HOUR_HEIGHT_PX,
   gridStartHour,
@@ -118,4 +119,38 @@ test("computeHourHeight: unusable hour counts fall back to the default", () => {
   assert.equal(computeHourHeight(960, 0), DEFAULT_HOUR_HEIGHT_PX);
   assert.equal(computeHourHeight(960, Number.NaN), DEFAULT_HOUR_HEIGHT_PX);
   assert.equal(computeHourHeight(960, -3), DEFAULT_HOUR_HEIGHT_PX);
+});
+
+// -- applyWeekAutoZoom: defensive DOM guards -------------------------------
+
+// Minimal fakes standing in for the real DOM nodes: just enough surface
+// (querySelector/dataset/style.setProperty/clientHeight) for
+// applyWeekAutoZoom to run without a browser (no jsdom dependency here).
+function fakeView({ withScroll, visibleHours = "16", clientHeight = 960 }) {
+  const style = { properties: {}, setProperty(name, value) { this.properties[name] = value; } };
+  const scroll = withScroll ? { clientHeight } : null;
+  return {
+    dataset: { visibleHours },
+    style,
+    querySelector: (selector) => (selector === ".week-scroll" ? scroll : null),
+  };
+}
+
+test("applyWeekAutoZoom: no .week-view -> no-op", () => {
+  const container = { querySelector: () => null };
+  assert.doesNotThrow(() => applyWeekAutoZoom(container));
+});
+
+test("applyWeekAutoZoom: .week-view without .week-scroll -> no-op, no TypeError", () => {
+  const view = fakeView({ withScroll: false });
+  const container = { querySelector: () => view };
+  assert.doesNotThrow(() => applyWeekAutoZoom(container));
+  assert.deepEqual(view.style.properties, {});
+});
+
+test("applyWeekAutoZoom: both present -> sets --hour-height from the measured scroll", () => {
+  const view = fakeView({ withScroll: true, visibleHours: "16", clientHeight: 960 });
+  const container = { querySelector: () => view };
+  applyWeekAutoZoom(container);
+  assert.equal(view.style.properties["--hour-height"], "60px");
 });
