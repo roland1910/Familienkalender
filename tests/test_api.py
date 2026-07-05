@@ -99,6 +99,15 @@ class TestSourcesEndpoint:
         assert "last_sync_at" in sources[1]
         assert "last_sync_error" in sources[1]
 
+    def test_lists_sources_with_their_color(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.add_source(type="google", name="Marina", config={}, color="#ff0066")
+        storage.add_source(type="google", name="Valentin", config={})
+        sources = client.get("/api/sources").json()["sources"]
+        assert sources[0]["color"] == "#ff0066"
+        assert sources[1]["color"] == ""  # empty = frontend palette default
+
 
 class TestEventsEndpoint:
     def test_returns_events_in_range(self, client: TestClient, storage: Storage) -> None:
@@ -131,6 +140,16 @@ class TestEventsEndpoint:
         assert event["all_day"] is False
         assert event["start"] == "2026-07-10T16:00:00+02:00"
         assert event["end"] == "2026-07-10T18:00:00+02:00"
+
+    def test_events_carry_the_source_color(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        full_id, _ = seed_two_sources(storage)
+        storage.update_source(full_id, color="#ff0066")
+        response = client.get("/api/events?from=2026-07-10&to=2026-07-10")
+        events = {event["uid"]: event for event in response.json()["events"]}
+        assert events["marina-morning"]["source_color"] == "#ff0066"
+        assert events["firma-evening"]["source_color"] == ""  # palette default
 
     def test_serializes_all_day_events_as_dates(
         self, client: TestClient, storage: Storage

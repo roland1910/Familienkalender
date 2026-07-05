@@ -31,6 +31,7 @@ from app.models import (
     UnknownTagError,
     as_local_datetime,
     is_valid_shortcode,
+    is_valid_source_color,
 )
 
 DB_FILENAME = "familienkalender.db"
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS sources (
     display_mode TEXT NOT NULL DEFAULT 'full',
     last_sync_at TEXT,
     last_sync_error TEXT,
-    shortcode TEXT NOT NULL DEFAULT ''
+    shortcode TEXT NOT NULL DEFAULT '',
+    color TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,6 +135,7 @@ def _row_to_source(row: sqlite3.Row) -> Source:
         last_sync_at=datetime.fromisoformat(last_sync_at) if last_sync_at else None,
         last_sync_error=row["last_sync_error"],
         shortcode=row["shortcode"],
+        color=row["color"],
     )
 
 
@@ -163,6 +166,10 @@ class Storage:
         if "shortcode" not in columns:
             conn.execute(
                 "ALTER TABLE sources ADD COLUMN shortcode TEXT NOT NULL DEFAULT ''"
+            )
+        if "color" not in columns:
+            conn.execute(
+                "ALTER TABLE sources ADD COLUMN color TEXT NOT NULL DEFAULT ''"
             )
 
     def _ensure_private_db_file(self) -> None:
@@ -204,6 +211,7 @@ class Storage:
         enabled: bool = True,
         display_mode: str = "full",
         shortcode: str = "",
+        color: str = "",
     ) -> int:
         if type not in SOURCE_TYPES:
             raise ValueError(f"unknown source type: {type!r}")
@@ -211,11 +219,22 @@ class Storage:
             raise ValueError(f"unknown display mode: {display_mode!r}")
         if not is_valid_shortcode(shortcode):
             raise ValueError(f"invalid shortcode: {shortcode!r}")
+        if not is_valid_source_color(color):
+            raise ValueError(f"invalid source color: {color!r}")
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO sources (type, name, config, enabled, display_mode, shortcode)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (type, name, json.dumps(config), int(enabled), display_mode, shortcode),
+                "INSERT INTO sources"
+                " (type, name, config, enabled, display_mode, shortcode, color)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    type,
+                    name,
+                    json.dumps(config),
+                    int(enabled),
+                    display_mode,
+                    shortcode,
+                    color,
+                ),
             )
             return int(cursor.lastrowid or 0)
 
@@ -238,12 +257,15 @@ class Storage:
         enabled: bool | None = None,
         display_mode: str | None = None,
         shortcode: str | None = None,
+        color: str | None = None,
     ) -> bool:
         """Partially update a source; returns False if it does not exist."""
         if display_mode is not None and display_mode not in DISPLAY_MODES:
             raise ValueError(f"unknown display mode: {display_mode!r}")
         if shortcode is not None and not is_valid_shortcode(shortcode):
             raise ValueError(f"invalid shortcode: {shortcode!r}")
+        if color is not None and not is_valid_source_color(color):
+            raise ValueError(f"invalid source color: {color!r}")
         assignments: list[str] = []
         values: list = []
         if name is not None:
@@ -261,6 +283,9 @@ class Storage:
         if shortcode is not None:
             assignments.append("shortcode = ?")
             values.append(shortcode)
+        if color is not None:
+            assignments.append("color = ?")
+            values.append(color)
         if not assignments:
             return self.get_source(source_id) is not None
         with self._connect() as conn:
@@ -437,7 +462,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT e.*, s.name AS source_name, s.display_mode AS source_display_mode,"
-                " s.shortcode AS source_shortcode"
+                " s.shortcode AS source_shortcode, s.color AS source_color"
                 " FROM events e JOIN sources s ON s.id = e.source_id"
                 " WHERE s.enabled = 1"
             ).fetchall()
@@ -455,6 +480,7 @@ class Storage:
                         display_mode=row["source_display_mode"],
                         event=event,
                         shortcode=row["source_shortcode"],
+                        color=row["source_color"],
                     )
                 )
         result.sort(key=lambda item: as_local_datetime(item.event.start))

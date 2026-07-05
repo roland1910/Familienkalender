@@ -432,6 +432,50 @@ class TestUpdateAndDeleteSource:
         response = client.get("/api/admin/sources")
         assert response.json()["sources"][0]["shortcode"] == "RMV"
 
+    def test_patch_color_normalizes_and_stores(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(type="caldav", name="Firma", config=CALDAV_CONFIG)
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"color": " #FF0066 "}
+        )
+        assert response.status_code == 200
+        assert response.json()["source"]["color"] == "#ff0066"
+        assert storage.get_source(source_id).color == "#ff0066"
+
+    def test_patch_color_can_be_cleared(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, color="#ff0066"
+        )
+        response = client.patch(f"/api/admin/sources/{source_id}", json={"color": ""})
+        assert response.status_code == 200
+        assert storage.get_source(source_id).color == ""
+
+    @pytest.mark.parametrize(
+        "bad", ["red", "#fff", "#ff00667f", "url(x)", "#ff0066;x:y"]
+    )
+    def test_patch_invalid_color_is_400_german(
+        self, client: TestClient, storage: Storage, bad: str
+    ) -> None:
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, color="#ff0066"
+        )
+        response = client.patch(f"/api/admin/sources/{source_id}", json={"color": bad})
+        assert response.status_code == 400
+        assert "Farbe" in response.json()["detail"]
+        assert storage.get_source(source_id).color == "#ff0066"  # unchanged
+
+    def test_sources_list_includes_color(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, color="#ff0066"
+        )
+        response = client.get("/api/admin/sources")
+        assert response.json()["sources"][0]["color"] == "#ff0066"
+
     def test_patch_config_keeps_stored_password_when_masked(
         self, client: TestClient, storage: Storage
     ) -> None:

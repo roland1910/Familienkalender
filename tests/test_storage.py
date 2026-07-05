@@ -236,6 +236,98 @@ class TestShortcode:
         assert len(second.get_events(WINDOW_START, WINDOW_END)) == 1
 
 
+class TestSourceColor:
+    """The optional admin-configured display color of a source."""
+
+    def test_color_defaults_to_empty(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_source(type="google", name="Marina", config={})
+        assert storage.list_sources()[0].color == ""
+
+    def test_color_roundtrip_via_add_and_update(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, color="#ff0066"
+        )
+        assert storage.get_source(source_id).color == "#ff0066"
+        assert storage.update_source(source_id, color="#00aa11") is True
+        assert storage.get_source(source_id).color == "#00aa11"
+
+    def test_color_can_be_cleared(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, color="#ff0066"
+        )
+        storage.update_source(source_id, color="")
+        assert storage.get_source(source_id).color == ""
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "red",  # named colors are not allowed
+            "#FF0066",  # uppercase is rejected at the storage layer
+            "#fff",  # short form
+            "#ff00667f",  # alpha channel
+            "#ff006",  # too short
+            "ff0066",  # missing hash
+            "#ff0066; background:url(x)",  # CSS injection attempt
+            "var(--evil)",
+        ],
+    )
+    def test_invalid_colors_are_rejected(self, tmp_path: Path, bad: str) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        with pytest.raises(ValueError):
+            storage.update_source(source_id, color=bad)
+        with pytest.raises(ValueError):
+            storage.add_source(type="caldav", name="X", config={}, color=bad)
+
+    def test_update_without_color_keeps_it(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, color="#ff0066"
+        )
+        storage.update_source(source_id, name="Firma neu")
+        assert storage.get_source(source_id).color == "#ff0066"
+
+    def test_existing_db_without_column_is_migrated(self, tmp_path: Path) -> None:
+        """A database from an older version gains the column (default empty)."""
+        db_path = tmp_path / "familienkalender.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                display_mode TEXT NOT NULL DEFAULT 'full',
+                last_sync_at TEXT,
+                last_sync_error TEXT,
+                shortcode TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO sources (type, name) VALUES ('google', 'Marina');
+            """
+        )
+        conn.commit()
+        conn.close()
+        storage = Storage(db_path)
+        source = storage.list_sources()[0]
+        assert source.color == ""
+        assert storage.update_source(source.id, color="#123abc") is True
+        assert storage.get_source(source.id).color == "#123abc"
+
+    def test_get_events_carries_the_source_color(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, color="#ff0066"
+        )
+        storage.sync_events(source_id, [timed_event()], WINDOW_START, WINDOW_END, synced_at=NOW)
+        stored = storage.get_events(WINDOW_START, WINDOW_END)
+        assert stored[0].color == "#ff0066"
+
+
 class TestSourceCrud:
     def test_get_source_returns_the_source(self, tmp_path: Path) -> None:
         storage = make_storage(tmp_path)

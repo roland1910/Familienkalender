@@ -229,6 +229,9 @@ def _serialize_event(item: StoredEvent) -> dict:
     return {
         "source_id": item.source_id,
         "source_name": item.source_name,
+        # Admin-configured source color ("#rrggbb", validated on write) or
+        # "" for the frontend's palette default.
+        "source_color": item.color,
         "uid": event.uid,
         "title": event.title,
         "start": start,
@@ -274,6 +277,7 @@ async def list_sources() -> dict:
                 "name": source.name,
                 "enabled": source.enabled,
                 "display_mode": source.display_mode,
+                "color": source.color,
                 "last_sync_at": (
                     source.last_sync_at.isoformat() if source.last_sync_at else None
                 ),

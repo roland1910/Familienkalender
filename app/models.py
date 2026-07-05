@@ -24,6 +24,19 @@ def is_valid_shortcode(value: str) -> bool:
     return SHORTCODE_PATTERN.fullmatch(value) is not None
 
 
+# Optional per-source display color. Strictly "#rrggbb" (lowercase hex) or
+# empty ("use the frontend's default palette"). The value ends up
+# interpolated into a CSS custom property in the frontend, so nothing
+# beyond this exact shape may ever be stored (CSS injection guard); the
+# frontend re-validates defensively before using it.
+SOURCE_COLOR_PATTERN = re.compile(r"^(#[0-9a-f]{6})?$")
+
+
+def is_valid_source_color(value: str) -> bool:
+    """Whether ``value`` is an acceptable source color (may be empty)."""
+    return SOURCE_COLOR_PATTERN.fullmatch(value) is not None
+
+
 @dataclass(frozen=True, slots=True)
 class TagOption:
     """One selectable day-tag symbol (id is stable, emoji is the display)."""
@@ -138,6 +151,9 @@ class Source:
     last_sync_error: str | None
     # Title prefix for the ICS feed; empty = no prefix (see is_valid_shortcode).
     shortcode: str = ""
+    # Display color "#rrggbb"; empty = frontend palette default
+    # (see is_valid_source_color).
+    color: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,3 +166,5 @@ class StoredEvent:
     event: CalendarEvent
     # Source shortcode (title prefix in the ICS feed); empty = none.
     shortcode: str = ""
+    # Source display color "#rrggbb"; empty = frontend palette default.
+    color: str = ""
