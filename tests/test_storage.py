@@ -209,6 +209,32 @@ class TestShortcode:
         assert storage.update_source(source.id, shortcode="RX") is True
         assert storage.get_source(source.id).shortcode == "RX"
 
+    def test_instantiating_storage_twice_on_the_same_db_is_idempotent(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-running the schema/migration on an up-to-date database is a no-op.
+
+        The add-on process restarts (watchdog, manual restart, upgrade)
+        create a fresh Storage on the same db_path every time — this must
+        never fail and must never touch existing data.
+        """
+        db_path = tmp_path / "familienkalender.db"
+        first = Storage(db_path)
+        source_id = first.add_source(
+            type="caldav", name="Firma", config={}, shortcode="RX"
+        )
+        first.sync_events(
+            source_id, [timed_event()], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+
+        second = Storage(db_path)  # must not raise
+
+        sources = second.list_sources()
+        assert len(sources) == 1
+        assert sources[0].name == "Firma"
+        assert sources[0].shortcode == "RX"
+        assert len(second.get_events(WINDOW_START, WINDOW_END)) == 1
+
 
 class TestSourceCrud:
     def test_get_source_returns_the_source(self, tmp_path: Path) -> None:

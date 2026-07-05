@@ -119,6 +119,31 @@ class TestFeedContent:
         titles = summaries(parse_feed(build_feed(storage, now=NOW)))
         assert "Kundentermin" in titles
 
+    def test_freshly_created_source_without_a_shortcode_stays_unprefixed(
+        self, storage: Storage
+    ) -> None:
+        # Default case: a source created without ever setting a shortcode
+        # (add_source's default), not one explicitly cleared afterwards.
+        work_id = storage.add_source(
+            type="caldav", name="Firma neu", config={}, display_mode="filtered"
+        )
+        storage.sync_events(
+            work_id,
+            [
+                _timed(
+                    "new-evening",
+                    "Abendtermin",
+                    datetime(2026, 7, 10, 19, 0, tzinfo=BERLIN),
+                    datetime(2026, 7, 10, 20, 0, tzinfo=BERLIN),
+                )
+            ],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        titles = summaries(parse_feed(build_feed(storage, now=NOW)))
+        assert "Abendtermin" in titles
+
     def test_events_outside_the_sync_window_are_excluded(
         self, storage: Storage
     ) -> None:
