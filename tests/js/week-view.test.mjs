@@ -1,13 +1,19 @@
-// Unit tests for the collapsed night hours of the week view: the time
+// Unit tests for the collapsed night hours of the week view (the time
 // grid starts at 08:00 unless a timed event is rendered earlier in the
-// visible week — then at that event's full hour. All-day events and
-// events outside the week never expand the grid.
+// visible week — then at that event's full hour; all-day events and
+// events outside the week never expand the grid) and for the auto-zoom
+// hour height (visible hours must fill the available grid height).
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { parseEvent } from "../../app/static/js/events.js";
-import { gridStartHour } from "../../app/static/js/week-view.js";
+import {
+  computeHourHeight,
+  DEFAULT_HOUR_HEIGHT_PX,
+  gridStartHour,
+  MIN_HOUR_HEIGHT_PX,
+} from "../../app/static/js/week-view.js";
 
 // Monday 2026-07-06; date-times without offset are parsed as local time,
 // matching what the views do with the API payload.
@@ -78,4 +84,38 @@ test("gridStartHour: a multi-day timed event spanning full days is a bar, not gr
   // spansFullDays), so it must not expand the time grid either.
   const events = [timed("2026-07-04T09:00:00", "2026-07-07T17:00:00")];
   assert.equal(gridStartHour(events, WEEK_START), 8);
+});
+
+// -- auto-zoom: hour height from the available grid height ----------------
+
+test("computeHourHeight: visible hours exactly fill the available height", () => {
+  assert.equal(computeHourHeight(960, 16), 60);
+});
+
+test("computeHourHeight: fractional heights are floored (no scrollbar from rounding)", () => {
+  // 1000 / 16 = 62.5 -> 62, so 16 * 62 = 992 <= 1000 stays scroll-free.
+  assert.equal(computeHourHeight(1000, 16), 62);
+});
+
+test("computeHourHeight: a large display gets tall hours (no upper cap)", () => {
+  assert.equal(computeHourHeight(1920, 16), 120);
+});
+
+test("computeHourHeight: never below the readability minimum", () => {
+  assert.equal(computeHourHeight(200, 16), MIN_HOUR_HEIGHT_PX);
+  assert.equal(computeHourHeight(1, 24), MIN_HOUR_HEIGHT_PX);
+});
+
+test("computeHourHeight: unusable heights fall back to the default", () => {
+  // 0 = container hidden or not laid out yet; the default keeps the grid usable.
+  assert.equal(computeHourHeight(0, 16), DEFAULT_HOUR_HEIGHT_PX);
+  assert.equal(computeHourHeight(-50, 16), DEFAULT_HOUR_HEIGHT_PX);
+  assert.equal(computeHourHeight(Number.NaN, 16), DEFAULT_HOUR_HEIGHT_PX);
+  assert.equal(computeHourHeight(undefined, 16), DEFAULT_HOUR_HEIGHT_PX);
+});
+
+test("computeHourHeight: unusable hour counts fall back to the default", () => {
+  assert.equal(computeHourHeight(960, 0), DEFAULT_HOUR_HEIGHT_PX);
+  assert.equal(computeHourHeight(960, Number.NaN), DEFAULT_HOUR_HEIGHT_PX);
+  assert.equal(computeHourHeight(960, -3), DEFAULT_HOUR_HEIGHT_PX);
 });

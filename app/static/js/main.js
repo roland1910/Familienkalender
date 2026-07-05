@@ -18,11 +18,13 @@ import { closeDayPopover, initPopover } from "./popover.js";
 import { startPowerView, stopPowerView } from "./power-view.js";
 import { state } from "./state.js";
 import { loadViewState, saveViewState } from "./view-memory.js";
-import { renderWeekView, weekRange } from "./week-view.js";
+import { applyWeekAutoZoom, renderWeekView, weekRange } from "./week-view.js";
 
 const REFRESH_INTERVAL_MS = 60000;
 // Extra days fetched around the visible range so paging feels instant.
 const FETCH_BUFFER_DAYS = 7;
+// Debounce for resize/orientation events before re-fitting the week grid.
+const RESIZE_DEBOUNCE_MS = 150;
 
 function today() {
   return startOfDay(new Date());
@@ -59,6 +61,9 @@ function render() {
   } else {
     renderLegend(legend, state.sources);
   }
+  // The legend just changed the space above it — re-fit the week grid to
+  // the final layout (first render: the legend appears after the view).
+  if (state.view === "week") applyWeekAutoZoom(container);
 }
 
 function setStale(stale) {
@@ -192,6 +197,16 @@ async function applyAdminVisibility() {
   }
 }
 
+// Re-fit the week grid to the new window size (debounced): only the
+// --hour-height variable changes, no re-render of the events needed.
+let resizeTimer;
+function onWindowResized() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    applyWeekAutoZoom(document.getElementById("calendar"));
+  }, RESIZE_DEBOUNCE_MS);
+}
+
 // Restore the persisted UI position before the first render. The mode is
 // deliberately included: the kiosk may live on the power view for hours,
 // and a reload (watchdog, HA restart) should bring it back there instead
@@ -221,6 +236,8 @@ function init() {
     onSwipeLeft: () => navigate(1),
     onSwipeRight: () => navigate(-1),
   });
+  window.addEventListener("resize", onWindowResized);
+  window.addEventListener("orientationchange", onWindowResized);
   render();
   refresh();
   setInterval(refresh, REFRESH_INTERVAL_MS);

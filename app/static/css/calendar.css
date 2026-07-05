@@ -647,6 +647,10 @@ body.mode-power .status-badge {
 /* -- week view -------------------------------------------------------------- */
 
 .week-view {
+  /* Auto-zoom: all vertical grid positions derive from this variable.
+     week-view.js overwrites it so the visible hours fill the available
+     height; 60px is only the fallback while nothing is measurable. */
+  --hour-height: 60px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -789,6 +793,8 @@ body.mode-power .status-badge {
   font-size: 13px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.4);
+  /* Very short events stay readable regardless of the auto-zoom level. */
+  min-height: 24px;
 }
 
 /* -- narrow layout (HA ingress side panel) ---------------------------------- */

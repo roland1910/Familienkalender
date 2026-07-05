@@ -1,9 +1,15 @@
 // Week view: 7 columns Mon-Sun. Full-day and multi-day events appear as
 // bars in a lane-stacked section on top; timed single-day events are
-// positioned on a scrollable time grid. Empty night hours are collapsed:
-// the grid starts at 08:00, or at the full hour of the week's earliest
-// timed event if that is earlier (see gridStartHour). The evening
-// (until 24:00) is always shown.
+// positioned on a time grid. Empty night hours are collapsed: the grid
+// starts at 08:00, or at the full hour of the week's earliest timed
+// event if that is earlier (see gridStartHour). The evening (until
+// 24:00) is always shown.
+//
+// Auto-zoom: the hour height is not fixed — all vertical positions are
+// derived from the CSS variable --hour-height (set on .week-view), which
+// applyWeekAutoZoom computes so the visible hours exactly fill the
+// available height (kiosk: no vertical scrolling). Below the readability
+// minimum the height is clamped and the grid scrolls as a fallback.
 
 import { colorForEvent } from "./colors.js";
 import {
@@ -18,9 +24,12 @@ import { el } from "./dom.js";
 import { groupEventsByDay, spansFullDays } from "./events.js";
 import { openDayPopover } from "./popover.js";
 
-export const HOUR_HEIGHT_PX = 60;
+// Fallback hour height while the container is not measurable (hidden or
+// not yet laid out); also the CSS default of --hour-height.
+export const DEFAULT_HOUR_HEIGHT_PX = 60;
+// Below this, hour rows become unreadable — the grid scrolls instead.
+export const MIN_HOUR_HEIGHT_PX = 24;
 const DEFAULT_GRID_START_HOUR = 8;
-const MIN_EVENT_HEIGHT_PX = 24;
 // Rendering caps: foreign calendars can deliver arbitrarily many events, so
 // the DOM size per view stays bounded. Overflow goes to the day popover.
 const MAX_ALLDAY_LANES = 5;
@@ -109,6 +118,36 @@ function buildAllDaySection(events, start) {
 
 // -- time grid: timed single-day events ----------------------------------
 
+// A vertical distance of `hours` grid hours, expressed in terms of the
+// --hour-height CSS variable so the auto-zoom can rescale the whole grid
+// without a re-render.
+function hourOffset(hours) {
+  return `calc(var(--hour-height) * ${hours})`;
+}
+
+// Pure part of the auto-zoom: the hour row height that makes
+// `visibleHours` rows exactly fill `availableHeight` pixels. Floored so
+// rounding never produces a needless scrollbar; clamped to the
+// readability minimum (then scrolling is the fallback); falls back to
+// the default when the container is not measurable (e.g. hidden).
+export function computeHourHeight(availableHeight, visibleHours) {
+  if (!Number.isFinite(availableHeight) || availableHeight <= 0) return DEFAULT_HOUR_HEIGHT_PX;
+  if (!Number.isFinite(visibleHours) || visibleHours <= 0) return DEFAULT_HOUR_HEIGHT_PX;
+  return Math.max(MIN_HOUR_HEIGHT_PX, Math.floor(availableHeight / visibleHours));
+}
+
+// Measure the rendered week view and set --hour-height so the visible
+// hour range fills the grid area. Called after each render and (from
+// main.js, debounced) on resize/orientation changes.
+export function applyWeekAutoZoom(container) {
+  const view = container.querySelector(".week-view");
+  if (!view) return;
+  const scroll = view.querySelector(".week-scroll");
+  const visibleHours = Number(view.dataset.visibleHours);
+  const height = computeHourHeight(scroll.clientHeight, visibleHours);
+  view.style.setProperty("--hour-height", `${height}px`);
+}
+
 function layoutTimedEvents(dayEvents) {
   // Overlapping events share the column width: greedy lane assignment
   // inside clusters of transitively overlapping events.
@@ -175,14 +214,13 @@ function buildDayColumn(day, dayEvents, today, allEvents, startHour) {
   }
   for (const item of layoutTimedEvents(visible)) {
     const startMinutes = minutesIntoDay(item.start, day);
-    const endMinutes = Math.max(
-      minutesIntoDay(item.end, day),
-      startMinutes + (MIN_EVENT_HEIGHT_PX / HOUR_HEIGHT_PX) * 60,
-    );
+    const endMinutes = minutesIntoDay(item.end, day);
     const node = el("div", "timed-event");
     node.style.setProperty("--source-color", colorForEvent(item.event));
-    node.style.top = `${((startMinutes - startHour * 60) / 60) * HOUR_HEIGHT_PX}px`;
-    node.style.height = `${((endMinutes - startMinutes) / 60) * HOUR_HEIGHT_PX}px`;
+    // All vertical positions scale with --hour-height (auto-zoom); very
+    // short events keep a readable size via min-height in the CSS.
+    node.style.top = hourOffset((startMinutes - startHour * 60) / 60);
+    node.style.height = hourOffset((endMinutes - startMinutes) / 60);
     const width = 100 / item.laneCount;
     node.style.left = `${item.lane * width}%`;
     node.style.width = `calc(${width}% - 2px)`;
@@ -228,14 +266,15 @@ export function renderWeekView(container, anchor, events, today, tags = {}) {
   view.append(buildAllDaySection(events, start));
 
   const startHour = gridStartHour(events, start);
+  view.dataset.visibleHours = String(24 - startHour);
   const scroll = el("div", "week-scroll");
   const grid = el("div", "week-grid");
-  grid.style.height = `${(24 - startHour) * HOUR_HEIGHT_PX}px`;
+  grid.style.height = hourOffset(24 - startHour);
 
   const gutter = el("div", "week-gutter");
   for (let hour = startHour; hour < 24; hour += 1) {
     const label = el("div", "hour-label", `${String(hour).padStart(2, "0")}:00`);
-    label.style.top = `${(hour - startHour) * HOUR_HEIGHT_PX}px`;
+    label.style.top = hourOffset(hour - startHour);
     gutter.append(label);
   }
   grid.append(gutter);
@@ -243,7 +282,7 @@ export function renderWeekView(container, anchor, events, today, tags = {}) {
   const lines = el("div", "hour-lines");
   for (let hour = startHour + 1; hour < 24; hour += 1) {
     const line = el("div", "hour-line");
-    line.style.top = `${(hour - startHour) * HOUR_HEIGHT_PX}px`;
+    line.style.top = hourOffset(hour - startHour);
     lines.append(line);
   }
   grid.append(lines);
@@ -258,4 +297,6 @@ export function renderWeekView(container, anchor, events, today, tags = {}) {
   scroll.append(grid);
   view.append(scroll);
   container.replaceChildren(view);
+  // Only measurable once attached: fit the hour rows to the actual space.
+  applyWeekAutoZoom(container);
 }
