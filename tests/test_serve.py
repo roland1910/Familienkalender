@@ -1,12 +1,20 @@
 """Tests for the launcher (app.serve): two uvicorn listeners, one process.
 
 The pure decision logic (SSL path resolution, certificate mtime
-fingerprint, start/restart decision, uvicorn configs) is unit-tested
-everywhere. The real TLS handshake and the restart-on-renewal behavior
-run against a live listener with an on-the-fly self-signed certificate;
+fingerprint, exit/start decision, uvicorn configs) is unit-tested
+everywhere. The real TLS handshake and the exit-on-renewal behavior run
+against a live listener with an on-the-fly self-signed certificate;
 those tests need the openssl CLI (present in Git Bash on the dev
 machine) and are skipped without it — the final TLS verification point
 is the Pi deployment either way.
+
+Certificate staging model (mirrors run.sh): the originals in /ssl are
+root-only, so run.sh copies them to an app-readable staging directory
+before dropping privileges and exports SSL_CERTFILE/SSL_KEYFILE (the
+copies, loaded by uvicorn) plus SSL_SOURCE_CERTFILE/SSL_SOURCE_KEYFILE
+(the originals, watched via stat — stat needs no read permission).
+When the sources change, the process exits with CERT_RELOAD_EXIT_CODE
+and run.sh stages fresh copies and restarts it.
 """
 
 import asyncio
@@ -20,7 +28,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+import app.serve as serve_module
 from app.serve import (
+    CERT_RELOAD_EXIT_CODE,
     DEFAULT_SSL_CERTFILE,
     DEFAULT_SSL_KEYFILE,
     FEED_PORT,
@@ -32,6 +42,8 @@ from app.serve import (
     cert_mtimes,
     decide_cert_action,
     resolve_ssl_paths,
+    resolve_ssl_source_paths,
+    serve,
 )
 from app.settings import ensure_feed_token
 from app.storage import Storage, default_db_path
@@ -55,6 +67,34 @@ class TestResolveSSLPaths:
     def test_empty_values_fall_back_to_the_defaults(self) -> None:
         # bashio::config renders unset options as empty strings.
         paths = resolve_ssl_paths(env={"SSL_CERTFILE": "", "SSL_KEYFILE": ""})
+        assert paths.certfile == Path(DEFAULT_SSL_CERTFILE)
+        assert paths.keyfile == Path(DEFAULT_SSL_KEYFILE)
+
+
+class TestResolveSSLSourcePaths:
+    def test_source_variables_win(self) -> None:
+        # run.sh: watch the root-only originals, load the staged copies.
+        paths = resolve_ssl_source_paths(
+            env={
+                "SSL_CERTFILE": "/run/familienkalender-ssl/fullchain.pem",
+                "SSL_KEYFILE": "/run/familienkalender-ssl/privkey.pem",
+                "SSL_SOURCE_CERTFILE": "/ssl/fullchain.pem",
+                "SSL_SOURCE_KEYFILE": "/ssl/privkey.pem",
+            }
+        )
+        assert paths.certfile == Path("/ssl/fullchain.pem")
+        assert paths.keyfile == Path("/ssl/privkey.pem")
+
+    def test_without_source_variables_falls_back_to_the_load_paths(self) -> None:
+        # Local development without run.sh: watch what is loaded.
+        paths = resolve_ssl_source_paths(
+            env={"SSL_CERTFILE": "/tmp/c.pem", "SSL_KEYFILE": "/tmp/k.pem"}
+        )
+        assert paths.certfile == Path("/tmp/c.pem")
+        assert paths.keyfile == Path("/tmp/k.pem")
+
+    def test_empty_environment_yields_the_ha_defaults(self) -> None:
+        paths = resolve_ssl_source_paths(env={})
         assert paths.certfile == Path(DEFAULT_SSL_CERTFILE)
         assert paths.keyfile == Path(DEFAULT_SSL_KEYFILE)
 
@@ -91,23 +131,34 @@ class TestCertMtimes:
 
 
 class TestDecideCertAction:
+    def test_exit_code_is_stable(self) -> None:
+        # run.sh hardcodes this value in its supervisor loop — it is a
+        # contract between the two files, not an implementation detail.
+        assert CERT_RELOAD_EXIT_CODE == 86
+
     @pytest.mark.parametrize(
         ("running", "current", "new", "expected"),
         [
-            # Not running, no certificates: nothing to do (error was logged).
+            # No source certificates anywhere: nothing to do.
             (False, None, None, "none"),
-            # Not running, certificates (newly) present: start.
-            (False, None, (1.0, 1.0), "start"),
-            # Also after a crash with unchanged files: start again.
+            # Sources appeared after a start without them: the staged
+            # copies do not exist yet, so the process must exit for
+            # run.sh to stage them (NOT start in-process).
+            (False, None, (1.0, 1.0), "exit"),
+            # Renewed while running (either file): exit for restaging.
+            (True, (1.0, 1.0), (2.0, 1.0), "exit"),
+            (True, (1.0, 1.0), (1.0, 2.0), "exit"),
+            # Renewed while the listener happens to be down: same thing.
+            (False, (1.0, 1.0), (2.0, 2.0), "exit"),
+            # Crashed listener, sources unchanged: the staged copies are
+            # still valid — recover in-process.
             (False, (1.0, 1.0), (1.0, 1.0), "start"),
             # Running and unchanged: leave it alone.
             (True, (1.0, 1.0), (1.0, 1.0), "none"),
-            # Running and renewed: restart with the new certificate.
-            (True, (1.0, 1.0), (2.0, 1.0), "restart"),
-            (True, (1.0, 1.0), (1.0, 2.0), "restart"),
-            # Files vanished mid-flight (renewal in progress): keep serving
-            # the certificate that is already loaded in memory.
+            # Sources vanished mid-flight (renewal in progress): keep
+            # serving the staged copies that are already loaded.
             (True, (1.0, 1.0), None, "none"),
+            (False, (1.0, 1.0), None, "none"),
         ],
     )
     def test_decision_matrix(
@@ -148,6 +199,7 @@ class TestConfigs:
 
 
 def _make_self_signed(directory: Path) -> SSLPaths:
+    directory.mkdir(parents=True, exist_ok=True)
     cert = directory / "fullchain.pem"
     key = directory / "privkey.pem"
     subprocess.run(
@@ -162,6 +214,15 @@ def _make_self_signed(directory: Path) -> SSLPaths:
     return SSLPaths(cert, key)
 
 
+def _stage_copies(source: SSLPaths, directory: Path) -> SSLPaths:
+    """Copy the certificate pair like run.sh's stage_certs does."""
+    directory.mkdir(parents=True, exist_ok=True)
+    staged = SSLPaths(directory / "fullchain.pem", directory / "privkey.pem")
+    shutil.copy(source.certfile, staged.certfile)
+    shutil.copy(source.keyfile, staged.keyfile)
+    return staged
+
+
 async def _wait_for(condition, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -169,6 +230,11 @@ async def _wait_for(condition, timeout: float = 15.0) -> None:
             return
         await asyncio.sleep(0.02)
     raise TimeoutError("condition not met in time")
+
+
+def _bump_mtime(path: Path, seconds: float = 10.0) -> None:
+    stat = path.stat()
+    os.utime(path, (stat.st_atime, stat.st_mtime + seconds))
 
 
 @pytest.fixture
@@ -190,6 +256,57 @@ async def test_missing_certificates_keep_the_listener_off(
     try:
         await asyncio.sleep(0.3)
         assert not listener.running
+        assert not task.done()
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+async def test_unreadable_staged_copies_keep_the_listener_off(
+    feed_storage: Storage, tmp_path: Path
+) -> None:
+    # Sources are stat-able but the staged copies are missing (staging
+    # failed): starting uvicorn would crash on load_cert_chain, so the
+    # listener must not be started at all.
+    sources = SSLPaths(tmp_path / "fullchain.pem", tmp_path / "privkey.pem")
+    sources.certfile.write_text("cert")
+    sources.keyfile.write_text("key")
+    staged = SSLPaths(tmp_path / "staged.pem", tmp_path / "staged.key")
+    listener = FeedListener(
+        staged, source_paths=sources, host="127.0.0.1", port=0, check_interval=1000
+    )
+    task = asyncio.create_task(listener.run())
+    try:
+        await asyncio.sleep(0.3)
+        assert not listener.running
+        assert not task.done()
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+async def test_run_returns_once_source_certificates_appear(
+    feed_storage: Storage, tmp_path: Path
+) -> None:
+    # Certificates get provisioned while the add-on is already up. The
+    # process cannot stage app-readable copies itself (the originals are
+    # root-only), so run() must return -> exit 86 -> run.sh stages and
+    # restarts. No real TLS involved: the listener never starts.
+    sources = SSLPaths(tmp_path / "fullchain.pem", tmp_path / "privkey.pem")
+    staged = SSLPaths(tmp_path / "staged.pem", tmp_path / "staged.key")
+    listener = FeedListener(
+        staged, source_paths=sources, host="127.0.0.1", port=0, check_interval=0.05
+    )
+    task = asyncio.create_task(listener.run())
+    try:
+        await asyncio.sleep(0.2)
+        assert not listener.running
+        sources.certfile.write_text("cert")
+        sources.keyfile.write_text("key")
+        await asyncio.wait_for(asyncio.shield(task), timeout=15)
+        assert task.exception() is None
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -203,12 +320,15 @@ needs_openssl = pytest.mark.skipif(
 
 
 @needs_openssl
-async def test_feed_listener_serves_tls_and_restarts_on_certificate_change(
+async def test_feed_listener_serves_tls_and_exits_on_certificate_change(
     feed_storage: Storage, tmp_path: Path
 ) -> None:
     token = ensure_feed_token(feed_storage)
-    paths = _make_self_signed(tmp_path)
-    listener = FeedListener(paths, host="127.0.0.1", port=0, check_interval=0.05)
+    sources = _make_self_signed(tmp_path / "ssl")
+    staged = _stage_copies(sources, tmp_path / "staged")
+    listener = FeedListener(
+        staged, source_paths=sources, host="127.0.0.1", port=0, check_interval=0.05
+    )
     task = asyncio.create_task(listener.run())
     try:
         await _wait_for(lambda: listener.started)
@@ -220,16 +340,13 @@ async def test_feed_listener_serves_tls_and_restarts_on_certificate_change(
         assert "BEGIN:VCALENDAR" in response.text
         assert response.headers["strict-transport-security"] == "max-age=31536000"
 
-        # Simulated Let's Encrypt renewal: a bumped mtime must restart the
-        # listener (uvicorn only loads certificates at startup).
-        stat = paths.certfile.stat()
-        os.utime(paths.certfile, (stat.st_atime, stat.st_mtime + 10))
-        await _wait_for(lambda: listener.restarts >= 1 and listener.started)
-        async with httpx.AsyncClient(verify=False) as client:
-            response = await client.get(
-                f"https://127.0.0.1:{listener.port}/feed/{token}.ics"
-            )
-        assert response.status_code == 200
+        # Simulated Let's Encrypt renewal on the SOURCE files: run() must
+        # end cleanly (uvicorn only loads certificates at startup and the
+        # fresh key needs restaging by root) and stop the server.
+        _bump_mtime(sources.certfile)
+        await asyncio.wait_for(asyncio.shield(task), timeout=15)
+        assert task.exception() is None
+        assert not listener.running
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -237,31 +354,35 @@ async def test_feed_listener_serves_tls_and_restarts_on_certificate_change(
 
 
 @needs_openssl
-async def test_listener_starts_once_certificates_appear(
-    feed_storage: Storage, tmp_path: Path
+async def test_serve_exits_with_the_reload_code_on_certificate_change(
+    feed_storage: Storage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cert_dir = tmp_path / "ssl"
-    cert_dir.mkdir()
-    paths = SSLPaths(cert_dir / "fullchain.pem", cert_dir / "privkey.pem")
-    listener = FeedListener(paths, host="127.0.0.1", port=0, check_interval=0.05)
-    task = asyncio.create_task(listener.run())
+    # Full launcher path: both listeners up, a renewed source certificate
+    # must shut everything down and yield CERT_RELOAD_EXIT_CODE for the
+    # run.sh supervisor loop.
+    sources = _make_self_signed(tmp_path / "ssl")
+    staged = _stage_copies(sources, tmp_path / "staged")
+    monkeypatch.setenv("SSL_CERTFILE", str(staged.certfile))
+    monkeypatch.setenv("SSL_KEYFILE", str(staged.keyfile))
+    monkeypatch.setenv("SSL_SOURCE_CERTFILE", str(sources.certfile))
+    monkeypatch.setenv("SSL_SOURCE_KEYFILE", str(sources.keyfile))
+    monkeypatch.setattr(
+        serve_module,
+        "build_main_config",
+        lambda: build_main_config(host="127.0.0.1", port=0),
+    )
+    serve_task = asyncio.create_task(
+        serve(feed_host="127.0.0.1", feed_port=0, feed_check_interval=0.05)
+    )
     try:
-        await asyncio.sleep(0.2)
-        assert not listener.running
-        # Certificates get provisioned while the add-on is already up.
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        generated = _make_self_signed(staging)
-        shutil.copy(generated.certfile, paths.certfile)
-        shutil.copy(generated.keyfile, paths.keyfile)
-        await _wait_for(lambda: listener.started)
-        token = ensure_feed_token(feed_storage)
-        async with httpx.AsyncClient(verify=False) as client:
-            response = await client.get(
-                f"https://127.0.0.1:{listener.port}/feed/{token}.ics"
-            )
-        assert response.status_code == 200
+        # Give both listeners time to start and the initial certificate
+        # check time to record the source fingerprint.
+        await asyncio.sleep(0.5)
+        assert not serve_task.done()
+        _bump_mtime(sources.keyfile)
+        exit_code = await asyncio.wait_for(asyncio.shield(serve_task), timeout=20)
+        assert exit_code == CERT_RELOAD_EXIT_CODE
     finally:
-        task.cancel()
+        serve_task.cancel()
         with suppress(asyncio.CancelledError):
-            await task
+            await serve_task
