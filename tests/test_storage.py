@@ -435,6 +435,47 @@ class TestEvents:
         stored = storage.get_events(WINDOW_START, WINDOW_END)
         assert [item.event.uid for item in stored] == ["early", "late"]
 
+    def test_disabled_source_events_are_hidden(self, tmp_path: Path) -> None:
+        # A disabled source's events stay in the DB (no data loss) but must
+        # not appear in get_events — the single choke point behind both
+        # /api/events and the ICS feed.
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        storage.sync_events(
+            source_id, [timed_event(uid="old-event")], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        storage.update_source(source_id, enabled=False)
+
+        assert storage.get_events(WINDOW_START, WINDOW_END) == []
+
+    def test_reenabled_source_events_reappear(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        storage.sync_events(
+            source_id, [timed_event(uid="old-event")], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        storage.update_source(source_id, enabled=False)
+        assert storage.get_events(WINDOW_START, WINDOW_END) == []
+
+        storage.update_source(source_id, enabled=True)
+        stored = storage.get_events(WINDOW_START, WINDOW_END)
+        assert [item.event.uid for item in stored] == ["old-event"]
+
+    def test_disabled_source_events_do_not_hide_other_sources(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        disabled_source = storage.add_source(type="caldav", name="Firma", config={})
+        enabled_source = storage.add_source(type="google", name="Marina", config={})
+        storage.sync_events(
+            disabled_source, [timed_event(uid="a")], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        storage.sync_events(
+            enabled_source, [timed_event(uid="b")], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        storage.update_source(disabled_source, enabled=False)
+
+        stored = storage.get_events(WINDOW_START, WINDOW_END)
+        assert [item.event.uid for item in stored] == ["b"]
+
 
 class TestSettings:
     def test_missing_setting_returns_none(self, tmp_path: Path) -> None:

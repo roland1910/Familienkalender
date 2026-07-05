@@ -421,16 +421,25 @@ class Storage:
             )
 
     def get_events(self, range_start: datetime, range_end: datetime) -> list[StoredEvent]:
-        """All stored events overlapping [range_start, range_end), sorted by start."""
-        # Range filtering happens in Python, not in SQL: the start/end
-        # columns mix UTC ISO datetimes (timed events) with plain ISO dates
-        # (all-day events), so a lexicographic SQL comparison would be wrong
-        # across the two encodings. The table is tiny (one household).
+        """All stored events of enabled sources overlapping [range_start, range_end).
+
+        Sorted by start. Events of disabled sources stay in the database
+        (a re-enabled source's history is not lost) but never surface here —
+        this is the single choke point behind both /api/events and the ICS
+        feed, so disabling a source hides it from both consistently.
+
+        Range filtering happens in Python, not in SQL: the start/end
+        columns mix UTC ISO datetimes (timed events) with plain ISO dates
+        (all-day events), so a lexicographic SQL comparison would be wrong
+        across the two encodings. The table is tiny (one household).
+        The enabled filter has no such issue and is applied in SQL.
+        """
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT e.*, s.name AS source_name, s.display_mode AS source_display_mode,"
                 " s.shortcode AS source_shortcode"
                 " FROM events e JOIN sources s ON s.id = e.source_id"
+                " WHERE s.enabled = 1"
             ).fetchall()
         result = []
         for row in rows:
