@@ -235,6 +235,60 @@ class TestShortcode:
         assert sources[0].shortcode == "RX"
         assert len(second.get_events(WINDOW_START, WINDOW_END)) == 1
 
+    def test_repeated_migration_of_a_legacy_db_is_idempotent(
+        self, tmp_path: Path
+    ) -> None:
+        """A pre-shortcode/color/include_in_feed database survives two starts.
+
+        Covers the column-by-column ALTER TABLE migrations in
+        Storage._migrate for shortcode, color and include_in_feed together
+        (each already has its own single-instantiation migration test above;
+        this one exercises what actually happens on the Pi: the add-on
+        restarts repeatedly against the same on-disk database). The
+        include_in_feed backfill in particular must not silently re-run and
+        clobber a value an admin already toggled by hand.
+        """
+        db_path = tmp_path / "familienkalender.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                display_mode TEXT NOT NULL DEFAULT 'full',
+                last_sync_at TEXT,
+                last_sync_error TEXT
+            );
+            INSERT INTO sources (type, name, display_mode)
+            VALUES ('google', 'Marina', 'full'),
+                   ('caldav', 'Firma', 'filtered');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        first = Storage(db_path)  # first migration: adds all three columns
+        by_name = {source.name: source for source in first.list_sources()}
+        assert by_name["Marina"].shortcode == ""
+        assert by_name["Marina"].color == ""
+        assert by_name["Marina"].include_in_feed is False
+        assert by_name["Firma"].include_in_feed is True
+
+        # An admin now hand-tunes both a migrated default and the new
+        # columns before the add-on restarts again.
+        firma_id = by_name["Firma"].id
+        first.update_source(firma_id, include_in_feed=False, color="#123abc", shortcode="RX")
+
+        second = Storage(db_path)  # second migration on the same db: no-op
+        by_name_again = {source.name: source for source in second.list_sources()}
+        assert by_name_again["Marina"].include_in_feed is False
+        assert by_name_again["Firma"].include_in_feed is False  # not reset to True
+        assert by_name_again["Firma"].color == "#123abc"
+        assert by_name_again["Firma"].shortcode == "RX"
+
 
 class TestSourceColor:
     """The optional admin-configured display color of a source."""
