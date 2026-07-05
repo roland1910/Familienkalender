@@ -849,3 +849,43 @@ body.mode-power .status-badge {
     padding: 6px 12px;
   }
 }
+
+/* -- slideshow (kiosk screensaver) ------------------------------------- */
+
+.slideshow-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #000;
+  overflow: hidden;
+}
+
+/* Two stacked layers cross-fade: only the visible one is opaque. Each
+   holds one photo as a contained, centered background image on black. */
+.slideshow-layer {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  opacity: 0;
+  transition: opacity 800ms ease-in-out;
+}
+
+.slideshow-layer-visible {
+  opacity: 1;
+}
+
+.slideshow-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  padding: 12px 20px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 18px;
+  text-align: right;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
+  pointer-events: none;
+}

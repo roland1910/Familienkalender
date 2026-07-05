@@ -159,6 +159,34 @@
       <p id="power-devices-message" class="message" hidden></p>
     </section>
 
+    <section class="admin-section" aria-labelledby="slideshow-heading">
+      <h2 id="slideshow-heading">Diashow (Kiosk)</h2>
+      <p>Ausgew&auml;hlte Ordner werden regelm&auml;&szlig;ig nach Fotos
+        durchsucht (JPG, PNG, WebP). Am Display l&auml;sst sich die Diashow
+        als Bildschirmschoner aktivieren (Foto-Symbol oben rechts): nach
+        einigen Minuten ohne Ber&uuml;hrung startet sie, jede Ber&uuml;hrung
+        kehrt zum Kalender zur&uuml;ck. Die Einstellung gilt pro Ger&auml;t.</p>
+      <p class="hint">Die Fotos liegen auf der Netzwerkfreigabe &#8222;Photos&#8220;,
+        die bereits in Home Assistant eingebunden ist (Einstellungen &#8594;
+        System &#8594; Speicher). Das Add-on liest sie schreibgesch&uuml;tzt
+        unter <code>/media</code>.</p>
+      <p>Aktuell im Index: <strong id="slideshow-count">&#8211;</strong> Fotos.</p>
+      <ul id="slideshow-dir-list" class="slideshow-dir-list"></ul>
+      <div class="form-grid">
+        <label for="slideshow-browse">Ordner unterhalb von /media ausw&auml;hlen</label>
+        <select id="slideshow-browse"></select>
+      </div>
+      <div class="button-row">
+        <button id="btn-slideshow-add" class="action-button" type="button">
+          Ordner hinzuf&uuml;gen
+        </button>
+        <button id="btn-slideshow-rescan" class="action-button" type="button">
+          Neu einlesen
+        </button>
+      </div>
+      <p id="slideshow-message" class="message" hidden></p>
+    </section>
+
     <section class="admin-section" aria-labelledby="feed-heading">
       <h2 id="feed-heading">Kalender-Abo</h2>
       <p>Abonnierbarer Kalender &#8222;Familie &#8211; Roland&#8220;: alle

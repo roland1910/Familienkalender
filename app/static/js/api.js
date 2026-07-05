@@ -62,6 +62,20 @@ export async function fetchPower() {
   return response.json();
 }
 
+export async function fetchNextPhoto() {
+  const response = await fetch("api/slideshow/next");
+  if (!response.ok) {
+    throw new Error(`Nächstes Foto laden fehlgeschlagen: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+// Relative image URL for a photo id (works behind HA ingress). The id is a
+// number from /api/slideshow/next, never a client-supplied path.
+export function photoImageUrl(id) {
+  return `api/slideshow/image/${encodeURIComponent(id)}`;
+}
+
 export async function putDayTags(dateISO, emojis) {
   const response = await fetch(`api/tags/${dateISO}`, {
     method: "PUT",

@@ -91,3 +91,20 @@ export function saveFeedHost(host) {
 export function triggerSync() {
   return request("POST", "api/sync");
 }
+
+export function getSlideshow() {
+  return request("GET", "api/admin/slideshow");
+}
+
+export function saveSlideshowDirs(dirs) {
+  return request("PUT", "api/admin/slideshow", { dirs });
+}
+
+export function rescanSlideshow() {
+  return request("POST", "api/admin/slideshow/rescan");
+}
+
+export function listMediaDirs(path) {
+  const query = new URLSearchParams({ path: path ?? "" });
+  return request("GET", `api/admin/slideshow/dirs?${query}`);
+}

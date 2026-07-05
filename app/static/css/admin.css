@@ -347,3 +347,34 @@ body {
     margin-top: 8px;
   }
 }
+
+/* -- slideshow directory rows ------------------------------------------- */
+
+.slideshow-dir-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.slideshow-dir {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.slideshow-dir.empty {
+  color: var(--text-muted);
+}
+
+.slideshow-dir-name {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}

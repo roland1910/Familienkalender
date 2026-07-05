@@ -8,6 +8,7 @@ import { initFeed, loadFeed } from "./feed.js";
 import { initGoogleWizard, resetGoogleWizard } from "./google-wizard.js";
 import { initNextcloudWizard, resetNextcloudWizard } from "./nextcloud-wizard.js";
 import { initSettings, loadSettings } from "./settings.js";
+import { initSlideshow, loadSlideshow } from "./slideshow.js";
 import { refreshSources } from "./sources.js";
 
 function initSync() {
@@ -44,9 +45,10 @@ function init() {
   initGoogleWizard({ onCreated: refreshSources, beforeOpen: resetNextcloudWizard });
   initSettings();
   initFeed();
+  initSlideshow();
   initSync();
   withPageError(async () => {
-    await Promise.all([refreshSources(), loadSettings(), loadFeed()]);
+    await Promise.all([refreshSources(), loadSettings(), loadFeed(), loadSlideshow()]);
   });
 }
 

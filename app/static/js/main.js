@@ -16,6 +16,8 @@ import { renderLegend } from "./legend.js";
 import { monthGridRange, renderMonthView } from "./month-view.js";
 import { closeDayPopover, initPopover } from "./popover.js";
 import { startPowerView, stopPowerView } from "./power-view.js";
+import { loadScreensaverEnabled, saveScreensaverEnabled } from "./screensaver-memory.js";
+import { isSlideshowRunning, startSlideshow, stopSlideshow } from "./slideshow-view.js";
 import { state } from "./state.js";
 import { loadViewState, saveViewState } from "./view-memory.js";
 import { applyWeekAutoZoom, renderWeekView, weekRange } from "./week-view.js";
@@ -25,6 +27,12 @@ const REFRESH_INTERVAL_MS = 60000;
 const FETCH_BUFFER_DAYS = 7;
 // Debounce for resize/orientation events before re-fitting the week grid.
 const RESIZE_DEBOUNCE_MS = 150;
+// Idle time (no touch/click/key) before the screensaver slideshow starts,
+// when it is enabled for this device. Overridable via a window constant so
+// the E2E test does not have to wait three real minutes.
+const IDLE_TIMEOUT_MS = globalThis.SCREENSAVER_IDLE_MS ?? 180000;
+// How often the idle watcher checks the elapsed idle time.
+const IDLE_CHECK_INTERVAL_MS = 1000;
 
 function today() {
   return startOfDay(new Date());
@@ -235,8 +243,61 @@ function restoreViewState() {
   if (saved.mode === "power") switchMode("power");
 }
 
+// -- screensaver (photo slideshow on idle) ---------------------------------
+//
+// Per-device toggle (localStorage). When enabled, the slideshow starts
+// after IDLE_TIMEOUT_MS without any user interaction and any touch/click/
+// key ends it, returning to the calendar exactly as it was. A single
+// interval polls the idle time instead of resetting a timer on every input
+// event (cheaper, and interaction only bumps a timestamp).
+
+let screensaverEnabled = false;
+let lastInteractionAt = Date.now();
+
+function markInteraction() {
+  lastInteractionAt = Date.now();
+  // Any interaction dismisses a running slideshow immediately.
+  if (isSlideshowRunning()) stopSlideshow();
+}
+
+function checkIdle() {
+  if (!screensaverEnabled || isSlideshowRunning()) return;
+  if (Date.now() - lastInteractionAt >= IDLE_TIMEOUT_MS) {
+    startSlideshow(document.body);
+  }
+}
+
+function applyScreensaverButton() {
+  const button = document.getElementById("btn-screensaver");
+  button.classList.toggle("active", screensaverEnabled);
+  button.setAttribute("aria-pressed", String(screensaverEnabled));
+}
+
+function toggleScreensaver() {
+  screensaverEnabled = !screensaverEnabled;
+  saveScreensaverEnabled(screensaverEnabled);
+  applyScreensaverButton();
+  // Turning it off while the slideshow is up ends it right away.
+  if (!screensaverEnabled) stopSlideshow();
+  lastInteractionAt = Date.now();
+}
+
+function initScreensaver() {
+  screensaverEnabled = loadScreensaverEnabled();
+  applyScreensaverButton();
+  document.getElementById("btn-screensaver").addEventListener("click", toggleScreensaver);
+  // Interaction listeners bump the idle timestamp and dismiss the slideshow.
+  // Capture phase so the very touch that wakes the display is counted even
+  // if a child stops propagation.
+  for (const type of ["pointerdown", "keydown", "wheel"]) {
+    window.addEventListener(type, markInteraction, { capture: true, passive: true });
+  }
+  setInterval(checkIdle, IDLE_CHECK_INTERVAL_MS);
+}
+
 function init() {
   initPopover({ onTagsChanged: render });
+  initScreensaver();
   applyAdminVisibility();
   restoreViewState();
   document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));

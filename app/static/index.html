@@ -28,6 +28,11 @@
           <button id="btn-mode-power" class="view-button" type="button"
                   aria-label="Strom" title="Strom">&#9889;</button>
         </div>
+        <!-- Bildschirmschoner-Umschalter (pro Gerät, localStorage). Wenn
+             aktiv, startet nach Leerlauf die Foto-Diashow. -->
+        <button id="btn-screensaver" class="view-button" type="button"
+                aria-pressed="false" aria-label="Diashow als Bildschirmschoner"
+                title="Diashow als Bildschirmschoner">&#128247;</button>
         <!-- Standardmäßig versteckt; main.js blendet das Zahnrad nur für
              HA-Admins ein (GET api/me). Der Server schützt /admin zusätzlich. -->
         <a class="nav-button admin-link" href="admin" aria-label="Verwaltung" hidden>&#9881;</a>
