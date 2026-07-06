@@ -240,3 +240,60 @@ class TestImageEndpoint:
         assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
         # The stale entry is gone: the index is now empty.
         assert client.get("/api/admin/slideshow").json()["photo_count"] == 0
+
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"), reason="symlinks unsupported on this platform"
+    )
+    def test_indexed_file_swapped_for_escaping_symlink_is_404(
+        self, client: TestClient, tmp_path: Path, media_root: Path
+    ) -> None:
+        # Serve-time TOCTOU guard: a file that was a plain image at index time
+        # is replaced, after the scan, by a symlink pointing outside /media
+        # (the classic /etc/passwd swap). The image endpoint must refuse it —
+        # 404, index cleanup — and never leak the symlink target's bytes.
+        img = media_root / "Album" / "pic.jpg"
+        _make_image(img)
+        client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Album")]})
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+
+        secret = tmp_path / "secret.txt"
+        secret.write_text("TOP-SECRET-OUTSIDE-MEDIA")
+        img.unlink()
+        try:
+            img.symlink_to(secret)
+        except OSError:
+            pytest.skip("symlink creation not permitted on this platform")
+
+        response = client.get(f"/api/slideshow/image/{photo_id}")
+        assert response.status_code == 404
+        assert b"TOP-SECRET-OUTSIDE-MEDIA" not in response.content
+        # Stale entry dropped, symmetric to the vanished-file path.
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 0
+
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"), reason="symlinks unsupported on this platform"
+    )
+    def test_indexed_file_swapped_for_symlink_inside_media_is_404(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # Even a symlink that stays *inside* /media is refused at serve time:
+        # the is_symlink() check rejects it regardless of target, so a swapped
+        # entry never streams via an indirection the scanner did not vet.
+        img = media_root / "Album" / "pic.jpg"
+        _make_image(img)
+        target = media_root / "Album" / "other.jpg"
+        _make_image(target)
+        client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Album")]})
+        # Find the id of pic.jpg specifically.
+        photo_id = None
+        for _ in range(2):
+            picked = client.get("/api/slideshow/next").json()
+            if picked["name"] == "pic.jpg":
+                photo_id = picked["id"]
+        assert photo_id is not None
+        img.unlink()
+        try:
+            img.symlink_to(target)
+        except OSError:
+            pytest.skip("symlink creation not permitted on this platform")
+        assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404

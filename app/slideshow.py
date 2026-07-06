@@ -178,6 +178,14 @@ def iter_images(
     Hidden and skip-listed directories are pruned. Per-directory errors
     (permission denied, a folder that vanished mid-scan) are logged and
     skipped so one bad folder never aborts the whole walk.
+
+    Order note: the explicit stack makes this LIFO, i.e. a depth-first walk
+    with no defined ordering across siblings. That is irrelevant for a full
+    scan, but near the ``limit`` (MAX_INDEXED_PHOTOS) it means *which* images
+    get indexed is arbitrary — the walk stops at the cap wherever it happens
+    to be, not at a stable, predictable subset. Acceptable here: the cap is a
+    runaway guard, not a curation feature, and the rotation picks at random
+    anyway.
     """
     yielded = 0
     stack = list(roots)
@@ -262,6 +270,18 @@ async def next_photo() -> dict:
     return picked
 
 
+def _path_is_below_media_root(path: str) -> bool:
+    """Whether ``path`` resolves to the media root itself or a descendant.
+
+    Uses ``os.path.realpath`` so a symlink pointing out of the tree, or a
+    ``../`` sequence, is rejected on the *resolved* path — the same check
+    ``normalize_media_dir`` applies at index time.
+    """
+    root = media_root()
+    resolved = os.path.realpath(path)
+    return resolved == root or os.path.commonpath([root, resolved]) == root
+
+
 @router.get("/image/{photo_id}")
 async def photo_image(photo_id: int) -> FileResponse:
     """Stream the image with the given DB id.
@@ -269,14 +289,26 @@ async def photo_image(photo_id: int) -> FileResponse:
     Access is by id only — never a client path. A 404 (and index cleanup)
     if the id is unknown or the file vanished since the scan. The stored
     path was validated to live below the media root when it was indexed.
+
+    Serve-time re-validation closes the TOCTOU window between index time and
+    serve time (symmetric to the re-check in ``get_slideshow_dirs``): if the
+    indexed file has since become a symlink, or now resolves outside the
+    media root, it is rejected and the stale index entry dropped — the same
+    treatment as a vanished file. Without this, a file swapped for a symlink
+    to ``/etc/passwd`` after the scan would be streamed verbatim.
     """
     storage = get_storage()
     path = storage.get_photo_path(photo_id)
     if path is None:
         raise HTTPException(status_code=404, detail="Foto nicht gefunden.")
-    if not Path(path).is_file():
-        # The file vanished since the last scan — drop the stale entry so
-        # the rotation stops offering it.
+    if (
+        not Path(path).is_file()
+        or Path(path).is_symlink()
+        or not _path_is_below_media_root(path)
+    ):
+        # The file vanished, became a symlink, or now resolves outside the
+        # media root since the last scan — drop the stale entry so the
+        # rotation stops offering it, and never stream it.
         storage.delete_photo(photo_id)
         raise HTTPException(status_code=404, detail="Foto nicht mehr vorhanden.")
     media_type = _CONTENT_TYPES.get(
