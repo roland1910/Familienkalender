@@ -226,6 +226,40 @@ class TestAdminApi:
         response = client.get("/api/admin/slideshow/dirs", params={"path": "../etc"})
         assert response.status_code == 400
 
+    def test_dirs_browser_lists_nested_path(self, client: TestClient, media_root: Path) -> None:
+        # Navigating into a subdirectory lists *its* children, not the root's.
+        (media_root / "Photos" / "Urlaub").mkdir(parents=True)
+        (media_root / "Photos" / "Freunde").mkdir()
+        response = client.get(
+            "/api/admin/slideshow/dirs", params={"path": str(media_root / "Photos")}
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        names = [d["name"] for d in payload["dirs"]]
+        assert names == ["Freunde", "Urlaub"]
+
+    def test_dirs_browser_reports_root_and_parent(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        (media_root / "Photos" / "Urlaub").mkdir(parents=True)
+        # At the media root, parent is null (cannot navigate above it).
+        root_resp = client.get("/api/admin/slideshow/dirs").json()
+        assert root_resp["media_root"] == str(media_root)
+        assert root_resp["base"] == str(media_root)
+        assert root_resp["parent"] is None
+        # One level down, parent points back at the media root.
+        sub_resp = client.get(
+            "/api/admin/slideshow/dirs",
+            params={"path": str(media_root / "Photos")},
+        ).json()
+        assert sub_resp["parent"] == str(media_root)
+        # Two levels down, parent is the intermediate directory.
+        deep_resp = client.get(
+            "/api/admin/slideshow/dirs",
+            params={"path": str(media_root / "Photos" / "Urlaub")},
+        ).json()
+        assert deep_resp["parent"] == str(media_root / "Photos")
+
 
 class TestImageEndpoint:
     def test_serves_image_by_id(self, client: TestClient, media_root: Path) -> None:

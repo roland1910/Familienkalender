@@ -239,14 +239,20 @@
         unter <code>/media</code>.</p>
       <p>Aktuell im Index: <strong id="slideshow-count">&#8211;</strong> Fotos.</p>
       <ul id="slideshow-dir-list" class="slideshow-dir-list"></ul>
-      <div class="form-grid">
-        <label for="slideshow-browse">Ordner unterhalb von /media ausw&auml;hlen</label>
-        <select id="slideshow-browse"></select>
+
+      <div class="slideshow-browser">
+        <p class="slideshow-browser-title">Ordner ausw&auml;hlen</p>
+        <nav id="slideshow-breadcrumb" class="slideshow-breadcrumb"
+          aria-label="Aktueller Pfad"></nav>
+        <ul id="slideshow-browse-list" class="slideshow-browse-list"></ul>
+        <div class="button-row">
+          <button id="btn-slideshow-add" class="action-button" type="button">
+            Diesen Ordner hinzuf&uuml;gen
+          </button>
+        </div>
       </div>
+
       <div class="button-row">
-        <button id="btn-slideshow-add" class="action-button" type="button">
-          Ordner hinzuf&uuml;gen
-        </button>
         <button id="btn-slideshow-rescan" class="action-button" type="button">
           Neu einlesen
         </button>

@@ -386,9 +386,16 @@ async def list_dirs(path: str = Query(default="")) -> dict:
     walk out of the share. Hidden and skip-listed directories are omitted.
     Entries are returned as ``{name, path}`` with absolute (validated)
     paths so the frontend can pass one straight back as a slideshow dir.
+
+    The response also carries ``media_root`` (the root boundary) and
+    ``parent`` (the parent directory path, or ``null`` when already at the
+    root) so the navigable admin browser can render a breadcrumb / "back"
+    step without walking above the share — the root-boundary authority
+    stays server-side, next to the traversal guard.
     """
+    root = media_root()
     try:
-        base = normalize_media_dir(path) if path else media_root()
+        base = normalize_media_dir(path) if path else root
     except InvalidMediaPathError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not Path(base).is_dir():
@@ -406,4 +413,7 @@ async def list_dirs(path: str = Query(default="")) -> dict:
             status_code=502, detail=f"Verzeichnis nicht lesbar: {exc}"
         ) from exc
     subdirs.sort(key=lambda item: item["name"].lower())
-    return {"base": base, "dirs": subdirs}
+    # Parent is null at the root (cannot navigate above the share); below
+    # the root the parent is always still within it, so no extra guard.
+    parent = None if base == root else str(Path(base).parent)
+    return {"media_root": root, "base": base, "parent": parent, "dirs": subdirs}
