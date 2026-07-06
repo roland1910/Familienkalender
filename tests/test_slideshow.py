@@ -183,6 +183,20 @@ class TestAdminApi:
         assert response.status_code == 400
         assert "Medienordner" in response.json()["detail"]
 
+    def test_put_rejects_too_many_dirs(self, client: TestClient, media_root: Path) -> None:
+        # One over MAX_SLIDESHOW_DIRS — Pydantic's max_length on the field
+        # rejects the oversized list before any path is touched (422).
+        too_many = [str(media_root / f"d{i}") for i in range(slideshow.MAX_SLIDESHOW_DIRS + 1)]
+        response = client.put("/api/admin/slideshow", json={"dirs": too_many})
+        assert response.status_code == 422
+
+    def test_put_rejects_overlong_path(self, client: TestClient, media_root: Path) -> None:
+        # A single path longer than MAX_DIR_PATH_LENGTH is rejected (400).
+        overlong = str(media_root / ("x" * (slideshow.MAX_DIR_PATH_LENGTH + 1)))
+        response = client.put("/api/admin/slideshow", json={"dirs": [overlong]})
+        assert response.status_code == 400
+        assert "zu lang" in response.json()["detail"]
+
     def test_put_deduplicates(self, client: TestClient, media_root: Path) -> None:
         (media_root / "Fotos").mkdir()
         target = str(media_root / "Fotos")
