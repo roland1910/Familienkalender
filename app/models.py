@@ -40,6 +40,23 @@ def is_valid_source_color(value: str) -> bool:
     return SOURCE_COLOR_PATTERN.fullmatch(value) is not None
 
 
+# Per-source precedence for collapsing duplicate events in the ICS feed:
+# when the same appointment appears in several feed sources, the one from
+# the source with the HIGHER priority survives. A plain signed integer in a
+# small, sane range — negative values push a source below the default.
+FEED_PRIORITY_MIN = -100
+FEED_PRIORITY_MAX = 100
+
+
+def is_valid_feed_priority(value: int) -> bool:
+    """Whether ``value`` is an acceptable feed priority (bounded integer)."""
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and FEED_PRIORITY_MIN <= value <= FEED_PRIORITY_MAX
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TagOption:
     """One selectable day-tag symbol (id is stable, emoji is the display)."""
@@ -162,6 +179,10 @@ class Source:
     # default (filtered sources feed the subscription) is applied when a
     # source is created and by the storage migration.
     include_in_feed: bool = False
+    # Precedence when the ICS feed collapses duplicate events across
+    # sources (higher wins; tie broken by lower source id). Default 0 —
+    # see is_valid_feed_priority.
+    feed_priority: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,3 +199,5 @@ class StoredEvent:
     color: str = ""
     # Whether the source participates in the subscribable ICS feed.
     include_in_feed: bool = False
+    # Source precedence for de-duplicating events in the ICS feed.
+    feed_priority: int = 0

@@ -30,6 +30,7 @@ from app.models import (
     TagLimitError,
     UnknownTagError,
     as_local_datetime,
+    is_valid_feed_priority,
     is_valid_shortcode,
     is_valid_source_color,
 )
@@ -48,7 +49,8 @@ CREATE TABLE IF NOT EXISTS sources (
     last_sync_error TEXT,
     shortcode TEXT NOT NULL DEFAULT '',
     color TEXT NOT NULL DEFAULT '',
-    include_in_feed INTEGER NOT NULL DEFAULT 0
+    include_in_feed INTEGER NOT NULL DEFAULT 0,
+    feed_priority INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,6 +146,7 @@ def _row_to_source(row: sqlite3.Row) -> Source:
         shortcode=row["shortcode"],
         color=row["color"],
         include_in_feed=bool(row["include_in_feed"]),
+        feed_priority=row["feed_priority"],
     )
 
 
@@ -190,6 +193,13 @@ class Storage:
             conn.execute(
                 "UPDATE sources SET include_in_feed = (display_mode = 'filtered')"
             )
+        if "feed_priority" not in columns:
+            # De-duplication precedence for the ICS feed; existing sources
+            # start at the neutral default (ties broken by source id).
+            conn.execute(
+                "ALTER TABLE sources ADD COLUMN feed_priority"
+                " INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _ensure_private_db_file(self) -> None:
         """Make sure the DB file exists with owner-only permissions (0600).
@@ -232,6 +242,7 @@ class Storage:
         shortcode: str = "",
         color: str = "",
         include_in_feed: bool | None = None,
+        feed_priority: int = 0,
     ) -> int:
         if type not in SOURCE_TYPES:
             raise ValueError(f"unknown source type: {type!r}")
@@ -241,6 +252,8 @@ class Storage:
             raise ValueError(f"invalid shortcode: {shortcode!r}")
         if not is_valid_source_color(color):
             raise ValueError(f"invalid source color: {color!r}")
+        if not is_valid_feed_priority(feed_priority):
+            raise ValueError(f"invalid feed priority: {feed_priority!r}")
         if include_in_feed is None:
             # Historical default: filtered sources (work calendars) feed
             # the ICS subscription, fully displayed ones do not.
@@ -249,8 +262,8 @@ class Storage:
             cursor = conn.execute(
                 "INSERT INTO sources"
                 " (type, name, config, enabled, display_mode, shortcode, color,"
-                " include_in_feed)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " include_in_feed, feed_priority)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     type,
                     name,
@@ -260,6 +273,7 @@ class Storage:
                     shortcode,
                     color,
                     int(include_in_feed),
+                    feed_priority,
                 ),
             )
             return int(cursor.lastrowid or 0)
@@ -285,6 +299,7 @@ class Storage:
         shortcode: str | None = None,
         color: str | None = None,
         include_in_feed: bool | None = None,
+        feed_priority: int | None = None,
     ) -> bool:
         """Partially update a source; returns False if it does not exist."""
         if display_mode is not None and display_mode not in DISPLAY_MODES:
@@ -293,6 +308,8 @@ class Storage:
             raise ValueError(f"invalid shortcode: {shortcode!r}")
         if color is not None and not is_valid_source_color(color):
             raise ValueError(f"invalid source color: {color!r}")
+        if feed_priority is not None and not is_valid_feed_priority(feed_priority):
+            raise ValueError(f"invalid feed priority: {feed_priority!r}")
         assignments: list[str] = []
         values: list = []
         if name is not None:
@@ -316,6 +333,9 @@ class Storage:
         if include_in_feed is not None:
             assignments.append("include_in_feed = ?")
             values.append(int(include_in_feed))
+        if feed_priority is not None:
+            assignments.append("feed_priority = ?")
+            values.append(feed_priority)
         if not assignments:
             return self.get_source(source_id) is not None
         with self._connect() as conn:
@@ -572,7 +592,8 @@ class Storage:
             rows = conn.execute(
                 "SELECT e.*, s.name AS source_name, s.display_mode AS source_display_mode,"
                 " s.shortcode AS source_shortcode, s.color AS source_color,"
-                " s.include_in_feed AS source_include_in_feed"
+                " s.include_in_feed AS source_include_in_feed,"
+                " s.feed_priority AS source_feed_priority"
                 " FROM events e JOIN sources s ON s.id = e.source_id"
                 " WHERE s.enabled = 1"
             ).fetchall()
@@ -592,6 +613,7 @@ class Storage:
                         shortcode=row["source_shortcode"],
                         color=row["source_color"],
                         include_in_feed=bool(row["source_include_in_feed"]),
+                        feed_priority=row["source_feed_priority"],
                     )
                 )
         result.sort(key=lambda item: as_local_datetime(item.event.start))

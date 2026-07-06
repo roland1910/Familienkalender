@@ -481,6 +481,79 @@ class TestIncludeInFeed:
         assert stored[0].include_in_feed is True
 
 
+class TestFeedPriority:
+    """Per-source precedence for collapsing duplicate events in the feed."""
+
+    def test_defaults_to_zero(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_source(type="google", name="Marina", config={})
+        assert storage.list_sources()[0].feed_priority == 0
+
+    def test_roundtrip_via_add_and_update(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, feed_priority=10
+        )
+        assert storage.get_source(source_id).feed_priority == 10
+        assert storage.update_source(source_id, feed_priority=-5) is True
+        assert storage.get_source(source_id).feed_priority == -5
+
+    @pytest.mark.parametrize("bad", [101, -101, 1000])
+    def test_out_of_range_values_are_rejected(self, tmp_path: Path, bad: int) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        with pytest.raises(ValueError):
+            storage.update_source(source_id, feed_priority=bad)
+        with pytest.raises(ValueError):
+            storage.add_source(type="caldav", name="X", config={}, feed_priority=bad)
+
+    def test_update_without_value_keeps_it(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, feed_priority=7
+        )
+        storage.update_source(source_id, name="Firma neu")
+        assert storage.get_source(source_id).feed_priority == 7
+
+    def test_existing_db_without_column_is_migrated_to_zero(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "familienkalender.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                display_mode TEXT NOT NULL DEFAULT 'full',
+                last_sync_at TEXT,
+                last_sync_error TEXT,
+                shortcode TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO sources (type, name) VALUES ('google', 'Marina');
+            """
+        )
+        conn.commit()
+        conn.close()
+        storage = Storage(db_path)
+        source = storage.list_sources()[0]
+        assert source.feed_priority == 0
+        assert storage.update_source(source.id, feed_priority=3) is True
+        assert storage.get_source(source.id).feed_priority == 3
+
+    def test_get_events_carries_the_priority(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config={}, feed_priority=9
+        )
+        storage.sync_events(source_id, [timed_event()], WINDOW_START, WINDOW_END, synced_at=NOW)
+        stored = storage.get_events(WINDOW_START, WINDOW_END)
+        assert stored[0].feed_priority == 9
+
+
 class TestSourceCrud:
     def test_get_source_returns_the_source(self, tmp_path: Path) -> None:
         storage = make_storage(tmp_path)
