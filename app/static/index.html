@@ -6,6 +6,18 @@
   <title>Familienkalender</title>
   <!-- Asset-URLs müssen relativ sein, damit die Seite hinter HA-Ingress funktioniert. -->
   <link rel="stylesheet" href="static/css/calendar.css">
+  <!-- Theme vor dem ersten Paint anwenden (kein Hell-Aufblitzen im Dark-Mode).
+       Bewusst inline und synchron: ein deferred Modul liefe erst nach dem
+       Rendern. Der gespeicherte Wert ist untrusted -> nur bekannte Themes,
+       sonst "auto" (Media-Query entscheidet). Spiegelt theme-memory.js. -->
+  <script>
+    (() => {
+      try {
+        const t = localStorage.getItem("familienkalender.theme.v1");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch {}
+    })();
+  </script>
 </head>
 <body>
   <header class="toolbar">
@@ -28,6 +40,10 @@
           <button id="btn-mode-power" class="view-button" type="button"
                   aria-label="Strom" title="Strom">&#9889;</button>
         </div>
+        <!-- Theme-Umschalter (pro Gerät, localStorage): zyklisch
+             Auto -> Hell -> Dunkel. Auto folgt dem System-/HA-Theme. -->
+        <button id="btn-theme" class="view-button" type="button"
+                aria-label="Farbschema umschalten" title="Farbschema: automatisch"></button>
         <!-- Bildschirmschoner-Umschalter (pro Gerät, localStorage). Wenn
              aktiv, startet nach Leerlauf die Foto-Diashow. -->
         <button id="btn-screensaver" class="view-button" type="button"

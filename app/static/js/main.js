@@ -19,6 +19,7 @@ import { startPowerView, stopPowerView } from "./power-view.js";
 import { loadScreensaverEnabled, saveScreensaverEnabled } from "./screensaver-memory.js";
 import { isSlideshowRunning, startSlideshow, stopSlideshow } from "./slideshow-view.js";
 import { state } from "./state.js";
+import { loadTheme, nextTheme, saveTheme } from "./theme-memory.js";
 import { loadViewState, saveViewState } from "./view-memory.js";
 import { applyWeekAutoZoom, renderWeekView, weekRange } from "./week-view.js";
 
@@ -295,8 +296,46 @@ function initScreensaver() {
   setInterval(checkIdle, IDLE_CHECK_INTERVAL_MS);
 }
 
+// -- theme toggle (per device via localStorage) -----------------------------
+//
+// Cycles auto -> light -> dark. "auto" removes the override so the CSS media
+// query (prefers-color-scheme) follows the system/HA theme; light/dark force
+// it. The head bootstrap already applied the stored theme before the first
+// paint; this only keeps the button label in sync and handles taps.
+
+const THEME_ICON = { auto: "\u{1F317}", light: "☀️", dark: "\u{1F319}" };
+const THEME_TITLE = {
+  auto: "Farbschema: automatisch",
+  light: "Farbschema: hell",
+  dark: "Farbschema: dunkel",
+};
+
+function applyTheme(theme) {
+  // "auto" means "no override" — let the media query decide.
+  if (theme === "auto") {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = theme;
+  }
+  const button = document.getElementById("btn-theme");
+  button.textContent = THEME_ICON[theme];
+  button.title = THEME_TITLE[theme];
+  button.setAttribute("aria-label", THEME_TITLE[theme]);
+}
+
+function initTheme() {
+  let theme = loadTheme();
+  applyTheme(theme);
+  document.getElementById("btn-theme").addEventListener("click", () => {
+    theme = nextTheme(theme);
+    saveTheme(theme);
+    applyTheme(theme);
+  });
+}
+
 function init() {
   initPopover({ onTagsChanged: render });
+  initTheme();
   initScreensaver();
   applyAdminVisibility();
   restoreViewState();

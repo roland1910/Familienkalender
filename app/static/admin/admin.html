@@ -6,6 +6,16 @@
   <title>Familienkalender – Verwaltung</title>
   <!-- Asset-URLs müssen relativ sein, damit die Seite hinter HA-Ingress funktioniert. -->
   <link rel="stylesheet" href="static/css/admin.css">
+  <!-- Gespeichertes Theme (pro Gerät, gesetzt im Kalender-Header) vor dem
+       ersten Paint anwenden. Spiegelt theme-memory.js; "auto" = Media-Query. -->
+  <script>
+    (() => {
+      try {
+        const t = localStorage.getItem("familienkalender.theme.v1");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch {}
+    })();
+  </script>
 </head>
 <body>
   <header class="toolbar">
