@@ -33,7 +33,15 @@ import httpx
 AUTH_BASE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
-SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+# Read-only Calendar access — the default scope for the calendar flow.
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+# Read-only Contacts access — used by the birthdays flow (People API). The
+# Google "Birthdays" calendar is not reachable via the Calendar API, so
+# contact birthdays come from People API connections instead, which needs
+# this scope alone (no calendar scope required for it).
+CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.readonly"
+# Backwards-compatible alias (older imports referenced SCOPE).
+SCOPE = CALENDAR_SCOPE
 
 # Port 1 is never served, so the redirect always fails visibly and the
 # user copies the URL from the browser's address bar (see module docstring).
@@ -48,13 +56,17 @@ class GoogleOAuthError(Exception):
     """OAuth flow failure with a German, admin-UI-ready message."""
 
 
-def build_auth_url(client_id: str) -> str:
-    """The consent URL the user opens in any browser."""
+def build_auth_url(client_id: str, *, scope: str = CALENDAR_SCOPE) -> str:
+    """The consent URL the user opens in any browser.
+
+    ``scope`` defaults to the read-only Calendar scope; the birthdays flow
+    passes CONTACTS_SCOPE to request read-only Contacts access instead.
+    """
     params = {
         "client_id": client_id,
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
-        "scope": SCOPE,
+        "scope": scope,
         # offline + consent forces Google to issue a refresh token even if
         # the account already authorized this app before.
         "access_type": "offline",

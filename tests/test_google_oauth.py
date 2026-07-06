@@ -6,6 +6,8 @@ import httpx
 import pytest
 
 from app.google_oauth import (
+    CALENDAR_SCOPE,
+    CONTACTS_SCOPE,
     REDIRECT_URI,
     GoogleOAuthError,
     build_auth_url,
@@ -37,6 +39,23 @@ class TestBuildAuthUrl:
         # Port 1 is never served: the user copies the URL from the address
         # bar of the failed redirect instead of a local callback server.
         assert REDIRECT_URI == "http://localhost:1/"
+
+    def test_default_scope_is_calendar_readonly(self) -> None:
+        # The Calendar flow must keep working unchanged: no scope argument
+        # means calendar.readonly, exactly as before.
+        params = _params_of(build_auth_url(CLIENT_ID))
+        assert params["scope"] == CALENDAR_SCOPE
+        assert CALENDAR_SCOPE == "https://www.googleapis.com/auth/calendar.readonly"
+
+    def test_scope_can_be_overridden_for_contacts(self) -> None:
+        # The birthdays flow (People API) needs the contacts.readonly scope.
+        params = _params_of(build_auth_url(CLIENT_ID, scope=CONTACTS_SCOPE))
+        assert params["scope"] == CONTACTS_SCOPE
+        assert CONTACTS_SCOPE == "https://www.googleapis.com/auth/contacts.readonly"
+
+
+def _params_of(url: str) -> dict[str, str]:
+    return {key: value[0] for key, value in parse_qs(urlsplit(url).query).items()}
 
 
 class TestExtractAuthCode:
