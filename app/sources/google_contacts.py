@@ -86,7 +86,10 @@ def _person_birthday(item: dict[str, Any]) -> tuple[int, int, int | None] | None
         if not (1 <= month <= 12 and 1 <= day <= 31):
             continue
         year = part.get("year")
-        year = year if isinstance(year, int) else None
+        # google.type.Date uses year 0 as the documented convention for "no
+        # year" (e.g. a birthday with only month/day set) — treat it the
+        # same as a genuinely absent year field.
+        year = year if isinstance(year, int) and year != 0 else None
         return (month, day, year)
     return None
 
@@ -94,8 +97,11 @@ def _person_birthday(item: dict[str, Any]) -> tuple[int, int, int | None] | None
 def _occurrence_in_year(month: int, day: int, year: int) -> date | None:
     """The birthday's date in ``year``, clamping 29 Feb to the 28th if needed.
 
-    Returns None only for genuinely impossible month/day combinations (e.g.
-    31 April), which are then skipped for that year.
+    Impossible month/day combinations (e.g. 31 April) are clamped to the
+    month's last day, same as 29 Feb — never skipped. The ``date(...)`` call
+    below is therefore not expected to raise in practice; the ``except``
+    is defensive only, and returning None there would mean skipping that
+    year rather than raising.
     """
     last_day = calendar.monthrange(year, month)[1]
     if day > last_day:

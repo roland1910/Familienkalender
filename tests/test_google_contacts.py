@@ -34,7 +34,12 @@ def person(
     year: int | None = None,
     resource: str = "people/c1",
 ) -> dict:
-    """Build a People API person resource with an optional birthday."""
+    """Build a People API person resource with an optional birthday.
+
+    ``year=0`` reproduces the People API's own convention for "no year"
+    (google.type.Date sets ``year: 0`` rather than omitting the field) —
+    distinct from ``year=None`` here, which omits the ``year`` key entirely.
+    """
     result: dict = {"resourceName": resource, "etag": "e"}
     if name is not None:
         result["names"] = [{"displayName": name}]
@@ -138,6 +143,18 @@ class TestBirthdayEvents:
             date(2028, 2, 29),
         ]
 
+    def test_window_crossing_year_boundary_yields_one_event(self) -> None:
+        # Sync window spans a year turn (21 Dec - 28 Mar); the birthday
+        # (10 Jan) must show exactly once, in the January that lies inside
+        # the window — not in the previous or a following year.
+        events = birthday_events(
+            "Silvester-Kind", month=1, day=10, year=2010, resource="people/c5",
+            window_start=datetime(2026, 12, 21, tzinfo=BERLIN),
+            window_end=datetime(2027, 3, 28, tzinfo=BERLIN),
+        )
+        assert len(events) == 1
+        assert events[0].start == date(2027, 1, 10)
+
     def test_stable_uid_per_person_and_year(self) -> None:
         first = birthday_events(
             "Oma", month=9, day=15, year=1950, resource="people/c1",
@@ -223,6 +240,21 @@ class TestFetchEvents:
                 CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
             )
         assert events == []
+
+    async def test_year_zero_sentinel_is_treated_as_no_year(self, tmp_path: Path) -> None:
+        # The People API uses year=0 (google.type.Date convention) to mean
+        # "no year known", not the literal year 0.
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        captured: list[httpx.Request] = []
+        pages = [{"connections": [person("Jahrlos", month=6, day=1, year=0)]}]
+        async with make_client(captured, pages=pages) as client:
+            events = await fetch_events(
+                CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+            )
+        assert len(events) == 1
+        assert events[0].start == date(2027, 6, 1)
+        assert not any(ch.isdigit() for ch in events[0].title)
 
     async def test_follows_pagination(self, tmp_path: Path) -> None:
         tokens_file = tmp_path / "tokens.json"
