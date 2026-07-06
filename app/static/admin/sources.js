@@ -222,10 +222,14 @@ function renderSource(source) {
   updateFeedWarning(warning, source.display_mode, source.include_in_feed);
 
   const controls = el("div", "source-controls");
-  const modeLabel = el("label", "mode-label", "Anzeige: ");
-  modeLabel.append(modeSelect(source, warning));
+  // Birthdays (google_contacts) are all-day events and thus always family
+  // relevant — the display mode has no effect, so no selector is shown.
+  if (source.type !== "google_contacts") {
+    const modeLabel = el("label", "mode-label", "Anzeige: ");
+    modeLabel.append(modeSelect(source, warning));
+    controls.append(modeLabel);
+  }
   controls.append(
-    modeLabel,
     shortcodeControl(source),
     colorControl(source),
     feedToggle(source, warning),

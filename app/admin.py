@@ -472,7 +472,11 @@ async def create_source(body: SourceCreate) -> dict:
     """
     if body.type not in SOURCE_TYPES:
         raise HTTPException(status_code=400, detail=f"Unbekannter Quelltyp: {body.type!r}")
-    _validate_display_mode(body.display_mode)
+    # Birthdays (google_contacts) are all-day events and thus always family
+    # relevant — the display mode has no effect, so it is fixed to "full"
+    # and the request value is ignored (the wizard offers no choice).
+    display_mode = "full" if body.type == "google_contacts" else body.display_mode
+    _validate_display_mode(display_mode)
     name = _validated_name(body.name)
     config = _filtered_config(body.type, body.config)
     storage = get_storage()
@@ -491,7 +495,7 @@ async def create_source(body: SourceCreate) -> dict:
         type=body.type,
         name=name,
         config=config,
-        display_mode=body.display_mode,
+        display_mode=display_mode,
     )
     if pending is not None:
         _adopt_pending_google_tokens(source_id, pending)
@@ -511,8 +515,14 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
     existing = storage.get_source(source_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden.")
-    if body.display_mode is not None:
-        _validate_display_mode(body.display_mode)
+    display_mode = body.display_mode
+    # google_contacts is fixed to "full" (all-day birthdays are always
+    # family relevant): silently ignore any display_mode change for it,
+    # while all other fields keep updating normally.
+    if existing.type == "google_contacts":
+        display_mode = None
+    if display_mode is not None:
+        _validate_display_mode(display_mode)
     name = _validated_name(body.name) if body.name is not None else None
     shortcode = _validated_shortcode(body.shortcode) if body.shortcode is not None else None
     color = _validated_color(body.color) if body.color is not None else None
@@ -537,7 +547,7 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
         name=name,
         config=config,
         enabled=body.enabled,
-        display_mode=body.display_mode,
+        display_mode=display_mode,
         shortcode=shortcode,
         color=color,
         include_in_feed=body.include_in_feed,

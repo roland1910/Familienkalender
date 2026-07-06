@@ -1053,6 +1053,41 @@ class TestGoogleContactsFlow:
         assert response.status_code == 400
         assert storage.list_sources() == []
 
+    def test_create_contacts_source_forces_full_display_mode(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # Birthdays are all-day events (always family relevant), so the
+        # display mode has no effect — the source is always created "full",
+        # even if the request asked for "filtered".
+        flow_id = self._park_pending_tokens()
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "google_contacts", "name": "Geburtstage",
+                  "display_mode": "filtered", "config": {}, "flow_id": flow_id},
+        )
+        assert response.status_code == 201
+        source = response.json()["source"]
+        assert source["display_mode"] == "full"
+        assert storage.get_source(source["id"]).display_mode == "full"
+
+    def test_patch_contacts_display_mode_is_ignored(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # A google_contacts source stays "full" — a display_mode PATCH is
+        # silently ignored, while other fields still update normally.
+        source_id = storage.add_source(
+            type="google_contacts", name="Geburtstage", config={}
+        )
+        assert storage.get_source(source_id).display_mode == "full"
+        response = client.patch(
+            f"/api/admin/sources/{source_id}",
+            json={"display_mode": "filtered", "name": "Geburtstage neu"},
+        )
+        assert response.status_code == 200
+        source = storage.get_source(source_id)
+        assert source.display_mode == "full"
+        assert source.name == "Geburtstage neu"
+
     def test_delete_contacts_source_removes_token_file(
         self, client: TestClient, storage: Storage
     ) -> None:

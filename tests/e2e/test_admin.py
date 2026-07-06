@@ -260,7 +260,8 @@ class TestBirthdaysWizard:
         page.locator("#b-code").fill("http://localhost:1/?code=4%2F0AbCdEf&scope=x")
         page.locator("#b-connect").click()
 
-        # No calendar selection — straight to name + display mode.
+        # No calendar selection and no display-mode picker (birthdays are
+        # always shown "full") — straight to the name field.
         expect(page.locator("#b-step-select")).to_be_visible()
         expect(page.locator("#b-name")).to_have_value("Geburtstage")
         page.locator("#b-save").click()
@@ -273,6 +274,11 @@ class TestBirthdaysWizard:
         )
         new_item = page.locator(".source-item").last
         expect(new_item.locator(".type-badge")).to_have_text("Geburtstage")
+        # The birthdays row shows no display-mode selector; the other
+        # (google/caldav) rows still do.
+        expect(new_item.locator(".mode-select")).to_have_count(0)
+        kunde_item = page.locator(".source-item", has_text="Kunde")
+        expect(kunde_item.locator(".mode-select")).to_have_count(1)
         assert not pending.exists()
 
         # Delete again (two-step confirmation) to leave the shared DB clean.

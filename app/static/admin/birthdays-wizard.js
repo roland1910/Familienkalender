@@ -1,7 +1,8 @@
 // Birthdays add-source wizard (Google Contacts / People API). Steps:
 // loading (settings check) → credentials (only when no client id/secret
 // stored yet) → auth (consent link with contacts scope + code paste) →
-// select (name + display mode; no calendar to pick, People API has none).
+// select (name only; no calendar to pick, People API has none, and no
+// display mode because birthdays are always shown "full").
 
 import * as api from "./api.js";
 import { byId, showMessage } from "./dom.js";
@@ -80,9 +81,11 @@ export function initBirthdaysWizard({ onCreated, beforeOpen }) {
     runWizardAction(byId("b-error"), async () => {
       const name = byId("b-name").value.trim() || "Geburtstage";
       await api.createSource({
+        // Birthdays are all-day events (always family relevant), so the
+        // display mode has no effect — the backend forces "full".
         type: "google_contacts",
         name,
-        display_mode: byId("b-mode").value,
+        display_mode: "full",
         config: {},
         flow_id: flowId,
       });
