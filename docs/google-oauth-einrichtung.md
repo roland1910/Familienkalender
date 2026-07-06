@@ -14,7 +14,7 @@ Einmalige Klickarbeit (~10 Minuten). Danach läuft alles Weitere (Konten verbind
 
 1. Mit dem **privaten Konto** anmelden auf <https://console.cloud.google.com>
 2. Oben in der Projektauswahl → **Neues Projekt** → Name `Familienkalender` → Erstellen (und danach auswählen).
-3. **APIs & Dienste → Bibliothek** → nach „Google Calendar API" suchen → **Aktivieren**.
+3. **APIs & Dienste → Bibliothek** → nach „Google Calendar API" suchen → **Aktivieren**. Für die Geburtstage-Funktion zusätzlich nach „People API" suchen → **Aktivieren** (der Google-„Geburtstage"-Kalender ist über die Calendar API nicht abrufbar, die Kontakt-Geburtstage kommen aus der People API).
 4. **APIs & Dienste → OAuth-Zustimmungsbildschirm** (bzw. „Google Auth Platform → Branding"):
    - Nutzertyp: **Extern**
    - App-Name: `Familienkalender`, Support-E-Mail: dein privates Konto
@@ -29,6 +29,8 @@ Einmalige Klickarbeit (~10 Minuten). Danach läuft alles Weitere (Konten verbind
 ## Konten verbinden (später, im Adminbereich)
 
 Der Adminbereich führt durch die Verbindung — einmal für **Marina** (an ihrem Handy oder in einem Browser, in dem ihr Konto angemeldet ist) und einmal für dein **Kundenkonto**. Benötigter Zugriff: nur **Kalender lesen** (`calendar.readonly`).
+
+**Geburtstage aus Google-Kontakten:** Über den Button „Geburtstage (Google-Kontakte) hinzufügen" lassen sich zusätzlich die Geburtstage aus den Kontakten eines Google-Kontos einbinden (ganztägige Termine „🎂 Name"). Dieser Assistent fordert einen anderen Zugriff an — nur **Kontakte lesen** (`contacts.readonly`) — und setzt voraus, dass die **People API** im Cloud-Projekt aktiviert ist (siehe Schritt 3). Kein Alter wird angezeigt; Geburtstage ohne Jahr werden ebenso übernommen.
 
 ## Möglicher Stolperstein: Kundenkonto (Workspace)
 
