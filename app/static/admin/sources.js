@@ -79,6 +79,36 @@ function shortcodeControl(source) {
   return label;
 }
 
+function feedPriorityControl(source) {
+  // Precedence for collapsing duplicate appointments in the ICS feed:
+  // when the same event appears in several feed sources, the one from the
+  // source with the higher value survives. Saved on change (blur/Enter);
+  // the server validates the range (-100..100).
+  const label = el("label", "feed-priority-label", "Vorrang (Abo-Dubletten): ");
+  const input = el("input", "feed-priority-input");
+  input.type = "number";
+  input.step = "1";
+  input.min = "-100";
+  input.max = "100";
+  input.value = String(source.feed_priority);
+  input.title =
+    "Bei identischen Terminen in mehreren Kalendern erscheint im Abo nur der mit höherem Vorrang.";
+  input.addEventListener("change", () => {
+    withPageError(async () => {
+      const value = Number.parseInt(input.value, 10);
+      // Ignore an empty/non-numeric field instead of sending garbage.
+      if (!Number.isInteger(value)) {
+        input.value = String(source.feed_priority);
+        return;
+      }
+      await api.patchSource(source.id, { feed_priority: value });
+      await refreshSources();
+    });
+  });
+  label.append(input);
+  return label;
+}
+
 function feedToggle(source, warning) {
   // Per-source switch: does this source feed the subscribable ICS
   // calendar? The family relevance filter only applies for sources with
@@ -233,6 +263,7 @@ function renderSource(source) {
     shortcodeControl(source),
     colorControl(source),
     feedToggle(source, warning),
+    feedPriorityControl(source),
     toggleControl(source),
     renameControl(source, item),
     deleteControl(source),

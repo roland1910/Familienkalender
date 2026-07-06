@@ -349,6 +349,40 @@ class TestShortcode:
         expect(page.locator("#page-message")).to_contain_text("Ungültiges Kürzel")
 
 
+class TestFeedPriority:
+    def test_feed_priority_roundtrip_in_the_source_row(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        field = page.locator(".source-item", has_text="Kunde").locator(
+            ".feed-priority-input"
+        )
+        expect(field).to_have_value("0")
+        field.fill("10")
+        field.press("Enter")  # change event -> PATCH -> list re-render
+        expect(
+            page.locator(".source-item", has_text="Kunde").locator(
+                ".feed-priority-input"
+            )
+        ).to_have_value("10")
+
+        page.reload()
+        kunde_field = page.locator(".source-item", has_text="Kunde").locator(
+            ".feed-priority-input"
+        )
+        expect(kunde_field).to_have_value("10")
+
+        # Reset so the demo data stays as other tests expect it.
+        kunde_field.fill("0")
+        kunde_field.press("Enter")
+        page.reload()
+        expect(
+            page.locator(".source-item", has_text="Kunde").locator(
+                ".feed-priority-input"
+            )
+        ).to_have_value("0")
+
+
 class TestSourceColor:
     MARINA_DEFAULT = "#d97706"  # palette color for source id 1 (colors.js)
 
