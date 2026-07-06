@@ -149,6 +149,42 @@ class TestSyncAll:
         assert results == {source_id: None}
         assert seen["token_file"] == tmp_path / f"google_token_{source_id}.json"
 
+    async def test_google_contacts_source_uses_people_client_and_token_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        storage = Storage(tmp_path / "test.db")
+        source_id = storage.add_source(
+            type="google_contacts", name="Geburtstage", config={}
+        )
+        seen: dict = {}
+
+        async def fake_contacts(config, window_start, window_end, *, token_file, client=None):
+            seen["token_file"] = token_file
+            return [
+                CalendarEvent(
+                    uid="people/c1|2026",
+                    title="🎂 Oma",
+                    start=datetime(2026, 7, 10, tzinfo=UTC).date(),
+                    end=datetime(2026, 7, 11, tzinfo=UTC).date(),
+                    all_day=True,
+                )
+            ]
+
+        # The calendar client must NOT be used for this source type.
+        async def fail_calendar(*args, **kwargs):
+            raise AssertionError("google_contacts must not use the Calendar client")
+
+        monkeypatch.setattr("app.sources.google_contacts.fetch_events", fake_contacts)
+        monkeypatch.setattr("app.sources.google.fetch_events", fail_calendar)
+
+        results = await sync_all(storage, now=FIXED_NOW)
+
+        assert results == {source_id: None}
+        assert seen["token_file"] == tmp_path / f"google_token_{source_id}.json"
+        events = storage.get_events(*sync_window(FIXED_NOW))
+        assert [item.event.uid for item in events] == ["people/c1|2026"]
+
     async def test_disabled_sources_are_skipped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -10,7 +10,10 @@ from zoneinfo import ZoneInfo
 # in this timezone. Will become configurable with the admin UI if ever needed.
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
 
-SOURCE_TYPES = ("google", "caldav")
+# "google": Google Calendar; "caldav": Nextcloud/generic CalDAV;
+# "google_contacts": contact birthdays via the Google People API (see
+# app/sources/google_contacts.py).
+SOURCE_TYPES = ("google", "caldav", "google_contacts")
 DISPLAY_MODES = ("full", "filtered")
 
 # Optional per-source shortcode, used as a title prefix in the subscribable

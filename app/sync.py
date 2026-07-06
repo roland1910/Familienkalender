@@ -11,7 +11,7 @@ from datetime import UTC, datetime, time, timedelta
 
 from app.models import LOCAL_TZ, CalendarEvent, Source
 from app.sanitize import sanitize_error
-from app.sources import caldav, google, limits
+from app.sources import caldav, google, google_contacts, limits
 from app.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,15 @@ async def _fetch_source_events(
         events = await caldav.fetch_events(source.config, window_start, window_end)
     elif source.type == "google":
         events = await google.fetch_events(
+            source.config,
+            window_start,
+            window_end,
+            token_file=google.token_path(source.id),
+        )
+    elif source.type == "google_contacts":
+        # Contact birthdays via the People API — same token file layout as
+        # a Google Calendar source (google_token_<source_id>.json).
+        events = await google_contacts.fetch_events(
             source.config,
             window_start,
             window_end,
