@@ -7,7 +7,11 @@ import { colorForSource } from "../js/colors.js";
 import * as api from "./api.js";
 import { byId, el, withPageError } from "./dom.js";
 
-const TYPE_LABELS = { google: "Google", caldav: "Nextcloud" };
+const TYPE_LABELS = {
+  google: "Google",
+  caldav: "Nextcloud",
+  google_contacts: "Geburtstage",
+};
 
 function formatTimestamp(iso) {
   if (!iso) return "noch nie";

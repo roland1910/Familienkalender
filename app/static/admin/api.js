@@ -72,6 +72,14 @@ export function googleConnect(code) {
   return request("POST", "api/admin/google/connect", { code });
 }
 
+export function googleContactsAuthUrl() {
+  return request("POST", "api/admin/google/contacts-auth-url");
+}
+
+export function googleContactsConnect(code) {
+  return request("POST", "api/admin/google/contacts-connect", { code });
+}
+
 export function deleteGooglePending(flowId) {
   return request("DELETE", `api/admin/google/pending/${encodeURIComponent(flowId)}`);
 }

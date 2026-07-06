@@ -3,6 +3,7 @@
 // exclusively via textContent — see dom.js.
 
 import * as api from "./api.js";
+import { initBirthdaysWizard, resetBirthdaysWizard } from "./birthdays-wizard.js";
 import { byId, showMessage, withPageError } from "./dom.js";
 import { initFeed, loadFeed } from "./feed.js";
 import { initGoogleWizard, resetGoogleWizard } from "./google-wizard.js";
@@ -40,9 +41,15 @@ function initSync() {
 }
 
 function init() {
-  // Opening one wizard closes (and fully resets) the other.
-  initNextcloudWizard({ onCreated: refreshSources, beforeOpen: resetGoogleWizard });
-  initGoogleWizard({ onCreated: refreshSources, beforeOpen: resetNextcloudWizard });
+  // Opening one wizard closes (and fully resets) the others.
+  const resetOthers = (keep) => () => {
+    if (keep !== "nextcloud") resetNextcloudWizard();
+    if (keep !== "google") resetGoogleWizard();
+    if (keep !== "birthdays") resetBirthdaysWizard();
+  };
+  initNextcloudWizard({ onCreated: refreshSources, beforeOpen: resetOthers("nextcloud") });
+  initGoogleWizard({ onCreated: refreshSources, beforeOpen: resetOthers("google") });
+  initBirthdaysWizard({ onCreated: refreshSources, beforeOpen: resetOthers("birthdays") });
   initSettings();
   initFeed();
   initSlideshow();

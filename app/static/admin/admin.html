@@ -26,6 +26,9 @@
         <button id="btn-add-google" class="action-button" type="button">
           Google-Kalender hinzufügen
         </button>
+        <button id="btn-add-birthdays" class="action-button" type="button">
+          Geburtstage (Google-Kontakte) hinzufügen
+        </button>
       </div>
     </section>
 
@@ -128,6 +131,70 @@
       <p id="g-error" class="error-text" hidden></p>
       <div class="button-row">
         <button id="g-cancel" class="action-button subtle" type="button">Abbrechen</button>
+      </div>
+    </section>
+
+    <section id="birthdays-form" class="admin-section wizard" hidden
+             aria-labelledby="birthdays-heading">
+      <h2 id="birthdays-heading">Geburtstage (Google-Kontakte) hinzuf&uuml;gen</h2>
+      <p>Liest die Geburtstage aus den Google-Kontakten des verbundenen Kontos
+        und zeigt sie als ganzt&auml;gige Termine (&#8222;&#127874; Name&#8220;)
+        im Kalender. Ben&ouml;tigter Zugriff: nur <strong>Kontakte lesen</strong>.</p>
+      <div id="b-step-credentials" hidden>
+        <p>Zuerst die App-Zugangsdaten aus der Google Cloud Console eintragen
+          (siehe Anleitung docs/google-oauth-einrichtung.md).</p>
+        <div class="form-grid">
+          <label for="b-client-id">Client-ID</label>
+          <input id="b-client-id" type="text" autocomplete="off">
+          <label for="b-client-secret">Client-Secret</label>
+          <input id="b-client-secret" type="password" autocomplete="off">
+        </div>
+        <div class="button-row">
+          <button id="b-save-credentials" class="action-button" type="button">
+            Zugangsdaten speichern
+          </button>
+        </div>
+      </div>
+      <div id="b-step-auth" hidden>
+        <ol class="steps">
+          <li>Anmelde-Link &ouml;ffnen (beliebiger Browser, auch am Handy) und das
+            gew&uuml;nschte Google-Konto anmelden.</li>
+          <li>Nach dem Best&auml;tigen zeigt der Browser eine Fehlerseite
+            (localhost ist nicht erreichbar) &#8211; das ist richtig so.</li>
+          <li>Die komplette Adresse aus der Adresszeile kopieren und unten einf&uuml;gen.</li>
+        </ol>
+        <div class="button-row">
+          <a id="b-auth-link" class="action-button" href="https://accounts.google.com/"
+             target="_blank" rel="noopener" hidden>
+            Anmelde-Link &ouml;ffnen
+          </a>
+        </div>
+        <div class="form-grid">
+          <label for="b-code">Weiterleitungs-URL oder Code</label>
+          <input id="b-code" type="text" autocomplete="off"
+                 placeholder="http://localhost:1/?code=4/0A...">
+        </div>
+        <div class="button-row">
+          <button id="b-connect" class="action-button" type="button">Code einl&ouml;sen</button>
+        </div>
+      </div>
+      <div id="b-step-select" hidden>
+        <div class="form-grid">
+          <label for="b-name">Name im Familienkalender</label>
+          <input id="b-name" type="text" autocomplete="off" value="Geburtstage">
+          <label for="b-mode">Anzeige</label>
+          <select id="b-mode">
+            <option value="full">Alle Termine</option>
+            <option value="filtered">Nur familienrelevante Termine (Abend/mehrtägig)</option>
+          </select>
+        </div>
+        <div class="button-row">
+          <button id="b-save" class="action-button primary" type="button">Quelle anlegen</button>
+        </div>
+      </div>
+      <p id="b-error" class="error-text" hidden></p>
+      <div class="button-row">
+        <button id="b-cancel" class="action-button subtle" type="button">Abbrechen</button>
       </div>
     </section>
 
