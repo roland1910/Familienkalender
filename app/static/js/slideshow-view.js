@@ -30,8 +30,18 @@ let running = false;
 function preload(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(url);
-    img.onerror = () => reject(new Error(`Bild konnte nicht geladen werden: ${url}`));
+    // Detach the handlers once they have fired so the Image and its closures
+    // become collectable. On a 30s kiosk cadence this runs thousands of times
+    // over weeks; leaving the listeners attached would pin every previous
+    // Image (and this closure) for the lifetime of the page.
+    img.onload = () => {
+      img.onload = img.onerror = null;
+      resolve(url);
+    };
+    img.onerror = () => {
+      img.onload = img.onerror = null;
+      reject(new Error(`Bild konnte nicht geladen werden: ${url}`));
+    };
     img.src = url;
   });
 }
@@ -63,6 +73,11 @@ async function showNext(caption) {
   }
   if (!running) return;
   const next = (activeLayer + 1) % 2;
+  // Cross-fade: paint the new image onto the inactive layer, fade it in, fade
+  // the old one out. The now-inactive layer keeps its old background-image
+  // (we never clear it), but this is not a leak: with only two layers, at any
+  // time only the two most-recently-shown image URLs are referenced, so the
+  // browser holds at most two decoded images — not a growing set.
   layers[next].style.backgroundImage = `url("${cssUrl(url)}")`;
   layers[next].classList.add("slideshow-layer-visible");
   layers[activeLayer].classList.remove("slideshow-layer-visible");
