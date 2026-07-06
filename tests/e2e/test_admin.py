@@ -201,6 +201,88 @@ class TestGoogleWizard:
         expect(page.locator(".source-name")).to_have_text(["Marina", "Kunde", "Firma"])
 
 
+class TestBirthdaysWizard:
+    def test_core_flow_with_intercepted_contacts_endpoints(
+        self, page: Page, server_url: str, server_data_dir: Path
+    ) -> None:
+        """Auth-Link (contacts) → Code einlösen → Quelle anlegen.
+
+        The People API endpoints (contacts-auth-url, contacts-connect) are
+        intercepted in the browser; the parked tokens for the returned flow
+        id are seeded into the server's DATA_DIR so the real POST /sources
+        can adopt them. No calendar selection — the People API has none.
+        """
+        flow_id = "e2e-birthdays-1"
+        pending = server_data_dir / f"google_token_pending_{flow_id}.json"
+        pending.write_text(
+            json.dumps({"client_id": "cid", "client_secret": "cs",
+                        "refresh_token": "rt-e2e", "access_token": "at-e2e",
+                        "access_token_expires_at": "2027-01-01T00:00:00+00:00"}),
+            encoding="utf-8",
+        )
+
+        def fulfill_auth_url(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"auth_url": "https://accounts.google.com/o/oauth2/v2/auth?scope=contacts"}
+                ),
+            )
+
+        def fulfill_connect(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"flow_id": flow_id}),
+            )
+
+        page.route("**/api/admin/google/contacts-auth-url", fulfill_auth_url)
+        page.route("**/api/admin/google/contacts-connect", fulfill_connect)
+        goto_admin(page, server_url)
+
+        page.locator("#btn-add-birthdays").click()
+        # Whether the wizard opens on the credentials step depends on whether
+        # a prior test already stored Google credentials in the shared demo
+        # DB (session-scoped server). Fill them only when that step shows.
+        credentials = page.locator("#b-step-credentials")
+        if credentials.is_visible():
+            page.locator("#b-client-id").fill("cid.apps.googleusercontent.com")
+            page.locator("#b-client-secret").fill("cs-geheim")
+            page.locator("#b-save-credentials").click()
+
+        # Auth step: the consent link carries the (intercepted) auth URL.
+        expect(page.locator("#b-step-auth")).to_be_visible()
+        auth_link = page.locator("#b-auth-link")
+        expect(auth_link).to_have_attribute(
+            "href", "https://accounts.google.com/o/oauth2/v2/auth?scope=contacts"
+        )
+        page.locator("#b-code").fill("http://localhost:1/?code=4%2F0AbCdEf&scope=x")
+        page.locator("#b-connect").click()
+
+        # No calendar selection — straight to name + display mode.
+        expect(page.locator("#b-step-select")).to_be_visible()
+        expect(page.locator("#b-name")).to_have_value("Geburtstage")
+        page.locator("#b-save").click()
+
+        # The wizard closes; the real backend created the source and adopted
+        # the parked tokens.
+        expect(page.locator("#birthdays-form")).to_be_hidden()
+        expect(page.locator(".source-name")).to_have_text(
+            ["Marina", "Kunde", "Firma", "Geburtstage"]
+        )
+        new_item = page.locator(".source-item").last
+        expect(new_item.locator(".type-badge")).to_have_text("Geburtstage")
+        assert not pending.exists()
+
+        # Delete again (two-step confirmation) to leave the shared DB clean.
+        delete_button = new_item.locator(".small-button.danger")
+        delete_button.click()
+        expect(delete_button).to_have_text("Wirklich löschen?")
+        delete_button.click()
+        expect(page.locator(".source-name")).to_have_text(["Marina", "Kunde", "Firma"])
+
+
 class TestSettings:
     def test_evening_boundary_roundtrip(self, page: Page, server_url: str) -> None:
         goto_admin(page, server_url)
