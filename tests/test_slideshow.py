@@ -226,6 +226,19 @@ class TestAdminApi:
         response = client.get("/api/admin/slideshow/dirs", params={"path": "../etc"})
         assert response.status_code == 400
 
+    def test_dirs_browser_rejects_traversal_below_a_valid_subpath(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # A path that is textually rooted at a real, valid subdirectory but
+        # walks back out via "../.." must be rejected just like a traversal
+        # from the root — normalize_media_dir resolves the whole path before
+        # checking the boundary, so the navigation endpoint cannot be tricked
+        # by prefixing a legitimate-looking subpath in front of "..".
+        (media_root / "Photos" / "Urlaub").mkdir(parents=True)
+        escaping_path = str(media_root / "Photos" / "Urlaub" / ".." / ".." / ".." / "etc")
+        response = client.get("/api/admin/slideshow/dirs", params={"path": escaping_path})
+        assert response.status_code == 400
+
     def test_dirs_browser_lists_nested_path(self, client: TestClient, media_root: Path) -> None:
         # Navigating into a subdirectory lists *its* children, not the root's.
         (media_root / "Photos" / "Urlaub").mkdir(parents=True)

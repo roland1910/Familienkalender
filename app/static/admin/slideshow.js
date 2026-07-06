@@ -24,6 +24,12 @@ let mediaRoot = "";
 let browsePath = "";
 let browseSubdirs = [];
 
+// Generation counter guarding against out-of-order responses: fast repeated
+// clicks (folder A, then B) can have their /dirs requests resolve in the
+// wrong order. Each navigateTo() call claims the next number; only the call
+// still holding the latest number is allowed to apply its result.
+let navSeq = 0;
+
 function renderDirList() {
   const list = byId("slideshow-dir-list");
   list.replaceChildren();
@@ -120,12 +126,19 @@ function renderBrowseList() {
 }
 
 // Load and render the directory at ``path`` (empty = media root). The
-// backend returns the resolved base, its parent and its subdirectories; it
-// also refuses anything outside /media, so the browser cannot escape.
+// backend returns the resolved base and its subdirectories; it also refuses
+// anything outside /media, so the browser cannot escape. The response also
+// carries ``parent``, intentionally unused here — the breadcrumb (built from
+// mediaRoot + browsePath via breadcrumbSegments) already covers "back"
+// navigation without needing the server to repeat it.
 async function navigateTo(path) {
   const messageNode = byId("slideshow-message");
+  const seq = ++navSeq;
   try {
     const payload = await api.listMediaDirs(path ?? "");
+    // Discard stale responses: if another navigateTo() started after this
+    // one, its result (or an earlier one still in flight) must win instead.
+    if (seq !== navSeq) return;
     mediaRoot = payload.media_root ?? mediaRoot;
     browsePath = payload.base;
     browseSubdirs = payload.dirs;
@@ -133,6 +146,7 @@ async function navigateTo(path) {
     renderBrowseList();
     updateAddButton();
   } catch (error) {
+    if (seq !== navSeq) return;
     showMessage(messageNode, error.message, true);
   }
 }
