@@ -942,3 +942,125 @@ class TestGooglePendingLifecycle:
         assert response.status_code == 200
         assert not stale.exists()
         assert fresh.exists()
+
+
+class TestGoogleContactsFlow:
+    """Birthdays source via the Google People API (contacts.readonly)."""
+
+    def _set_credentials(self, client: TestClient) -> None:
+        client.put(
+            "/api/admin/settings/google",
+            json={"client_id": "cid.apps.googleusercontent.com", "client_secret": "cs"},
+        )
+
+    def test_contacts_auth_url_uses_contacts_scope(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        self._set_credentials(client)
+        response = client.post("/api/admin/google/contacts-auth-url")
+        assert response.status_code == 200
+        auth_url = response.json()["auth_url"]
+        assert "contacts.readonly" in auth_url
+        assert "calendar.readonly" not in auth_url
+
+    def test_contacts_auth_url_requires_credentials(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.post("/api/admin/google/contacts-auth-url")
+        assert response.status_code == 400
+        assert "Client-ID" in response.json()["detail"]
+
+    def test_contacts_connect_parks_tokens_without_calendar_list(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._set_credentials(client)
+
+        async def fake_exchange(code, *, client_id, client_secret, client=None):
+            return {"client_id": client_id, "client_secret": client_secret,
+                    "refresh_token": "rt-c", "access_token": "at-c",
+                    "access_token_expires_at": "2026-07-03T13:00:00+00:00"}
+
+        def fail_calendar_list(*args, **kwargs):
+            raise AssertionError("People API has no calendar list")
+
+        monkeypatch.setattr("app.admin.google_oauth.exchange_code", fake_exchange)
+        monkeypatch.setattr(
+            "app.admin.google_oauth.fetch_calendar_list", fail_calendar_list
+        )
+
+        response = client.post(
+            "/api/admin/google/contacts-connect",
+            json={"code": "http://localhost:1/?code=4%2F0AbCdEf&scope=x"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        flow_id = payload["flow_id"]
+        assert len(flow_id) >= 16
+        # No calendar list for a contacts source.
+        assert "calendars" not in payload
+        pending = json.loads(pending_token_path(flow_id).read_text(encoding="utf-8"))
+        assert pending["refresh_token"] == "rt-c"
+        assert "rt-c" not in response.text
+        assert "at-c" not in response.text
+
+    def test_contacts_connect_maps_oauth_errors_to_400(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._set_credentials(client)
+
+        async def fake_exchange(code, *, client_id, client_secret, client=None):
+            raise GoogleOAuthError("Der Code ist ungültig oder abgelaufen.")
+
+        monkeypatch.setattr("app.admin.google_oauth.exchange_code", fake_exchange)
+        response = client.post(
+            "/api/admin/google/contacts-connect", json={"code": "4/alt"}
+        )
+        assert response.status_code == 400
+        assert "abgelaufen" in response.json()["detail"]
+
+    def _park_pending_tokens(self, flow_id: str = "birthdayFLOW_-1") -> str:
+        pending = pending_token_path(flow_id)
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(json.dumps({"refresh_token": "rt-c"}), encoding="utf-8")
+        return flow_id
+
+    def test_create_contacts_source_adopts_tokens_without_calendar_id(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        flow_id = self._park_pending_tokens()
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "google_contacts", "name": "Geburtstage",
+                  "display_mode": "full", "config": {}, "flow_id": flow_id},
+        )
+        assert response.status_code == 201
+        source = response.json()["source"]
+        assert source["type"] == "google_contacts"
+        source_id = source["id"]
+        assert not pending_token_path(flow_id).exists()
+        tokens = json.loads(token_path(source_id).read_text(encoding="utf-8"))
+        assert tokens["refresh_token"] == "rt-c"
+        assert "rt-c" not in response.text
+
+    def test_create_contacts_source_without_flow_id_is_400(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.post(
+            "/api/admin/sources",
+            json={"type": "google_contacts", "name": "Geburtstage",
+                  "display_mode": "full", "config": {}},
+        )
+        assert response.status_code == 400
+        assert storage.list_sources() == []
+
+    def test_delete_contacts_source_removes_token_file(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(
+            type="google_contacts", name="Geburtstage", config={}
+        )
+        tokens_file = token_path(source_id)
+        tokens_file.write_text(json.dumps({"refresh_token": "rt"}), encoding="utf-8")
+        response = client.delete(f"/api/admin/sources/{source_id}")
+        assert response.status_code == 200
+        assert not tokens_file.exists()

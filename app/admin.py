@@ -56,7 +56,14 @@ _URL_CONFIG_KEYS = ("url", "calendar_url")
 _CONFIG_KEYS_BY_TYPE = {
     "caldav": ("url", "username", "app_password", "calendar_url"),
     "google": ("calendar_id",),
+    # A contacts (birthdays) source carries no config — the connected
+    # account defines whose contacts are read.
+    "google_contacts": (),
 }
+
+# Source types that authenticate via the copy-paste Google OAuth flow and
+# store their tokens in google_token_<source_id>.json.
+_GOOGLE_TOKEN_TYPES = ("google", "google_contacts")
 
 # Source names are display strings; the cap keeps hostile input from
 # bloating the DB and the admin UI.
@@ -472,11 +479,13 @@ async def create_source(body: SourceCreate) -> dict:
     pending = None
     if body.type == "caldav":
         _validate_caldav_create(config)
-    else:
+    elif body.type == "google":
         if not config.get("calendar_id"):
             raise HTTPException(status_code=400, detail="Bitte einen Kalender auswählen.")
         # Check before creating the source so a failed adoption does not
         # leave a token-less source behind.
+        pending = _pending_tokens_or_400(body.flow_id)
+    else:  # google_contacts — no calendar to pick, just adopt the tokens.
         pending = _pending_tokens_or_400(body.flow_id)
     source_id = storage.add_source(
         type=body.type,
@@ -547,7 +556,7 @@ async def delete_source(source_id: int) -> dict:
     if source is None:
         raise HTTPException(status_code=404, detail="Quelle nicht gefunden.")
     storage.delete_source(source_id)
-    if source.type == "google":
+    if source.type in _GOOGLE_TOKEN_TYPES:
         tokens_file = google.token_path(source_id)
         if tokens_file.exists():
             tokens_file.unlink()
@@ -635,6 +644,51 @@ async def google_connect(body: GoogleConnect) -> dict:
             detail=f"Google-Verbindung fehlgeschlagen: {error}",
         ) from exc
     return {"flow_id": flow_id, "calendars": calendars}
+
+
+@router.post("/google/contacts-auth-url")
+async def google_contacts_auth_url() -> dict:
+    """Start of the birthdays OAuth flow: consent URL with the contacts scope.
+
+    Unlike the calendar flow this requests contacts.readonly (People API);
+    the Google "Birthdays" calendar is not reachable via the Calendar API.
+    """
+    google.cleanup_stale_pending_tokens()
+    client_id, _ = _google_credentials_or_400()
+    return {
+        "auth_url": google_oauth.build_auth_url(
+            client_id, scope=google_oauth.CONTACTS_SCOPE
+        )
+    }
+
+
+@router.post("/google/contacts-connect")
+async def google_contacts_connect(body: GoogleConnect) -> dict:
+    """Exchange the pasted code and park the tokens for a birthdays source.
+
+    Mirrors /google/connect but does NOT fetch a calendar list (the People
+    API has no calendars): the source is created directly from the parked
+    tokens. Returns only the random ``flow_id`` claim ticket.
+    """
+    google.cleanup_stale_pending_tokens()
+    client_id, client_secret = _google_credentials_or_400()
+    try:
+        code = google_oauth.extract_auth_code(body.code)
+        tokens = await google_oauth.exchange_code(
+            code, client_id=client_id, client_secret=client_secret
+        )
+        flow_id = secrets.token_urlsafe(16)
+        google.save_tokens(google.pending_token_path(flow_id), tokens)
+    except google_oauth.GoogleOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        error = sanitize_error(str(exc))
+        logger.warning("Google contacts connect failed: %s", error)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google-Verbindung fehlgeschlagen: {error}",
+        ) from exc
+    return {"flow_id": flow_id}
 
 
 @router.delete("/google/pending/{flow_id}")
