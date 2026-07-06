@@ -18,7 +18,6 @@
 :root {
   --bg: #f4f5f7;
   --surface: #ffffff;
-  --surface-2: #eef0f3;
   --border: #d8dadf;
   --text: #1c1e21;
   --text-muted: #6b7280;
@@ -47,7 +46,6 @@
   :root:not([data-theme="light"]) {
     --bg: #14161a;
     --surface: #1e2127;
-    --surface-2: #262a31;
     --border: #363b44;
     --text: #e6e8eb;
     --text-muted: #9aa0aa;
@@ -73,7 +71,6 @@
 :root[data-theme="dark"] {
   --bg: #14161a;
   --surface: #1e2127;
-  --surface-2: #262a31;
   --border: #363b44;
   --text: #e6e8eb;
   --text-muted: #9aa0aa;
