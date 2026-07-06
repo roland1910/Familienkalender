@@ -457,6 +457,50 @@ class TestUpdateAndDeleteSource:
         response = client.get("/api/admin/sources")
         assert response.json()["sources"][0]["include_in_feed"] is False
 
+    def test_patch_feed_priority_stores(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(type="caldav", name="Firma", config=CALDAV_CONFIG)
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"feed_priority": 10}
+        )
+        assert response.status_code == 200
+        assert response.json()["source"]["feed_priority"] == 10
+        assert storage.get_source(source_id).feed_priority == 10
+
+    def test_patch_negative_feed_priority_stores(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        source_id = storage.add_source(type="caldav", name="Firma", config=CALDAV_CONFIG)
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"feed_priority": -3}
+        )
+        assert response.status_code == 200
+        assert storage.get_source(source_id).feed_priority == -3
+
+    @pytest.mark.parametrize("bad", [101, -101, 9999])
+    def test_patch_out_of_range_feed_priority_is_400_german(
+        self, client: TestClient, storage: Storage, bad: int
+    ) -> None:
+        source_id = storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, feed_priority=5
+        )
+        response = client.patch(
+            f"/api/admin/sources/{source_id}", json={"feed_priority": bad}
+        )
+        assert response.status_code == 400
+        assert "Vorrang" in response.json()["detail"]
+        assert storage.get_source(source_id).feed_priority == 5  # unchanged
+
+    def test_sources_list_includes_feed_priority(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.add_source(
+            type="caldav", name="Firma", config=CALDAV_CONFIG, feed_priority=7
+        )
+        response = client.get("/api/admin/sources")
+        assert response.json()["sources"][0]["feed_priority"] == 7
+
     def test_patch_color_normalizes_and_stores(
         self, client: TestClient, storage: Storage
     ) -> None:

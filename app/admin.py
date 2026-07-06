@@ -24,9 +24,12 @@ from app import feed_constants, google_oauth, power, settings
 from app.auth import require_admin
 from app.models import (
     DISPLAY_MODES,
+    FEED_PRIORITY_MAX,
+    FEED_PRIORITY_MIN,
     SHORTCODE_MAX_LENGTH,
     SOURCE_TYPES,
     Source,
+    is_valid_feed_priority,
     is_valid_shortcode,
     is_valid_source_color,
 )
@@ -116,6 +119,9 @@ class SourceUpdate(BaseModel):
     color: str | None = None
     # Whether the source's family-relevant events appear in the ICS feed.
     include_in_feed: bool | None = None
+    # Precedence when the feed collapses duplicate events across sources
+    # (higher wins). None leaves it untouched.
+    feed_priority: int | None = None
 
 
 class CaldavProbe(BaseModel):
@@ -189,6 +195,17 @@ def _validated_color(raw: str) -> str:
     return color
 
 
+def _validated_feed_priority(raw: int) -> int:
+    """The feed priority if in range, else 400 with a German message."""
+    if not is_valid_feed_priority(raw):
+        raise HTTPException(
+            status_code=400,
+            detail="Ungültiger Vorrang — bitte eine ganze Zahl zwischen"
+            f" {FEED_PRIORITY_MIN} und {FEED_PRIORITY_MAX} angeben.",
+        )
+    return raw
+
+
 def _filtered_config(source_type: str, config: dict) -> dict:
     """The config restricted to the whitelisted keys for this source type."""
     allowed = _CONFIG_KEYS_BY_TYPE[source_type]
@@ -214,6 +231,7 @@ def _serialize_source(source: Source, event_count: int) -> dict:
         "shortcode": source.shortcode,
         "color": source.color,
         "include_in_feed": source.include_in_feed,
+        "feed_priority": source.feed_priority,
         "config": _masked_config(source.config),
         "last_sync_at": source.last_sync_at.isoformat() if source.last_sync_at else None,
         "last_sync_error": source.last_sync_error,
@@ -526,6 +544,11 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
     name = _validated_name(body.name) if body.name is not None else None
     shortcode = _validated_shortcode(body.shortcode) if body.shortcode is not None else None
     color = _validated_color(body.color) if body.color is not None else None
+    feed_priority = (
+        _validated_feed_priority(body.feed_priority)
+        if body.feed_priority is not None
+        else None
+    )
     config = None
     if body.config is not None:
         config = _filtered_config(existing.type, body.config)
@@ -551,6 +574,7 @@ async def update_source(source_id: int, body: SourceUpdate) -> dict:
         shortcode=shortcode,
         color=color,
         include_in_feed=body.include_in_feed,
+        feed_priority=feed_priority,
     )
     updated = storage.get_source(source_id)
     counts = storage.count_events_by_source()
