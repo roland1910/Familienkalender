@@ -7,6 +7,7 @@ with include_in_feed=False (Marina, Valentin) are excluded — Marina
 subscribes to the feed herself.
 """
 
+import hashlib
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -212,6 +213,106 @@ class TestFeedContent:
         titles = summaries(parse_feed(build_feed(storage, now=NOW)))
         assert not any("Alte Dienstreise" in title for title in titles)
         assert not any("Ferne Klausur" in title for title in titles)
+
+
+class TestFeedDeduplication:
+    """The feed collapses the same appointment appearing in several sources."""
+
+    def _seed_duplicate(
+        self, storage: Storage, *, xalt_priority: int, morevalue_priority: int
+    ) -> tuple[int, int]:
+        """The same evening meeting in a Google and a Nextcloud work source."""
+        xalt = storage.add_source(
+            type="google",
+            name="Roland@Xalt",
+            config={},
+            display_mode="filtered",
+            shortcode="RX",
+            feed_priority=xalt_priority,
+        )
+        morevalue = storage.add_source(
+            type="caldav",
+            name="MoreValue",
+            config={},
+            display_mode="filtered",
+            shortcode="MV",
+            feed_priority=morevalue_priority,
+        )
+        start = datetime(2026, 7, 10, 16, 0, tzinfo=BERLIN)
+        end = datetime(2026, 7, 10, 18, 0, tzinfo=BERLIN)
+        for source_id in (xalt, morevalue):
+            storage.sync_events(
+                source_id,
+                [_timed("dup", "Kundentermin", start, end)],
+                WINDOW_START,
+                WINDOW_END,
+                synced_at=NOW,
+            )
+        return xalt, morevalue
+
+    def test_duplicate_appears_once_with_higher_priority_winning(
+        self, storage: Storage
+    ) -> None:
+        self._seed_duplicate(storage, xalt_priority=10, morevalue_priority=0)
+        titles = summaries(parse_feed(build_feed(storage, now=NOW)))
+        # Only the Xalt copy (higher priority) survives — one VEVENT, its
+        # shortcode prefix.
+        assert titles.count("RX Kundentermin") == 1
+        assert "MV Kundentermin" not in titles
+
+    def test_default_priorities_still_collapse_via_source_id(
+        self, storage: Storage
+    ) -> None:
+        # Both at the default priority 0: the duplicate is still removed,
+        # the lower source id (Xalt, created first) wins.
+        self._seed_duplicate(storage, xalt_priority=0, morevalue_priority=0)
+        titles = summaries(parse_feed(build_feed(storage, now=NOW)))
+        assert titles.count("RX Kundentermin") == 1
+        assert "MV Kundentermin" not in titles
+
+    def test_distinct_events_are_not_collapsed(self, storage: Storage) -> None:
+        _, morevalue = self._seed_duplicate(
+            storage, xalt_priority=0, morevalue_priority=0
+        )
+        # A second, genuinely different MoreValue event must survive.
+        storage.sync_events(
+            morevalue,
+            [
+                _timed(
+                    "dup",
+                    "Kundentermin",
+                    datetime(2026, 7, 10, 16, 0, tzinfo=BERLIN),
+                    datetime(2026, 7, 10, 18, 0, tzinfo=BERLIN),
+                ),
+                _timed(
+                    "other",
+                    "Anderer Termin",
+                    datetime(2026, 7, 12, 19, 0, tzinfo=BERLIN),
+                    datetime(2026, 7, 12, 20, 0, tzinfo=BERLIN),
+                ),
+            ],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        titles = summaries(parse_feed(build_feed(storage, now=NOW)))
+        assert "MV Anderer Termin" in titles
+
+    def test_winner_keeps_its_stable_uid(self, storage: Storage) -> None:
+        xalt, _ = self._seed_duplicate(storage, xalt_priority=10, morevalue_priority=0)
+        calendar = parse_feed(build_feed(storage, now=NOW))
+        event = next(
+            component
+            for component in calendar.walk("VEVENT")
+            if "Kundentermin" in str(component["SUMMARY"])
+        )
+        # The surviving UID is the Xalt source's stable UID, unchanged by
+        # the dedup pass. Start is stored (and thus hashed) as a UTC instant.
+        start_utc = datetime(2026, 7, 10, 16, 0, tzinfo=BERLIN).astimezone(UTC)
+        expected_prefix = hashlib.sha256(
+            f"{xalt}|dup|{start_utc.isoformat()}".encode()
+        ).hexdigest()
+        assert str(event["UID"]) == f"{expected_prefix}@familienkalender"
 
 
 class TestFeedFormat:
