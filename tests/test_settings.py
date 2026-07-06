@@ -80,6 +80,23 @@ class TestPowerDevices:
         set_power_devices(storage, [])
         assert get_power_devices(storage) == []
 
+    def test_device_without_name_defaults_to_empty(self, storage: Storage) -> None:
+        # A stored entry may carry no (or an empty) name — the display name
+        # then comes from the HA friendly_name at render time.
+        storage.set_setting(
+            POWER_DEVICES_KEY,
+            json.dumps(
+                [
+                    {"entity_id": "sensor.a_leistung"},
+                    {"entity_id": "sensor.b_leistung", "name": ""},
+                ]
+            ),
+        )
+        assert get_power_devices(storage) == [
+            PowerDevice("sensor.a_leistung", ""),
+            PowerDevice("sensor.b_leistung", ""),
+        ]
+
     def test_invalid_json_falls_back_to_defaults(self, storage: Storage) -> None:
         storage.set_setting(POWER_DEVICES_KEY, "kaputt")
         assert get_power_devices(storage) == list(DEFAULT_POWER_DEVICES)

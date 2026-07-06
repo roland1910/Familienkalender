@@ -160,15 +160,32 @@ class TestPowerDevicesSettings:
         assert response.status_code == 400
         assert "Entity-ID" in response.json()["detail"]
 
-    def test_put_empty_name_is_rejected_in_german(
+    def test_put_empty_name_is_allowed_and_stored_empty(
         self, client: TestClient, storage: Storage
     ) -> None:
+        # An empty name is now valid: the power view falls back to the HA
+        # friendly_name. Whitespace is trimmed to "".
         response = client.put(
             "/api/admin/settings/power",
             json={"devices": [{"entity_id": "sensor.ok_leistung", "name": "  "}]},
         )
-        assert response.status_code == 400
-        assert "Anzeigename" in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["power_devices"] == [
+            {"entity_id": "sensor.ok_leistung", "name": ""}
+        ]
+
+    def test_put_device_without_name_is_allowed(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # The name field may be omitted entirely (bare entity_id row).
+        response = client.put(
+            "/api/admin/settings/power",
+            json={"devices": [{"entity_id": "sensor.ok_leistung"}]},
+        )
+        assert response.status_code == 200
+        assert response.json()["power_devices"] == [
+            {"entity_id": "sensor.ok_leistung", "name": ""}
+        ]
 
     def test_put_overlong_name_is_rejected(
         self, client: TestClient, storage: Storage

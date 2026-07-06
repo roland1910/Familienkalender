@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  deviceDisplayName,
   formatDeviceLines,
   parseDeviceLines,
 } from "../../app/static/admin/power-devices.js";
@@ -40,21 +41,28 @@ test("parseDeviceLines returns an empty list for empty text", () => {
   assert.deepEqual(result.devices, []);
 });
 
-test("parseDeviceLines reports a German error naming a missing '=' by line number", () => {
-  const result = parseDeviceLines("sensor.ok = Gut\nnur-eine-id");
-  assert.equal(result.devices, null);
-  assert.match(result.error, /Zeile 2/);
-  assert.match(result.error, /"="/);
-  assert.match(result.error, /entity_id = Anzeigename/);
+test("parseDeviceLines accepts a bare entity_id (no '=') with an empty name", () => {
+  // A line with just an entity_id means "use the HA friendly_name".
+  const result = parseDeviceLines("sensor.ok = Gut\nsensor.nur_id");
+  assert.equal(result.error, null);
+  assert.deepEqual(result.devices, [
+    { entity_id: "sensor.ok", name: "Gut" },
+    { entity_id: "sensor.nur_id", name: "" },
+  ]);
 });
 
-test("parseDeviceLines rejects lines with an empty name or id after trimming", () => {
-  // Both have a "=" but one side is empty once trimmed — a different
-  // German message than the "no '=' at all" case above.
-  for (const line of ["sensor.a =", "= Nur Name"]) {
+test("parseDeviceLines treats 'entity_id =' (empty name) as a bare id", () => {
+  const result = parseDeviceLines("sensor.a =");
+  assert.equal(result.error, null);
+  assert.deepEqual(result.devices, [{ entity_id: "sensor.a", name: "" }]);
+});
+
+test("parseDeviceLines rejects a line whose entity_id is empty", () => {
+  for (const line of ["= Nur Name", "   =   "]) {
     const result = parseDeviceLines(line);
+    assert.equal(result.devices, null);
     assert.match(result.error, /Zeile 1/);
-    assert.doesNotMatch(result.error, /Kein "="/);
+    assert.match(result.error, /entity_id/);
     assert.match(result.error, /nicht leer/);
   }
 });
@@ -67,7 +75,33 @@ test("formatDeviceLines renders one line per device", () => {
   assert.equal(text, "sensor.kuhlschrank_leistung = Kühlschrank\nsensor.tv_leistung = TV");
 });
 
+test("formatDeviceLines writes a name-less device as a bare entity_id", () => {
+  const text = formatDeviceLines([
+    { entity_id: "sensor.a_leistung", name: "Gerät A" },
+    { entity_id: "sensor.b_leistung", name: "" },
+  ]);
+  assert.equal(text, "sensor.a_leistung = Gerät A\nsensor.b_leistung");
+});
+
 test("format and parse are inverse for well-formed lists", () => {
-  const devices = [{ entity_id: "sensor.a_leistung", name: "Gerät A" }];
+  const devices = [
+    { entity_id: "sensor.a_leistung", name: "Gerät A" },
+    { entity_id: "sensor.b_leistung", name: "" },
+  ];
   assert.deepEqual(parseDeviceLines(formatDeviceLines(devices)).devices, devices);
+});
+
+test("deviceDisplayName prefers the configured override", () => {
+  assert.equal(deviceDisplayName("Mein Name", "HA Name", "sensor.x"), "Mein Name");
+});
+
+test("deviceDisplayName falls back to the HA friendly_name when no override", () => {
+  assert.equal(deviceDisplayName("", "HA Name", "sensor.x"), "HA Name");
+  assert.equal(deviceDisplayName("   ", "HA Name", "sensor.x"), "HA Name");
+  assert.equal(deviceDisplayName(null, "HA Name", "sensor.x"), "HA Name");
+});
+
+test("deviceDisplayName falls back to the entity_id as a last resort", () => {
+  assert.equal(deviceDisplayName("", "", "sensor.x"), "sensor.x");
+  assert.equal(deviceDisplayName("", null, "sensor.x"), "sensor.x");
 });

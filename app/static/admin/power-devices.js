@@ -1,13 +1,17 @@
 // Pure text format for the power-view device list in the settings
-// section: one line per device, "entity_id = Anzeigename". Extracted so
-// the parsing is unit-testable with plain node --test (no DOM).
+// section: one line per device, "entity_id = Anzeigename". The "= name"
+// is optional — a line with just an entity_id uses the sensor's HA
+// friendly_name as the display name. Extracted so the parsing is
+// unit-testable with plain node --test (no DOM).
 
 /**
  * Parse the textarea content into a device list.
  *
  * Returns `{devices, error: null}` on success (blank lines are skipped,
  * everything is trimmed; the first "=" separates id and name, further
- * "=" stay part of the name) or `{devices: null, error}` with a German
+ * "=" stay part of the name). A line with no "=" is a bare entity_id and
+ * yields an empty name (the HA friendly_name is used at display time).
+ * On a malformed line returns `{devices: null, error}` with a German
  * message naming the offending line.
  */
 export function parseDeviceLines(text) {
@@ -18,22 +22,15 @@ export function parseDeviceLines(text) {
     if (line === "") continue;
     const lineNumber = index + 1;
     const separator = line.indexOf("=");
-    if (separator === -1) {
+    // No "=" → bare entity_id, name stays empty (use the HA friendly_name).
+    const entityId = (separator === -1 ? line : line.slice(0, separator)).trim();
+    const name = separator === -1 ? "" : line.slice(separator + 1).trim();
+    if (entityId === "") {
       return {
         devices: null,
         error:
-          `Zeile ${lineNumber}: Kein "=" gefunden — bitte im Format` +
-          ` "entity_id = Anzeigename" angeben.`,
-      };
-    }
-    const entityId = line.slice(0, separator).trim();
-    const name = line.slice(separator + 1).trim();
-    if (entityId === "" || name === "") {
-      return {
-        devices: null,
-        error:
-          `Zeile ${lineNumber}: entity_id und Anzeigename dürfen nach dem` +
-          ` Trennen am "=" nicht leer sein.`,
+          `Zeile ${lineNumber}: Die entity_id darf nicht leer sein` +
+          ` — Format "entity_id" oder "entity_id = Anzeigename".`,
       };
     }
     devices.push({ entity_id: entityId, name });
@@ -41,7 +38,27 @@ export function parseDeviceLines(text) {
   return { devices, error: null };
 }
 
-/** The device list as textarea content (inverse of parseDeviceLines). */
+/**
+ * The name to show for a device, in priority order:
+ *   1. the manually configured override (power_devices name), if set,
+ *   2. otherwise the sensor's HA friendly_name,
+ *   3. otherwise the raw entity_id (last-resort fallback).
+ * Each candidate is trimmed; blank ones are skipped.
+ */
+export function deviceDisplayName(configuredName, friendlyName, entityId) {
+  for (const candidate of [configuredName, friendlyName, entityId]) {
+    const trimmed = (candidate ?? "").trim();
+    if (trimmed !== "") return trimmed;
+  }
+  return "";
+}
+
+/** The device list as textarea content (inverse of parseDeviceLines).
+ *
+ * A device with an empty name is written as a bare entity_id, so the
+ * "use the HA friendly_name" choice round-trips through the textarea. */
 export function formatDeviceLines(devices) {
-  return devices.map((device) => `${device.entity_id} = ${device.name}`).join("\n");
+  return devices
+    .map((device) => (device.name ? `${device.entity_id} = ${device.name}` : device.entity_id))
+    .join("\n");
 }

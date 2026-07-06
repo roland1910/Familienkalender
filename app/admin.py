@@ -86,7 +86,8 @@ class SettingsUpdate(BaseModel):
 
 class PowerDeviceIn(BaseModel):
     entity_id: str
-    name: str
+    # Optional display-name override; empty means "use the HA friendly_name".
+    name: str = ""
 
 
 class PowerDevicesUpdate(BaseModel):
@@ -335,10 +336,8 @@ async def update_power_devices(update: PowerDevicesUpdate) -> dict:
                 " in der Liste.",
             )
         seen_entity_ids.add(entity_id)
-        if not name:
-            raise HTTPException(
-                status_code=400, detail="Der Anzeigename darf nicht leer sein."
-            )
+        # An empty name is allowed: the power view then shows the sensor's
+        # HA friendly_name (with the entity_id as a last-resort fallback).
         if len(name) > MAX_POWER_DEVICE_NAME_LENGTH:
             raise HTTPException(
                 status_code=400,

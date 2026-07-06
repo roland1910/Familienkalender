@@ -635,6 +635,15 @@ body.mode-power .status-badge {
   white-space: nowrap;
 }
 
+/* Small, muted "as of" time under a value (freshness of the reading). */
+.power-tile-time {
+  display: block;
+  margin: 6px 0 0;
+  font-size: 15px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Balance tile: green while the PV covers the load, red while drawing. */
 .power-tile-surplus {
   border-color: var(--ok-border);
@@ -683,9 +692,23 @@ body.mode-power .status-badge {
 }
 
 .power-device-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  white-space: nowrap;
+}
+
+.power-device-watts {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  white-space: nowrap;
+}
+
+.power-device-time {
+  margin-top: 2px;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Sensors reporting unavailable/unknown: value 0 plus a German marker. */

@@ -31,9 +31,18 @@ HAPPY_STATES = {
 class MockHA:
     """Mocked HA Core API: per-entity states plus a request counter."""
 
-    def __init__(self, states: dict[str, str], *, down: bool = False) -> None:
+    def __init__(
+        self,
+        states: dict[str, str],
+        *,
+        down: bool = False,
+        last_updated: dict[str, str] | None = None,
+        friendly_names: dict[str, str] | None = None,
+    ) -> None:
         self.states = states
         self.down = down
+        self.last_updated = last_updated or {}
+        self.friendly_names = friendly_names or {}
         self.requests = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -45,9 +54,12 @@ class MockHA:
         entity_id = request.url.path.rsplit("/", 1)[-1]
         if entity_id not in self.states:
             return httpx.Response(404, json={"message": "Entity not found."})
-        return httpx.Response(
-            200, json={"entity_id": entity_id, "state": self.states[entity_id]}
-        )
+        body = {"entity_id": entity_id, "state": self.states[entity_id]}
+        if entity_id in self.last_updated:
+            body["last_updated"] = self.last_updated[entity_id]
+        if entity_id in self.friendly_names:
+            body["attributes"] = {"friendly_name": self.friendly_names[entity_id]}
+        return httpx.Response(200, json=body)
 
     def client_factory(self) -> Callable[[], httpx.AsyncClient]:
         def create_client() -> httpx.AsyncClient:
@@ -85,11 +97,15 @@ class TestPowerEndpoint:
         response = client.get("/api/power")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["production"] == {"value": 350.5, "available": True}
-        assert payload["consumption"] == {"value": 487.2, "available": True}
-        assert payload["balance"] == {"value": -136.7, "available": True}
-        assert payload["surplus"] == {"value": 0.0, "available": True}
-        assert payload["grid_import"] == {"value": 136.7, "available": True}
+        assert payload["production"] == {
+            "value": 350.5, "available": True, "last_updated": None,
+        }
+        assert payload["consumption"] == {
+            "value": 487.2, "available": True, "last_updated": None,
+        }
+        assert payload["balance"] == {"value": -136.7, "available": True, "last_updated": None}
+        assert payload["surplus"] == {"value": 0.0, "available": True, "last_updated": None}
+        assert payload["grid_import"] == {"value": 136.7, "available": True, "last_updated": None}
         devices = payload["devices"]
         assert [device["name"] for device in devices] == [
             "Kühlschrank", "TV-Sideboard", "Spülmaschine", "Schreibtisch", "Steckdose 6",
@@ -99,7 +115,69 @@ class TestPowerEndpoint:
             "name": "Kühlschrank",
             "value": 45.3,
             "available": True,
+            "last_updated": None,
+            "friendly_name": None,
         }
+
+    def test_last_updated_is_carried_through_for_devices_and_aggregates(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        last_updated = {
+            "sensor.hoymiles_station_balkonkraftwerk_current_power": (
+                "2026-07-06T13:45:12.123456+00:00"
+            ),
+            "sensor.kuhlschrank_leistung": "2026-07-06T13:44:59+00:00",
+        }
+        use_mock_ha(monkeypatch, MockHA(HAPPY_STATES, last_updated=last_updated))
+        payload = client.get("/api/power").json()
+        assert payload["production"]["last_updated"] == "2026-07-06T13:45:12.123456+00:00"
+        assert payload["devices"][0]["last_updated"] == "2026-07-06T13:44:59+00:00"
+
+    def test_last_updated_is_none_when_ha_omits_it(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The mock omits last_updated for every entity by default.
+        use_mock_ha(monkeypatch, MockHA(HAPPY_STATES))
+        payload = client.get("/api/power").json()
+        assert payload["production"]["last_updated"] is None
+        assert payload["devices"][0]["last_updated"] is None
+
+    def test_unavailable_entity_has_last_updated_none(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An unavailable device: value 0, available False, and — because HA
+        # reports no meaningful last_updated for it — last_updated None.
+        states = HAPPY_STATES | {"sensor.kuhlschrank_leistung": "unavailable"}
+        use_mock_ha(monkeypatch, MockHA(states))
+        payload = client.get("/api/power").json()
+        assert payload["devices"][0] == {
+            "entity_id": "sensor.kuhlschrank_leistung",
+            "name": "Kühlschrank",
+            "value": 0.0,
+            "available": False,
+            "last_updated": None,
+            "friendly_name": None,
+        }
+
+    def test_friendly_name_is_carried_through_for_devices(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        friendly = {"sensor.kuhlschrank_leistung": "Kühlschrank Leistung"}
+        use_mock_ha(monkeypatch, MockHA(HAPPY_STATES, friendly_names=friendly))
+        payload = client.get("/api/power").json()
+        assert payload["devices"][0]["friendly_name"] == "Kühlschrank Leistung"
+        # A device whose state has no attributes.friendly_name → None.
+        assert payload["devices"][1]["friendly_name"] is None
+
+    def test_aggregates_do_not_carry_a_friendly_name(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The aggregate tiles have fixed German labels; even if HA reports a
+        # friendly_name for their sensors, it is not surfaced.
+        friendly = {"sensor.stromverbrauch_gesamt": "Stromverbrauch gesamt"}
+        use_mock_ha(monkeypatch, MockHA(HAPPY_STATES, friendly_names=friendly))
+        payload = client.get("/api/power").json()
+        assert "friendly_name" not in payload["consumption"]
 
     def test_unavailable_state_is_zero_and_flagged(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -107,7 +185,9 @@ class TestPowerEndpoint:
         states = HAPPY_STATES | {"sensor.stromverbrauch_gesamt": "unavailable"}
         use_mock_ha(monkeypatch, MockHA(states))
         payload = client.get("/api/power").json()
-        assert payload["consumption"] == {"value": 0.0, "available": False}
+        assert payload["consumption"] == {
+            "value": 0.0, "available": False, "last_updated": None,
+        }
         # The last default device reports "unavailable" in the fixture.
         assert payload["devices"][-1]["value"] == 0.0
         assert payload["devices"][-1]["available"] is False
@@ -121,8 +201,8 @@ class TestPowerEndpoint:
         }
         use_mock_ha(monkeypatch, MockHA(states))
         payload = client.get("/api/power").json()
-        assert payload["balance"] == {"value": 0.0, "available": False}
-        assert payload["surplus"] == {"value": 0.0, "available": False}
+        assert payload["balance"] == {"value": 0.0, "available": False, "last_updated": None}
+        assert payload["surplus"] == {"value": 0.0, "available": False, "last_updated": None}
 
     def test_ha_down_is_502_with_german_message(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -190,6 +270,8 @@ class TestPowerEndpoint:
                 "name": "Waschmaschine",
                 "value": 1200.0,
                 "available": True,
+                "last_updated": None,
+                "friendly_name": None,
             }
         ]
 

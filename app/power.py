@@ -146,7 +146,18 @@ def _parse_state(state: str) -> tuple[float, bool]:
 
 
 async def _fetch_metric(client: httpx.AsyncClient, entity_id: str) -> dict:
-    """One sensor as ``{"value", "available"}``; errors become German messages."""
+    """One sensor as ``{"value", "available", "last_updated"}``.
+
+    ``last_updated`` is the HA state's ``last_updated`` (the moment the
+    state was last *written* — i.e. how fresh the reading is). We use it
+    rather than ``last_changed``, which only advances when the *value*
+    changes and would look stale under a constant load. It is passed
+    through verbatim as an ISO-8601 string for the frontend to format;
+    ``None`` when the sensor has no value (unavailable/unknown/non-numeric)
+    or HA omits the field, so the frontend renders no timestamp.
+
+    Errors become German messages.
+    """
     try:
         response = await client.get(f"states/{entity_id}")
     except httpx.HTTPError as exc:
@@ -161,8 +172,24 @@ async def _fetch_metric(client: httpx.AsyncClient, entity_id: str) -> dict:
         raise HomeAssistantUnavailableError(
             f"Home Assistant antwortet mit Fehler (HTTP {response.status_code})."
         )
-    value, available = _parse_state(str(response.json().get("state", "")))
-    return {"value": value, "available": available}
+    body = response.json()
+    value, available = _parse_state(str(body.get("state", "")))
+    last_updated = body.get("last_updated") if available else None
+    if not isinstance(last_updated, str) or not last_updated:
+        last_updated = None
+    # attributes.friendly_name is the device's name from the HA UI (e.g.
+    # "Waschmaschine"). Passed through so the device list can show the real
+    # HA name when no manual override is configured. None if HA omits it.
+    attributes = body.get("attributes")
+    friendly_name = attributes.get("friendly_name") if isinstance(attributes, dict) else None
+    if not isinstance(friendly_name, str) or not friendly_name:
+        friendly_name = None
+    return {
+        "value": value,
+        "available": available,
+        "last_updated": last_updated,
+        "friendly_name": friendly_name,
+    }
 
 
 def _valid_devices(devices: list) -> list:
@@ -204,14 +231,25 @@ async def _fetch_snapshot_uncached() -> dict:
         if isinstance(result, BaseException):
             raise result
     metrics = dict(zip(entity_ids, results, strict=True))
+    # Aggregate tiles have fixed German labels, so they carry no
+    # friendly_name — only value/available/last_updated.
     payload: dict = {
-        key: metrics[entity_id] for key, entity_id in AGGREGATE_ENTITIES.items()
+        key: _aggregate_metric(metrics[entity_id])
+        for key, entity_id in AGGREGATE_ENTITIES.items()
     }
+    # Devices keep everything, incl. friendly_name (the HA UI name), so the
+    # frontend can fall back to it when no manual name is configured. The
+    # configured name may be "" ("use the HA name") and is passed through.
     payload["devices"] = [
         {"entity_id": device.entity_id, "name": device.name, **metrics[device.entity_id]}
         for device in devices
     ]
     return payload
+
+
+def _aggregate_metric(metric: dict) -> dict:
+    """An aggregate tile's payload (drops the device-only friendly_name)."""
+    return {key: metric[key] for key in ("value", "available", "last_updated")}
 
 
 def _cached_response() -> dict | tuple[str, int] | None:

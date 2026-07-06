@@ -60,10 +60,14 @@ def is_valid_power_entity_id(entity_id: str) -> bool:
 
 @dataclass(frozen=True)
 class PowerDevice:
-    """One device row of the power view: an HA sensor plus a display name."""
+    """One device row of the power view: an HA sensor plus a display name.
+
+    ``name`` is an optional override. When empty, the power view uses the
+    sensor's HA ``friendly_name`` instead (see app.power / power-view.js).
+    """
 
     entity_id: str
-    name: str
+    name: str = ""
 
 
 # The household's smart plugs with German display names — used until the
@@ -164,7 +168,8 @@ def get_power_devices(storage: Storage) -> list[PowerDevice]:
         return list(DEFAULT_POWER_DEVICES)
     try:
         items = json.loads(raw)
-        devices = [PowerDevice(item["entity_id"], item["name"]) for item in items]
+        # name is optional (empty → use the HA friendly_name at display time).
+        devices = [PowerDevice(item["entity_id"], item.get("name") or "") for item in items]
     except (ValueError, TypeError, KeyError):
         return list(DEFAULT_POWER_DEVICES)
     valid_devices = []
