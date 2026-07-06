@@ -18,7 +18,7 @@ from icalendar import Calendar, Event
 from icalendar.prop import vDuration
 
 from app.filtering import filter_events
-from app.models import CalendarEvent, StoredEvent
+from app.models import LOCAL_TZ, CalendarEvent, StoredEvent
 from app.settings import get_evening_boundary
 from app.storage import Storage
 from app.sync import sync_window
@@ -63,8 +63,14 @@ def _moment_key(value: datetime | date) -> str:
     moment expressed in different zones compares equal; all-day events
     (plain dates) key by their ISO date. The ``all_day`` flag is part of
     the dedup key, so a date and a datetime never collide here.
+
+    A tz-naive datetime is interpreted in the family's local zone
+    (Europe/Berlin), never the process timezone, so it lines up with the
+    aware Berlin form of the same wall-clock moment.
     """
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=LOCAL_TZ)
         return value.astimezone(UTC).isoformat()
     return value.isoformat()
 
@@ -80,32 +86,53 @@ def _dedup_key(event: CalendarEvent) -> tuple[str, str, str, bool]:
 
 
 def dedupe_feed_events(items: list[StoredEvent]) -> list[StoredEvent]:
-    """Collapse duplicate events across sources for the ICS feed.
+    """Collapse duplicate events *across sources* for the ICS feed.
 
-    Two events are duplicates when their normalized title, start instant,
-    end instant and all_day flag all match (see ``_dedup_key``). Per group
-    the winner is the source with the higher ``feed_priority``; ties are
-    broken deterministically by the lower ``source_id`` so the outcome is
-    stable across builds. Non-duplicate events keep their input order.
+    Two events are duplicates only when they come from DIFFERENT sources and
+    their normalized title, start instant, end instant and all_day flag all
+    match (see ``_dedup_key``). Deduplication is strictly cross-source: two
+    events from the SAME source (same ``source_id``) are never merged, no
+    matter how identical their display key — they are treated as genuinely
+    distinct appointments (e.g. two contacts "Oma" and "Müller" whose
+    birthdays land on the same day in one contacts source, or two like-named
+    meetings at the same time in one calendar). Losing such an event would be
+    a real appointment vanishing from the feed.
 
-    Runs on the raw event titles (before the shortcode prefix is added in
-    ``build_feed``) and only affects the feed — the calendar views keep
-    showing every source's own chip.
+    Per dedup-key group the *winning source* is the one with the higher
+    ``feed_priority`` (ties broken by the lower ``source_id`` for a stable,
+    build-independent outcome). ALL events from the winning source in that
+    group survive; events from every other source in that group are dropped.
+    Consequently cross-source precedence collapses a key to the winning
+    source as a whole — the winning source keeps each of its same-key events,
+    and lower-priority sources contribute nothing for that key. Priority
+    never causes several genuinely distinct events of one source to be
+    replaced by a single event of another source.
+
+    Location is deliberately NOT part of the dedup key (Roland's call): the
+    same appointment often carries slightly different location text across
+    calendars, so only title + start + end + all_day decide identity.
+
+    Non-duplicate events keep their input order. Runs on the raw event titles
+    (before the shortcode prefix is added in ``build_feed``) and only affects
+    the feed — the calendar views keep showing every source's own chip.
     """
-    winners: dict[tuple[str, str, str, bool], StoredEvent] = {}
-    order: list[tuple[str, str, str, bool]] = []
+    # First pass: find the winning source (feed_priority, then lower id) per
+    # dedup key. -source_id makes the lower id win a priority tie under max().
+    winning_source: dict[tuple[str, str, str, bool], tuple[int, int]] = {}
     for item in items:
         key = _dedup_key(item.event)
-        current = winners.get(key)
-        if current is None:
-            winners[key] = item
-            order.append(key)
-        elif (item.feed_priority, -item.source_id) > (
-            current.feed_priority,
-            -current.source_id,
-        ):
-            winners[key] = item
-    return [winners[key] for key in order]
+        rank = (item.feed_priority, -item.source_id)
+        best = winning_source.get(key)
+        if best is None or rank > best:
+            winning_source[key] = rank
+    # Second pass: keep every event whose own source is the winning source for
+    # its key. Same-source events are thus all retained; other sources drop.
+    return [
+        item
+        for item in items
+        if (item.feed_priority, -item.source_id)
+        == winning_source[_dedup_key(item.event)]
+    ]
 
 
 def build_feed(storage: Storage, *, now: datetime | None = None) -> bytes:

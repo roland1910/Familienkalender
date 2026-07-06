@@ -50,6 +50,11 @@ FEED_PRIORITY_MAX = 100
 
 def is_valid_feed_priority(value: int) -> bool:
     """Whether ``value`` is an acceptable feed priority (bounded integer)."""
+    # The bool guard only protects the direct storage path (create/update
+    # source with a raw Python value): a stray True/False must not be written
+    # as 1/0. On the HTTP path Pydantic already coerces bool→int before this
+    # check ever runs, so the guard is defence-in-depth for callers that reach
+    # storage without passing through the request models.
     return (
         isinstance(value, int)
         and not isinstance(value, bool)
