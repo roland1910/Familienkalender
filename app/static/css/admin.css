@@ -1,6 +1,10 @@
 /* Familienkalender – Adminbereich. Primär Desktop im HA-Panel,
    Touch-Ziele trotzdem mindestens 44px. */
 
+/* Theme system (Etappe 19) — same mechanism as calendar.css: semantic
+   variables on :root (light default), dark palette via prefers-color-scheme
+   AND the :root[data-theme="dark"] override; admin.html applies the stored
+   per-device theme (theme-memory.js) to documentElement before paint. */
 :root {
   --bg: #f4f5f7;
   --surface: #ffffff;
@@ -8,12 +12,45 @@
   --text: #1c1e21;
   --text-muted: #6b7280;
   --accent: #2563eb;
+  --accent-contrast: #ffffff;
   --danger: #b91c1c;
   --ok-bg: #dcfce7;
   --ok-text: #166534;
   --warn-bg: #fee2e2;
   --warn-text: #991b1b;
   --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a;
+    --surface: #1e2127;
+    --border: #363b44;
+    --text: #e6e8eb;
+    --text-muted: #9aa0aa;
+    --accent: #5b8cff;
+    --accent-contrast: #0b0d10;
+    --danger: #ff9d9a;
+    --ok-bg: #14301f;
+    --ok-text: #7ee0a3;
+    --warn-bg: #3a1a1a;
+    --warn-text: #ff9d9a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1e2127;
+  --border: #363b44;
+  --text: #e6e8eb;
+  --text-muted: #9aa0aa;
+  --accent: #5b8cff;
+  --accent-contrast: #0b0d10;
+  --danger: #ff9d9a;
+  --ok-bg: #14301f;
+  --ok-text: #7ee0a3;
+  --warn-bg: #3a1a1a;
+  --warn-text: #ff9d9a;
 }
 
 * {
@@ -143,7 +180,7 @@ body {
 .action-button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
 }
 
 .action-button.subtle {
@@ -420,7 +457,7 @@ body {
   background: none;
   border: none;
   padding: 4px 2px;
-  color: var(--accent, #2962ff);
+  color: var(--accent);
   font: inherit;
   cursor: pointer;
   text-decoration: underline;
@@ -472,7 +509,7 @@ body {
 }
 
 .slideshow-browse-enter:hover {
-  border-color: var(--accent, #2962ff);
+  border-color: var(--accent);
 }
 
 .slideshow-browse-name {

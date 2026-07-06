@@ -1,17 +1,97 @@
 /* Familienkalender — Kiosk-Display (1920x1080) und HA-Ingress-Panel (schmal).
    Touch-Ziele mindestens 48px. */
 
+/* Theme system (Etappe 19): all UI-chrome colors are semantic CSS custom
+   properties defined once here. The light palette is the default on :root;
+   the dark palette is applied two ways (see the blocks after :root):
+     - automatically via @media (prefers-color-scheme: dark)
+     - manually via :root[data-theme="dark"] (overrides the media query)
+   :root[data-theme="light"] forces light even under a dark system; the
+   per-device choice is kept in localStorage (theme-memory.js) and applied
+   to documentElement.dataset.theme before the first paint (inline head
+   script) so there is no light flash. data-theme="auto" leaves the media
+   query in charge.
+
+   NOTE: source-specific event-chip colors (--source-color, from the DB or
+   the palette in colors.js) are deliberately NOT theme variables — chips
+   keep their own background with light text on both light and dark. */
 :root {
   --bg: #f4f5f7;
   --surface: #ffffff;
+  --surface-2: #eef0f3;
   --border: #d8dadf;
   --text: #1c1e21;
   --text-muted: #6b7280;
   --accent: #2563eb;
+  --accent-contrast: #ffffff;
   --today-bg: #eaf1fe;
+  --chip-fg: #ffffff;
+  --chip-border: rgba(255, 255, 255, 0.4);
   --warn-bg: #fef3c7;
   --warn-text: #92400e;
+  --overlay: rgba(0, 0, 0, 0.35);
+  --shadow: rgba(0, 0, 0, 0.25);
+  --ok-border: #16a34a;
+  --ok-bg: #f0fdf4;
+  --ok-text: #15803d;
+  --alert-border: #dc2626;
+  --alert-bg: #fef2f2;
+  --alert-text: #b91c1c;
   --radius: 8px;
+}
+
+/* Dark palette. Kept in a mixin-like list re-used by both activation paths
+   below via a shared declaration; CSS has no mixins, so the values are
+   written out in each block. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a;
+    --surface: #1e2127;
+    --surface-2: #262a31;
+    --border: #363b44;
+    --text: #e6e8eb;
+    --text-muted: #9aa0aa;
+    --accent: #5b8cff;
+    --accent-contrast: #0b0d10;
+    --today-bg: #223047;
+    --chip-fg: #ffffff;
+    --chip-border: rgba(255, 255, 255, 0.25);
+    --warn-bg: #3a2f12;
+    --warn-text: #f5d78a;
+    --overlay: rgba(0, 0, 0, 0.6);
+    --shadow: rgba(0, 0, 0, 0.6);
+    --ok-border: #2f9e57;
+    --ok-bg: #14301f;
+    --ok-text: #7ee0a3;
+    --alert-border: #e0524f;
+    --alert-bg: #3a1a1a;
+    --alert-text: #ff9d9a;
+  }
+}
+
+/* Manual override: wins over the media query regardless of system setting. */
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1e2127;
+  --surface-2: #262a31;
+  --border: #363b44;
+  --text: #e6e8eb;
+  --text-muted: #9aa0aa;
+  --accent: #5b8cff;
+  --accent-contrast: #0b0d10;
+  --today-bg: #223047;
+  --chip-fg: #ffffff;
+  --chip-border: rgba(255, 255, 255, 0.25);
+  --warn-bg: #3a2f12;
+  --warn-text: #f5d78a;
+  --overlay: rgba(0, 0, 0, 0.6);
+  --shadow: rgba(0, 0, 0, 0.6);
+  --ok-border: #2f9e57;
+  --ok-bg: #14301f;
+  --ok-text: #7ee0a3;
+  --alert-border: #e0524f;
+  --alert-bg: #3a1a1a;
+  --alert-text: #ff9d9a;
 }
 
 * {
@@ -111,7 +191,7 @@ body {
 .view-button.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
 }
 
 .status-badge {
@@ -321,7 +401,7 @@ body.mode-power .status-badge {
   gap: 4px;
   align-items: baseline;
   background: var(--source-color, var(--accent));
-  color: #fff;
+  color: var(--chip-fg);
   border-radius: 4px;
   padding: 1px 6px;
   font-size: 14px;
@@ -359,7 +439,7 @@ body.mode-power .status-badge {
 .popover-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -373,7 +453,7 @@ body.mode-power .status-badge {
 .popover-panel {
   background: var(--surface);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 12px 40px var(--shadow);
   min-width: 340px;
   max-width: min(560px, 92vw);
   max-height: 80vh;
@@ -560,21 +640,21 @@ body.mode-power .status-badge {
 
 /* Balance tile: green while the PV covers the load, red while drawing. */
 .power-tile-surplus {
-  border-color: #16a34a;
-  background: #f0fdf4;
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
 }
 
 .power-tile-surplus .power-tile-value {
-  color: #15803d;
+  color: var(--ok-text);
 }
 
 .power-tile-grid {
-  border-color: #dc2626;
-  background: #fef2f2;
+  border-color: var(--alert-border);
+  background: var(--alert-bg);
 }
 
 .power-tile-grid .power-tile-value {
-  color: #b91c1c;
+  color: var(--alert-text);
 }
 
 .power-devices-title {
@@ -716,7 +796,7 @@ body.mode-power .status-badge {
 
 .allday-bar {
   background: var(--source-color, var(--accent));
-  color: #fff;
+  color: var(--chip-fg);
   border-radius: 4px;
   padding: 2px 8px;
   font-size: 14px;
@@ -787,12 +867,12 @@ body.mode-power .status-badge {
   display: flex;
   flex-direction: column;
   background: var(--source-color, var(--accent));
-  color: #fff;
+  color: var(--chip-fg);
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 13px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--chip-border);
   /* Very short events stay readable regardless of the auto-zoom level. */
   min-height: 24px;
 }
