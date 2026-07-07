@@ -25,12 +25,14 @@ hitting a slow or down HA instance.
 """
 
 import asyncio
+import datetime as dt
+import json
 import logging
 import os
 import time
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.settings import get_power_devices, is_valid_power_entity_id
 from app.storage import get_storage
@@ -55,6 +57,27 @@ AGGREGATE_ENTITIES = {
     "surplus": "sensor.strom_ueberschuss",
     "grid_import": "sensor.strom_netzbezug",
 }
+
+# History chart: fixed production/consumption sensors (never user-controlled,
+# so no SSRF/injection surface) plotted over time. The supported windows are
+# the only values /api/power/history accepts (others clamp to the default);
+# they mirror the HA dashboard's 1T/3T/1W buttons.
+HISTORY_PRODUCTION_ENTITY = AGGREGATE_ENTITIES["production"]
+HISTORY_CONSUMPTION_ENTITY = AGGREGATE_ENTITIES["consumption"]
+HISTORY_ALLOWED_HOURS = (24, 72, 168)
+HISTORY_DEFAULT_HOURS = 24
+# One HA history/period response for a week can be many thousands of raw
+# points; cap each series so the SVG chart stays cheap to draw and the
+# payload small. ~300 is plenty of resolution across 1920px.
+MAX_HISTORY_POINTS = 300
+# History is expensive on HA (SQLite recorder scan), so cache longer than the
+# live tiles; matches the dashboard's ~60s refresh cadence.
+HISTORY_CACHE_TTL_SECONDS = 60.0
+HISTORY_REQUEST_TIMEOUT_SECONDS = 15.0
+# Hard cap on the history response body (a runaway recorder could otherwise
+# stream unbounded data before downsampling); generous for two week-long
+# series of minimal states.
+MAX_HISTORY_RESPONSE_BYTES = 20 * 1024 * 1024
 
 # States HA uses for sensors that exist but currently have no value.
 _NO_VALUE_STATES = frozenset({"unavailable", "unknown", "none", ""})
@@ -82,6 +105,12 @@ _error_cache_valid_until = 0.0
 # starting their own (thundering-herd protection when HA is slow or down).
 _fetch_lock = asyncio.Lock()
 
+# History cache: keyed by the window (hours) since each window is a separate
+# HA query. Value is (payload, valid_until). A lock serialises cache-miss
+# fetches (history is the expensive query).
+_history_cache: dict[int, tuple[dict, float]] = {}
+_history_lock = asyncio.Lock()
+
 
 def _now() -> float:
     """Monotonic clock; wrapped so tests can control cache expiry."""
@@ -95,6 +124,11 @@ def reset_cache() -> None:
     _cache_valid_until = 0.0
     _cached_error = None
     _error_cache_valid_until = 0.0
+
+
+def reset_history_cache() -> None:
+    """Drop the cached history windows (tests)."""
+    _history_cache.clear()
 
 
 class MissingHomeAssistantTokenError(Exception):
@@ -306,5 +340,161 @@ async def get_power() -> dict:
     """Current power values for the view; served from cache within the TTL."""
     try:
         return await _fetch_snapshot()
+    except HomeAssistantUnavailableError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# -- history (/api/power/history): production vs. consumption over time --------
+
+
+def _clamp_hours(hours: int) -> int:
+    """Only the supported windows are allowed; anything else → the default."""
+    return hours if hours in HISTORY_ALLOWED_HOURS else HISTORY_DEFAULT_HOURS
+
+
+def downsample(points: list[dict], max_points: int) -> list[dict]:
+    """Reduce a time-ordered point list to at most ``max_points``, in order.
+
+    Even (bucketed) index sampling: keeps the shape of the curve while
+    bounding payload and SVG cost. Short series pass through untouched.
+    """
+    count = len(points)
+    if count <= max_points:
+        return points
+    step = count / max_points
+    return [points[int(i * step)] for i in range(max_points)]
+
+
+def _parse_history_series(raw: object) -> list[dict]:
+    """One HA history series → ``[{"t": ms, "v": watts}, ...]``.
+
+    Non-numeric / unavailable states and unparseable timestamps are
+    skipped. ``t`` is epoch milliseconds (UTC), robust to the frontend's
+    local-time rendering.
+    """
+    if not isinstance(raw, list):
+        return []
+    points: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        value, available = _parse_state(str(entry.get("state", "")))
+        if not available:
+            continue
+        stamp = entry.get("last_changed") or entry.get("last_updated")
+        if not isinstance(stamp, str):
+            continue
+        try:
+            moment = dt.datetime.fromisoformat(stamp)
+        except ValueError:
+            continue
+        points.append({"t": int(moment.timestamp() * 1000), "v": value})
+    points.sort(key=lambda point: point["t"])
+    return points
+
+
+async def _fetch_history_uncached(hours: int) -> dict:
+    """Fetch production + consumption history from HA and build the payload."""
+    start = dt.datetime.now(dt.UTC) - dt.timedelta(hours=hours)
+    # minimal_response + no_attributes keep the recorder scan cheap and the
+    # body small; the two entities are fixed constants (no injection surface).
+    path = f"history/period/{start.isoformat()}"
+    params = {
+        "filter_entity_id": f"{HISTORY_PRODUCTION_ENTITY},{HISTORY_CONSUMPTION_ENTITY}",
+        "minimal_response": "",
+        "no_attributes": "",
+    }
+    async with create_client() as client:
+        try:
+            request = client.build_request(
+                "GET", path, params=params, timeout=HISTORY_REQUEST_TIMEOUT_SECONDS
+            )
+            response, body = await _send_history_limited(client, request)
+        except httpx.HTTPError as exc:
+            raise HomeAssistantUnavailableError(
+                "Home Assistant ist nicht erreichbar."
+            ) from exc
+    if response.status_code != 200:
+        raise HomeAssistantUnavailableError(
+            f"Home Assistant antwortet mit Fehler (HTTP {response.status_code})."
+        )
+    series = _decode_history_body(body)
+    return {
+        "hours": hours,
+        "production": downsample(_parse_history_series(series[0]), MAX_HISTORY_POINTS),
+        "consumption": downsample(_parse_history_series(series[1]), MAX_HISTORY_POINTS),
+    }
+
+
+async def _send_history_limited(
+    client: httpx.AsyncClient, request: httpx.Request
+) -> tuple[httpx.Response, bytes]:
+    """Send the history request, reading the body under a hard size limit.
+
+    A lying/absent Content-Length must not bypass the cap, so the streamed
+    bytes are counted too.
+    """
+    limit_message = "Home Assistant antwortet mit einer zu großen Verlaufsantwort."
+    response = await client.send(request, stream=True)
+    try:
+        declared = response.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > MAX_HISTORY_RESPONSE_BYTES:
+            raise HomeAssistantUnavailableError(limit_message)
+        total = 0
+        chunks: list[bytes] = []
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > MAX_HISTORY_RESPONSE_BYTES:
+                raise HomeAssistantUnavailableError(limit_message)
+            chunks.append(chunk)
+        return response, b"".join(chunks)
+    finally:
+        await response.aclose()
+
+
+def _decode_history_body(body: bytes) -> list:
+    """Parse HA's history/period body into two series (production, consumption).
+
+    HA returns a list of series in filter_entity_id order; anything shorter
+    is padded with empty series so callers can index [0] and [1] safely.
+    """
+    try:
+        data = json.loads(body)
+    except ValueError as exc:
+        raise HomeAssistantUnavailableError(
+            "Home Assistant liefert eine unlesbare Verlaufsantwort."
+        ) from exc
+    if not isinstance(data, list):
+        data = []
+    while len(data) < 2:
+        data.append([])
+    return data
+
+
+async def _fetch_history(hours: int) -> dict:
+    """Cache-and-lock-aware history fetch for a window."""
+    now = _now()
+    cached = _history_cache.get(hours)
+    if cached is not None and now < cached[1]:
+        return cached[0]
+    async with _history_lock:
+        cached = _history_cache.get(hours)
+        if cached is not None and _now() < cached[1]:
+            return cached[0]
+        payload = await _fetch_history_uncached(hours)
+        _history_cache[hours] = (payload, _now() + HISTORY_CACHE_TTL_SECONDS)
+        return payload
+
+
+@router.get("/history")
+async def get_power_history(hours: str = Query(default=str(HISTORY_DEFAULT_HOURS))) -> dict:
+    """Production vs. consumption over the given window (24/72/168 hours)."""
+    try:
+        requested = int(hours)
+    except (TypeError, ValueError):
+        requested = HISTORY_DEFAULT_HOURS
+    window = _clamp_hours(requested)
+    try:
+        return await _fetch_history(window)
     except HomeAssistantUnavailableError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
