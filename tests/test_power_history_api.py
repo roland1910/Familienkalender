@@ -244,3 +244,15 @@ class TestDownsample:
         assert len(reduced) <= 100
         times = [p["t"] for p in reduced]
         assert times == sorted(times)
+
+    def test_downsample_keeps_last_point_above_max(self) -> None:
+        points = [{"t": i, "v": float(i)} for i in range(1000)]
+        reduced = power.downsample(points, 300)
+        assert len(reduced) <= 300
+        assert reduced[-1] == points[-1]
+
+    def test_downsample_keeps_last_point_just_above_max(self) -> None:
+        points = [{"t": i, "v": float(i)} for i in range(301)]
+        reduced = power.downsample(points, 300)
+        assert len(reduced) <= 300
+        assert reduced[-1] == points[-1]

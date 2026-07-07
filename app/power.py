@@ -28,6 +28,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import math
 import os
 import time
 
@@ -170,13 +171,20 @@ def _parse_state(state: str) -> tuple[float, bool]:
 
     ``unavailable``/``unknown`` and non-numeric states become 0 with
     ``available=False`` — the sensor exists, it just has no value right now.
+    ``float()`` also accepts "inf"/"nan"/"infinity" (any case, optional
+    sign); those are non-standard JSON and would break the frontend's
+    JSON.parse, so they are treated the same as unavailable rather than
+    passed through.
     """
     if state.lower() in _NO_VALUE_STATES:
         return 0.0, False
     try:
-        return float(state), True
+        value = float(state)
     except ValueError:
         return 0.0, False
+    if not math.isfinite(value):
+        return 0.0, False
+    return value, True
 
 
 async def _fetch_metric(client: httpx.AsyncClient, entity_id: str) -> dict:
@@ -357,12 +365,22 @@ def downsample(points: list[dict], max_points: int) -> list[dict]:
 
     Even (bucketed) index sampling: keeps the shape of the curve while
     bounding payload and SVG cost. Short series pass through untouched.
+
+    The bucket formula ``int(i * step)`` never reaches the last index on its
+    own (the final bucket's start is always < count - 1), so the most recent
+    point — the right edge of the chart, "now" — would be missing. The last
+    output slot is forced to ``count - 1`` (the true last input point)
+    instead; every other slot keeps the even bucket sampling, so this cannot
+    introduce a duplicate (the last *bucketed* index is always < count - 1
+    for count > max_points, i.e. strictly less than the forced one).
     """
     count = len(points)
     if count <= max_points:
         return points
     step = count / max_points
-    return [points[int(i * step)] for i in range(max_points)]
+    result = [points[int(i * step)] for i in range(max_points)]
+    result[-1] = points[-1]
+    return result
 
 
 def _parse_history_series(raw: object) -> list[dict]:

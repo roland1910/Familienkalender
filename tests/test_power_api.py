@@ -204,6 +204,23 @@ class TestPowerEndpoint:
         assert payload["balance"] == {"value": 0.0, "available": False, "last_updated": None}
         assert payload["surplus"] == {"value": 0.0, "available": False, "last_updated": None}
 
+    def test_inf_and_nan_states_are_flagged_not_passed_through(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "inf"/"nan" parse fine with float() but are not valid JSON — passing
+        # them through would break the frontend's JSON.parse and take down
+        # the whole chart. They must be treated like unavailable.
+        states = HAPPY_STATES | {
+            "sensor.strom_bilanz": "inf",
+            "sensor.strom_ueberschuss": "-Infinity",
+            "sensor.strom_netzbezug": "NaN",
+        }
+        use_mock_ha(monkeypatch, MockHA(states))
+        payload = client.get("/api/power").json()
+        assert payload["balance"] == {"value": 0.0, "available": False, "last_updated": None}
+        assert payload["surplus"] == {"value": 0.0, "available": False, "last_updated": None}
+        assert payload["grid_import"] == {"value": 0.0, "available": False, "last_updated": None}
+
     def test_ha_down_is_502_with_german_message(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -447,3 +464,22 @@ class TestCreateClient:
             assert ha_client.headers["Authorization"] == "Bearer dev-token"
         finally:
             del ha_client
+
+
+class TestParseState:
+    def test_normal_numeric_states_are_unchanged(self) -> None:
+        assert power._parse_state("45.3") == (45.3, True)
+        assert power._parse_state("-136.7") == (-136.7, True)
+        assert power._parse_state("0") == (0.0, True)
+
+    def test_no_value_states_are_unavailable(self) -> None:
+        assert power._parse_state("unavailable") == (0.0, False)
+        assert power._parse_state("unknown") == (0.0, False)
+        assert power._parse_state("quatsch") == (0.0, False)
+
+    def test_inf_and_nan_states_are_unavailable_not_passed_through(self) -> None:
+        # float() happily parses these but they are not valid JSON — treat
+        # them like unavailable rather than letting inf/nan reach the
+        # frontend's JSON.parse.
+        for state in ("inf", "-inf", "Infinity", "-Infinity", "nan", "NaN"):
+            assert power._parse_state(state) == (0.0, False), state
