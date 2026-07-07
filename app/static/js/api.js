@@ -62,6 +62,22 @@ export async function fetchPower() {
   return response.json();
 }
 
+export async function fetchPowerHistory(hours) {
+  const query = new URLSearchParams({ hours: String(hours) });
+  const response = await fetch(`api/power/history?${query}`);
+  if (!response.ok) {
+    let detail = `Verlaufsdaten laden fehlgeschlagen: HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (typeof payload.detail === "string") detail = payload.detail;
+    } catch {
+      // keep the generic message
+    }
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
 export async function fetchNextPhoto() {
   const response = await fetch("api/slideshow/next");
   if (!response.ok) {

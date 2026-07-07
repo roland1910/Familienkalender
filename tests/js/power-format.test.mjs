@@ -3,13 +3,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { balanceTile, formatWatts } from "../../app/static/js/power-format.js";
+import {
+  balanceTile,
+  formatChartTime,
+  formatWatts,
+} from "../../app/static/js/power-format.js";
 
 test("formatWatts rounds and uses German thousands separators", () => {
   assert.equal(formatWatts(0), "0 W");
   assert.equal(formatWatts(45.3), "45 W");
   assert.equal(formatWatts(1234.5), "1.235 W");
   assert.equal(formatWatts(-136.7), "-137 W");
+});
+
+test("formatChartTime shows HH:MM for a one-day window", () => {
+  const ms = new Date(2026, 6, 6, 9, 5).getTime();
+  assert.equal(formatChartTime(ms, 24), "09:05");
+});
+
+test("formatChartTime shows the date for multi-day windows", () => {
+  const ms = new Date(2026, 6, 6, 9, 5).getTime();
+  assert.equal(formatChartTime(ms, 168), "06.07.");
+});
+
+test("formatChartTime returns empty for an invalid timestamp", () => {
+  assert.equal(formatChartTime(Number.NaN, 24), "");
 });
 
 test("balanceTile shows a green surplus when the PV covers the load", () => {

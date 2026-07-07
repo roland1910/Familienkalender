@@ -601,66 +601,137 @@ body.mode-power .status-badge {
   gap: 20px;
 }
 
-.power-tiles {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-}
-
-.power-tile {
+/* Compact current-values line: Erzeugung · Verbrauch · Bilanz. */
+.power-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px 28px;
+  padding: 14px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 24px 16px;
-  text-align: center;
 }
 
-.power-tile-icon {
-  margin: 0;
-  font-size: 44px;
-  line-height: 1.2;
+.power-summary-segment {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
-.power-tile-label {
-  margin: 4px 0 0;
-  font-size: 22px;
+.power-summary-label {
+  font-size: 20px;
   color: var(--text-muted);
 }
 
-.power-tile-value {
-  margin: 8px 0 0;
-  font-size: 52px;
+.power-summary-value {
+  font-size: 30px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-/* Small, muted "as of" time under a value (freshness of the reading). */
-.power-tile-time {
-  display: block;
-  margin: 6px 0 0;
+/* Balance segment: green surplus, red grid import (matches the tiles' logic). */
+.power-summary-surplus .power-summary-value {
+  color: var(--ok-text);
+}
+
+.power-summary-grid .power-summary-value {
+  color: var(--alert-text);
+}
+
+/* Dezenter Gesamt-Zeitstempel am Ende der Zeile. */
+.power-summary-time {
+  margin-left: auto;
   font-size: 15px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
-/* Balance tile: green while the PV covers the load, red while drawing. */
-.power-tile-surplus {
-  border-color: var(--ok-border);
-  background: var(--ok-bg);
+/* History chart card: title + legend, period buttons, SVG. */
+.power-chart {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.power-tile-surplus .power-tile-value {
-  color: var(--ok-text);
+.power-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.power-tile-grid {
-  border-color: var(--alert-border);
-  background: var(--alert-bg);
+.power-chart-title {
+  margin: 0;
+  font-size: 22px;
 }
 
-.power-tile-grid .power-tile-value {
-  color: var(--alert-text);
+.power-chart-legend {
+  display: flex;
+  gap: 20px;
+}
+
+.power-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.power-chart-legend-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.power-chart-periods {
+  display: flex;
+  gap: 8px;
+}
+
+.power-period-btn {
+  min-width: 56px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.power-period-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.power-chart-body {
+  width: 100%;
+}
+
+.power-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.power-chart-empty {
+  margin: 0;
+  padding: 48px 0;
+  text-align: center;
+  font-size: 20px;
+  color: var(--text-muted);
 }
 
 .power-devices-title {
@@ -930,17 +1001,24 @@ body.mode-power .status-badge {
     padding: 2px 10px 6px;
   }
 
-  /* Power view on the narrow ingress panel: stacked tiles, smaller values. */
-  .power-tiles {
-    grid-template-columns: 1fr;
+  /* Power view on the narrow ingress panel: summary wraps, smaller values. */
+  .power-summary {
+    gap: 8px 20px;
+    padding: 12px 14px;
   }
 
-  .power-tile {
-    padding: 16px 12px;
+  .power-summary-value {
+    font-size: 24px;
   }
 
-  .power-tile-value {
-    font-size: 36px;
+  .power-summary-time {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+
+  .power-chart-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .power-device {

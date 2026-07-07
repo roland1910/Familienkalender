@@ -39,6 +39,20 @@ export function formatLastUpdated(iso, now) {
 }
 
 /**
+ * X-axis tick label for a chart timestamp (epoch ms), in local time.
+ * Windows of one day show "HH:MM"; longer windows show "TT.MM." so the
+ * days are distinguishable. `hours` is the selected window (24/72/168).
+ */
+export function formatChartTime(ms, hours) {
+  const moment = new Date(ms);
+  if (Number.isNaN(moment.getTime())) return "";
+  if (hours <= 24) {
+    return `${pad2(moment.getHours())}:${pad2(moment.getMinutes())}`;
+  }
+  return `${pad2(moment.getDate())}.${pad2(moment.getMonth() + 1)}.`;
+}
+
+/**
  * What the balance tile shows, mirroring the HA dashboard logic:
  * a green surplus while the PV covers the load, a red grid import
  * while power is drawn, neutral when they cancel out exactly.
