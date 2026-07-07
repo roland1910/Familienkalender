@@ -1,7 +1,7 @@
-"""E2E tests for the power view: mode switch, values, error state.
+"""E2E tests for the power view: mode switch, compact summary, chart.
 
-/api/power is mocked via Playwright route interception — the E2E server
-has no Home Assistant behind it.
+/api/power and /api/power/history are mocked via Playwright route
+interception — the E2E server has no Home Assistant behind it.
 """
 
 import datetime as dt
@@ -53,48 +53,80 @@ SURPLUS_PAYLOAD = POWER_PAYLOAD | {
     "grid_import": {"value": 0.0, "available": True},
 }
 
+# Two distinct history datasets so a period switch is observable: the 1-day
+# window has two production points, the 1-week window has three.
+_NOW_MS = int(dt.datetime.now(dt.UTC).timestamp() * 1000)
+
+
+def _history(hours: int, production_points: int) -> dict:
+    span = hours * 3600 * 1000
+    return {
+        "hours": hours,
+        "production": [
+            {"t": _NOW_MS - span + i * (span // production_points), "v": 100 + i * 50}
+            for i in range(production_points)
+        ],
+        "consumption": [
+            {"t": _NOW_MS - span, "v": 400},
+            {"t": _NOW_MS, "v": 500},
+        ],
+    }
+
 
 def mock_power(page: Page, payload: dict) -> None:
     page.route("**/api/power", lambda route: route.fulfill(json=payload))
 
 
-def test_switch_to_power_view_and_back(page: Page, server_url: str) -> None:
-    mock_power(page, POWER_PAYLOAD)
-    goto_calendar(page, server_url)
+def mock_history(page: Page) -> None:
+    def handler(route):
+        hours = 24
+        match = re.search(r"hours=(\d+)", route.request.url)
+        if match:
+            hours = int(match.group(1))
+        production_points = 3 if hours == 168 else 2
+        route.fulfill(json=_history(hours, production_points))
 
+    page.route("**/api/power/history**", handler)
+
+
+def open_power_view(page: Page, server_url: str) -> None:
+    goto_calendar(page, server_url)
     page.locator("#btn-mode-power").click()
     expect(page.locator(".power-view")).to_be_visible()
+
+
+def test_switch_to_power_view_and_back(page: Page, server_url: str) -> None:
+    mock_power(page, POWER_PAYLOAD)
+    mock_history(page)
+    open_power_view(page, server_url)
+
     expect(page.locator("#period-title")).to_have_text("Strom")
     # Calendar-only toolbar controls disappear in power mode.
     expect(page.locator("#btn-month")).to_be_hidden()
     expect(page.locator("#btn-prev")).to_be_hidden()
 
-    # Tiles: production, consumption, red grid-import balance (German format).
-    tiles = page.locator(".power-tile")
-    expect(tiles).to_have_count(3)
-    expect(tiles.nth(0)).to_contain_text("Erzeugung")
-    expect(tiles.nth(0)).to_contain_text("351 W")
-    expect(tiles.nth(1)).to_contain_text("Verbrauch")
-    expect(tiles.nth(1)).to_contain_text("1.487 W")
-    expect(tiles.nth(2)).to_have_class(re.compile("power-tile-grid"))
-    expect(tiles.nth(2)).to_contain_text("Netzbezug")
-    expect(tiles.nth(2)).to_contain_text("137 W")
+    # Compact summary line: production, consumption, red grid-import balance.
+    summary = page.locator(".power-summary")
+    expect(summary).to_be_visible()
+    segments = page.locator(".power-summary-segment")
+    expect(segments).to_have_count(3)
+    expect(segments.nth(0)).to_contain_text("Erzeugung")
+    expect(segments.nth(0)).to_contain_text("351 W")
+    expect(segments.nth(1)).to_contain_text("Verbrauch")
+    expect(segments.nth(1)).to_contain_text("1.487 W")
+    expect(segments.nth(2)).to_have_class(re.compile("power-summary-grid"))
+    expect(segments.nth(2)).to_contain_text("Netzbezug")
+    expect(segments.nth(2)).to_contain_text("137 W")
+    # One muted freshness stamp for the whole line (today → HH:MM).
+    expect(page.locator(".power-summary-time")).to_have_text("11:20")
 
     # Device list with watt values; the unavailable plug is marked.
     devices = page.locator(".power-device")
     expect(devices).to_have_count(2)
     expect(devices.nth(0)).to_contain_text("Kühlschrank")
     expect(devices.nth(0)).to_contain_text("45 W")
-    # No configured name → the HA friendly_name is shown for the second row.
     expect(devices.nth(1)).to_contain_text("Schreibtisch Steckdose")
     expect(devices.nth(1)).to_contain_text("nicht verfügbar")
-
-    # The "as of" time appears small under the first device (today → HH:MM).
-    expect(devices.nth(0).locator(".power-device-time")).to_have_text("11:20")
-    # The unavailable device has no last_updated → no timestamp rendered.
-    expect(devices.nth(1).locator(".power-device-time")).to_have_count(0)
-    # The production tile also shows its freshness time.
-    expect(tiles.nth(0).locator(".power-tile-time")).to_have_text("11:20")
 
     # Switching back restores the calendar (and its toolbar).
     page.locator("#btn-mode-calendar").click()
@@ -103,14 +135,60 @@ def test_switch_to_power_view_and_back(page: Page, server_url: str) -> None:
     expect(page.locator("#btn-month")).to_be_visible()
 
 
-def test_surplus_is_shown_as_green_balance_tile(page: Page, server_url: str) -> None:
+def test_surplus_is_shown_as_green_balance_segment(page: Page, server_url: str) -> None:
     mock_power(page, SURPLUS_PAYLOAD)
-    goto_calendar(page, server_url)
-    page.locator("#btn-mode-power").click()
-    balance = page.locator(".power-tile").nth(2)
-    expect(balance).to_have_class(re.compile("power-tile-surplus"))
+    mock_history(page)
+    open_power_view(page, server_url)
+    balance = page.locator(".power-summary-segment").nth(2)
+    expect(balance).to_have_class(re.compile("power-summary-surplus"))
     expect(balance).to_contain_text("Überschuss")
     expect(balance).to_contain_text("214 W")
+
+
+def test_history_chart_renders_two_series(page: Page, server_url: str) -> None:
+    mock_power(page, POWER_PAYLOAD)
+    mock_history(page)
+    open_power_view(page, server_url)
+
+    chart = page.locator(".power-chart")
+    expect(chart).to_be_visible()
+    expect(chart.locator(".power-chart-title")).to_have_text("Erzeugung vs. Verbrauch")
+    # Legend names both series.
+    expect(chart).to_contain_text("Erzeugung")
+    expect(chart).to_contain_text("Verbrauch")
+    # Two series → two polyline paths in the SVG (default 1T = 2 prod points).
+    svg = chart.locator(".power-chart-svg")
+    expect(svg).to_be_visible()
+    expect(svg.locator("path")).to_have_count(2)
+
+
+def test_period_button_switches_the_window(page: Page, server_url: str) -> None:
+    mock_power(page, POWER_PAYLOAD)
+    mock_history(page)
+    open_power_view(page, server_url)
+
+    # Default is 1T (active button); switching to 1W reloads a new dataset.
+    buttons = page.locator(".power-period-btn")
+    expect(buttons.nth(0)).to_have_class(re.compile("power-period-active"))
+    expect(buttons).to_have_count(3)
+
+    buttons.nth(2).click()  # 1W
+    expect(buttons.nth(2)).to_have_class(re.compile("power-period-active"))
+    expect(buttons.nth(0)).not_to_have_class(re.compile("power-period-active"))
+    # The 1W dataset still has both series (paths) drawn.
+    expect(page.locator(".power-chart-svg path")).to_have_count(2)
+
+
+def test_empty_history_shows_a_hint(page: Page, server_url: str) -> None:
+    mock_power(page, POWER_PAYLOAD)
+    page.route(
+        "**/api/power/history**",
+        lambda route: route.fulfill(
+            json={"hours": 24, "production": [], "consumption": []}
+        ),
+    )
+    open_power_view(page, server_url)
+    expect(page.locator(".power-chart-empty")).to_have_text("Keine Verlaufsdaten")
 
 
 def test_backend_error_shows_german_error_state(page: Page, server_url: str) -> None:
@@ -120,6 +198,7 @@ def test_backend_error_shows_german_error_state(page: Page, server_url: str) -> 
             status=502, json={"detail": "Home Assistant ist nicht erreichbar."}
         ),
     )
+    mock_history(page)
     goto_calendar(page, server_url)
     page.locator("#btn-mode-power").click()
     error = page.locator(".power-error")
