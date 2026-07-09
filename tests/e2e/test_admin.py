@@ -534,21 +534,32 @@ class TestBusySync:
         # The section lists the demo sources as checkboxes.
         section = page.locator("section[aria-labelledby='busy-heading']")
         expect(section.locator("#busy-connected")).to_contain_text("nicht verbunden")
+        toggle = section.locator("#btn-busy-toggle")
+        expect(toggle).to_contain_text("Belegt-Sync ist AUS")
+        expect(toggle).to_contain_text("einschalten")
+        expect(toggle).to_have_attribute("aria-pressed", "false")
+
         first_source = section.locator(".busy-source-row").first
         first_source.locator("input[type=checkbox]").check()
-        section.locator("#busy-enabled").check()
         section.locator("#btn-busy-save").click()
         expect(section.locator("#busy-message")).to_contain_text("gespeichert")
 
+        toggle.click()
+        expect(section.locator("#busy-message")).to_contain_text("eingeschaltet")
+        expect(toggle).to_contain_text("Belegt-Sync ist AN")
+        expect(toggle).to_contain_text("ausschalten")
+        expect(toggle).to_have_attribute("aria-pressed", "true")
+
         # Reload: the enabled toggle and the selection persist (real backend).
         page.reload()
-        expect(section.locator("#busy-enabled")).to_be_checked()
+        expect(section.locator("#btn-busy-toggle")).to_have_attribute("aria-pressed", "true")
         expect(
             section.locator(".busy-source-row input[type=checkbox]:checked")
         ).to_have_count(1)
 
         # Clean up so the shared DB stays neutral for other tests.
-        section.locator("#busy-enabled").uncheck()
+        section.locator("#btn-busy-toggle").click()
+        expect(section.locator("#busy-message")).to_contain_text("ausgeschaltet")
         section.locator(".busy-source-row input:checked").first.uncheck()
         section.locator("#btn-busy-save").click()
         expect(section.locator("#busy-message")).to_contain_text("gespeichert")

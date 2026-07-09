@@ -349,15 +349,16 @@
           </button>
         </div>
       </div>
-      <h3>Zu spiegelnde Quellen</h3>
+      <h3>Welche Kalender nach Xalt spiegeln:</h3>
       <div id="busy-source-list" class="busy-source-list"></div>
-      <label class="busy-toggle">
-        <input id="busy-enabled" type="checkbox">
-        <span>Belegt-Sync aktiviert</span>
-      </label>
       <div class="button-row">
-        <button id="btn-busy-save" class="action-button" type="button">Speichern</button>
+        <button id="btn-busy-save" class="action-button subtle" type="button">
+          Auswahl speichern
+        </button>
       </div>
+      <button id="btn-busy-toggle" class="busy-sync-toggle" type="button" aria-pressed="false">
+        Belegt-Sync ist AUS &#8211; einschalten
+      </button>
       <p id="busy-status" class="message" hidden></p>
       <p id="busy-message" class="message" hidden></p>
     </section>

@@ -10,6 +10,11 @@ import { byId, el, showMessage } from "./dom.js";
 // Claim ticket is not needed here: the write target is fixed to the primary
 // calendar, so write-connect stores the token straight away.
 
+// Tracks the enabled flag last loaded from the backend, so the toggle
+// button (which flips it) and the save button (which keeps it as-is while
+// saving the source selection) both act on the current value.
+let currentEnabled = false;
+
 function renderSources(container, sources, selectedIds) {
   container.replaceChildren();
   if (sources.length === 0) {
@@ -44,13 +49,26 @@ export function formatStatus(status, { locale = "de-DE" } = {}) {
   return `Letzter Lauf ${when}: ${status.active_blocks} aktive Belegt-Blöcke.`;
 }
 
+// Pure label/state for the prominent on/off button (DOM-free, node-testable).
+export function toggleButtonLabel(enabled) {
+  return enabled ? "Belegt-Sync ist AN – ausschalten" : "Belegt-Sync ist AUS – einschalten";
+}
+
+function renderToggleButton(enabled) {
+  const button = byId("btn-busy-toggle");
+  button.textContent = toggleButtonLabel(enabled);
+  button.classList.toggle("busy-toggle-on", enabled);
+  button.setAttribute("aria-pressed", String(enabled));
+}
+
 export async function loadBusySync() {
   const { busy_sync: data } = await api.getBusySync();
   byId("busy-connected").textContent = data.connected
     ? "Schreib-Verbindung: verbunden."
     : "Schreib-Verbindung: nicht verbunden.";
   byId("btn-busy-disconnect").hidden = !data.connected;
-  byId("busy-enabled").checked = data.enabled;
+  currentEnabled = Boolean(data.enabled);
+  renderToggleButton(currentEnabled);
   renderSources(byId("busy-source-list"), data.sources, data.source_ids);
   showMessage(byId("busy-status"), formatStatus(data.status), Boolean(data.status?.error));
 }
@@ -101,9 +119,24 @@ export function initBusySync() {
   byId("btn-busy-save").addEventListener("click", async () => {
     showMessage(byId("busy-message"), "");
     try {
-      await api.saveBusySync(byId("busy-enabled").checked, selectedSourceIds());
+      await api.saveBusySync(currentEnabled, selectedSourceIds());
       await loadBusySync();
-      showMessage(byId("busy-message"), "Belegt-Sync gespeichert.");
+      showMessage(byId("busy-message"), "Auswahl gespeichert.");
+    } catch (error) {
+      showMessage(byId("busy-message"), error.message, true);
+    }
+  });
+
+  byId("btn-busy-toggle").addEventListener("click", async () => {
+    showMessage(byId("busy-message"), "");
+    try {
+      const nextEnabled = !currentEnabled;
+      await api.saveBusySync(nextEnabled, selectedSourceIds());
+      await loadBusySync();
+      showMessage(
+        byId("busy-message"),
+        nextEnabled ? "Belegt-Sync eingeschaltet." : "Belegt-Sync ausgeschaltet.",
+      );
     } catch (error) {
       showMessage(byId("busy-message"), error.message, true);
     }

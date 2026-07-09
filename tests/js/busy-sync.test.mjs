@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatStatus } from "../../app/static/admin/busy-sync.js";
+import { formatStatus, toggleButtonLabel } from "../../app/static/admin/busy-sync.js";
 
 test("no last_run yields the never-ran text", () => {
   assert.equal(formatStatus(null), "Noch nie gelaufen.");
@@ -25,4 +25,9 @@ test("error run surfaces the sanitized error", () => {
     { locale: "en-US" },
   );
   assert.match(line, /Fehler – HTTP 502/);
+});
+
+test("toggle button label reflects the current on/off state", () => {
+  assert.equal(toggleButtonLabel(false), "Belegt-Sync ist AUS – einschalten");
+  assert.equal(toggleButtonLabel(true), "Belegt-Sync ist AN – ausschalten");
 });
