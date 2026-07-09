@@ -127,8 +127,10 @@ def _date_str(value: datetime | date) -> str:
 def _utc_iso(value: datetime | date) -> str:
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat()
-    # Defensive: an all-day value reaching the timed branch — treat as local
-    # midnight in UTC rather than raising.
+    # Defensive only: event_body branches on event.all_day BEFORE calling
+    # _utc_iso, so a plain date never actually reaches this function today
+    # (the date branch there calls _date_str instead). Kept as a safety net
+    # in case that invariant ever changes, rather than raising here.
     return datetime.combine(value, datetime.min.time(), tzinfo=LOCAL_TZ).astimezone(
         UTC
     ).isoformat()

@@ -92,6 +92,12 @@ def _desired_events(
         if item.source_id not in source_ids:
             continue
         start = item.event.start_as_datetime()
+        # storage.get_events returns everything OVERLAPPING the window,
+        # including an event that started before window_start and merely
+        # reaches into it. Only a start actually inside the window counts
+        # for busy-sync (see the docstring above and busy_sync_window: past
+        # appointments are never mirrored) — so this second, strict check on
+        # the start alone is required and not redundant with get_events.
         if not (window_start <= start < window_end):
             continue
         desired[source_key(item.source_id, item.event)] = item
