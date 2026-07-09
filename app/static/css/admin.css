@@ -523,3 +523,41 @@ body {
   font-size: 20px;
   flex: 0 0 auto;
 }
+
+/* -- busy sync (MoreValue -> Xalt) -------------------------------------- */
+
+.busy-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.busy-source-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  min-height: 44px;
+}
+
+.busy-source-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+}
+
+.busy-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  min-height: 44px;
+  margin: 0 0 12px;
+}
+
+.busy-toggle input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+}

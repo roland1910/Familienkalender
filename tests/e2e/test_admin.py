@@ -523,3 +523,53 @@ class TestManualSync:
         )
         expect(page.locator(".error-badge").first).to_be_visible()
         expect(page.locator(".source-error").first).to_be_visible()
+
+
+class TestBusySync:
+    def test_enable_and_select_source_roundtrip(
+        self, page: Page, server_url: str
+    ) -> None:
+        """Quelle wählen + Belegt-Sync aktivieren, speichern, neu laden."""
+        goto_admin(page, server_url)
+        # The section lists the demo sources as checkboxes.
+        section = page.locator("section[aria-labelledby='busy-heading']")
+        expect(section.locator("#busy-connected")).to_contain_text("nicht verbunden")
+        first_source = section.locator(".busy-source-row").first
+        first_source.locator("input[type=checkbox]").check()
+        section.locator("#busy-enabled").check()
+        section.locator("#btn-busy-save").click()
+        expect(section.locator("#busy-message")).to_contain_text("gespeichert")
+
+        # Reload: the enabled toggle and the selection persist (real backend).
+        page.reload()
+        expect(section.locator("#busy-enabled")).to_be_checked()
+        expect(
+            section.locator(".busy-source-row input[type=checkbox]:checked")
+        ).to_have_count(1)
+
+        # Clean up so the shared DB stays neutral for other tests.
+        section.locator("#busy-enabled").uncheck()
+        section.locator(".busy-source-row input:checked").first.uncheck()
+        section.locator("#btn-busy-save").click()
+        expect(section.locator("#busy-message")).to_contain_text("gespeichert")
+
+    def test_write_connect_shows_auth_link(self, page: Page, server_url: str) -> None:
+        """Schreib-Verbindung: Auth-Link erscheint mit der (gefakten) URL."""
+        def fulfill_auth_url(route: Route) -> None:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"auth_url": "https://accounts.google.com/o/oauth2/v2/auth?scope=events"}
+                ),
+            )
+
+        page.route("**/api/admin/google/write-auth-url", fulfill_auth_url)
+        goto_admin(page, server_url)
+        section = page.locator("section[aria-labelledby='busy-heading']")
+        section.locator("#btn-busy-connect").click()
+        auth_link = section.locator("#busy-auth-link")
+        expect(auth_link).to_have_attribute(
+            "href", "https://accounts.google.com/o/oauth2/v2/auth?scope=events"
+        )
+        expect(section.locator("#busy-connect-step")).to_be_visible()

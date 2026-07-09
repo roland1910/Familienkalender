@@ -20,7 +20,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import feed_constants, google_oauth, power, settings
+from app import feed_constants, google_busy, google_oauth, power, settings
 from app.auth import require_admin
 from app.models import (
     DISPLAY_MODES,
@@ -133,6 +133,12 @@ class CaldavProbe(BaseModel):
 
 class GoogleConnect(BaseModel):
     code: str
+
+
+class BusySyncUpdate(BaseModel):
+    enabled: bool
+    # Source ids whose events are mirrored as "Busy MV" blocks.
+    source_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
 def _mask_client_id(client_id: str) -> str:
@@ -420,6 +426,113 @@ async def update_feed_host(update: FeedHostUpdate, request: Request) -> dict:
     storage = get_storage()
     settings.set_feed_public_host(storage, host)
     return _feed_payload(request, settings.ensure_feed_token(storage))
+
+
+# -- busy sync (MoreValue -> Xalt) -----------------------------------------
+
+
+def _busy_sync_payload() -> dict:
+    """Current busy-sync configuration + status for the admin UI."""
+    storage = get_storage()
+    selected = set(settings.get_busy_sync_source_ids(storage))
+    # Offer the existing sources so the admin can pick which to mirror.
+    sources = [
+        {"id": source.id, "name": source.name, "type": source.type}
+        for source in storage.list_sources()
+    ]
+    return {
+        "busy_sync": {
+            "connected": google_busy.has_write_token(),
+            "enabled": settings.is_busy_sync_enabled(storage),
+            "source_ids": sorted(selected),
+            "sources": sources,
+            "status": settings.get_busy_sync_status(storage),
+        }
+    }
+
+
+@router.get("/busy-sync")
+async def get_busy_sync() -> dict:
+    """Busy-sync connection state, config and last-run status."""
+    return _busy_sync_payload()
+
+
+@router.put("/busy-sync")
+async def update_busy_sync(update: BusySyncUpdate) -> dict:
+    """Enable/disable the busy sync and set which sources are mirrored.
+
+    Source ids are validated against the existing sources; unknown ids are
+    rejected so the admin cannot enable mirroring of a non-existent source.
+    """
+    storage = get_storage()
+    known_ids = {source.id for source in storage.list_sources()}
+    unknown = [sid for sid in update.source_ids if sid not in known_ids]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unbekannte Quelle(n): {', '.join(str(sid) for sid in unknown)}",
+        )
+    settings.set_busy_sync_source_ids(storage, update.source_ids)
+    settings.set_busy_sync_enabled(storage, update.enabled)
+    return _busy_sync_payload()
+
+
+@router.post("/google/write-auth-url")
+async def google_write_auth_url() -> dict:
+    """Start of the busy-sync OAuth flow: consent URL with the write scope.
+
+    Unlike the read flows this requests calendar.events (read+write) so the
+    add-on may create/update/delete its own "Busy MV" blocks in the primary
+    calendar of the connected (Xalt) account.
+    """
+    google.cleanup_stale_pending_tokens()
+    client_id, _ = _google_credentials_or_400()
+    return {
+        "auth_url": google_oauth.build_auth_url(
+            client_id, scope=google_oauth.WRITE_SCOPE
+        )
+    }
+
+
+@router.post("/google/write-connect")
+async def google_write_connect(body: GoogleConnect) -> dict:
+    """Exchange the pasted code and store the SEPARATE write token.
+
+    The target is fixed to the primary calendar, so no calendar list is
+    fetched. The tokens are written straight to google_busywrite_token.json
+    (owner-only), kept entirely apart from the read-only calendar/contacts
+    tokens. A Workspace admin may block the write scope; then the exchange
+    fails with a clear German message (no crash).
+    """
+    client_id, client_secret = _google_credentials_or_400()
+    try:
+        code = google_oauth.extract_auth_code(body.code)
+        tokens = await google_oauth.exchange_code(
+            code, client_id=client_id, client_secret=client_secret
+        )
+        google.save_tokens(google_busy.busy_write_token_path(), tokens)
+    except google_oauth.GoogleOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        error = sanitize_error(str(exc))
+        logger.warning("Google write connect failed: %s", error)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google-Verbindung fehlgeschlagen: {error}",
+        ) from exc
+    return _busy_sync_payload()
+
+
+@router.delete("/google/write-token")
+async def delete_google_write_token() -> dict:
+    """Disconnect the busy-sync write access (delete the write token file).
+
+    The maintained "Busy MV" blocks in Xalt are left in place — without the
+    token the add-on can no longer reach them; the admin can clean them up in
+    Google Calendar directly. Idempotent.
+    """
+    google_busy.busy_write_token_path().unlink(missing_ok=True)
+    return _busy_sync_payload()
 
 
 # -- sources ---------------------------------------------------------------

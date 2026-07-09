@@ -4,6 +4,7 @@
 
 import * as api from "./api.js";
 import { initBirthdaysWizard, resetBirthdaysWizard } from "./birthdays-wizard.js";
+import { initBusySync, loadBusySync } from "./busy-sync.js";
 import { byId, showMessage, withPageError } from "./dom.js";
 import { initFeed, loadFeed } from "./feed.js";
 import { initGoogleWizard, resetGoogleWizard } from "./google-wizard.js";
@@ -53,9 +54,16 @@ function init() {
   initSettings();
   initFeed();
   initSlideshow();
+  initBusySync();
   initSync();
   withPageError(async () => {
-    await Promise.all([refreshSources(), loadSettings(), loadFeed(), loadSlideshow()]);
+    await Promise.all([
+      refreshSources(),
+      loadSettings(),
+      loadFeed(),
+      loadSlideshow(),
+      loadBusySync(),
+    ]);
   });
 }
 

@@ -299,6 +299,68 @@
       </div>
       <p id="feed-message" class="message" hidden></p>
     </section>
+
+    <section class="admin-section" aria-labelledby="busy-heading">
+      <h2 id="busy-heading">Belegt-Sync (MoreValue &#8594; Xalt)</h2>
+      <p>Schreibt f&uuml;r jeden ausgew&auml;hlten Termin einen neutralen
+        Block &#8222;Busy MV&#8220; in den <strong>prim&auml;ren
+        Google-Kalender des verbundenen Xalt-Kontos</strong>, damit die
+        Xalt-Kollegen in Frei/Belegt sehen, wann Roland wegen eines
+        MoreValue-Termins nicht verf&uuml;gbar ist. Es wird kein Termininhalt
+        &uuml;bertragen (fester Titel, keine Beschreibung/Ort), 180 Tage
+        voraus, auch ganzt&auml;gige Termine.</p>
+      <p class="hint">Das Add-on verwaltet dabei <strong>ausschlie&szlig;lich
+        eigene, markierte Bl&ouml;cke</strong> &#8211; fremde Termine im
+        Xalt-Kalender werden nie gelesen oder ver&auml;ndert. Ben&ouml;tigter
+        Zugriff: Kalender-Termine lesen und schreiben (calendar.events). Ein
+        Workspace-Administrator kann diesen Zugriff sperren; dann schl&auml;gt
+        das Verbinden mit einer Fehlermeldung fehl.</p>
+      <p id="busy-connected" class="message">Schreib-Verbindung: nicht verbunden.</p>
+      <div class="button-row">
+        <button id="btn-busy-connect" class="action-button" type="button">
+          Schreib-Verbindung herstellen
+        </button>
+        <button id="btn-busy-disconnect" class="action-button subtle" type="button" hidden>
+          Verbindung trennen
+        </button>
+      </div>
+      <div id="busy-connect-step" hidden>
+        <ol class="steps">
+          <li>Anmelde-Link &ouml;ffnen und das <strong>Xalt-Konto</strong> anmelden,
+            Schreibzugriff auf Kalender best&auml;tigen.</li>
+          <li>Nach dem Best&auml;tigen zeigt der Browser eine Fehlerseite
+            (localhost ist nicht erreichbar) &#8211; das ist richtig so.</li>
+          <li>Die komplette Adresse aus der Adresszeile kopieren und unten einf&uuml;gen.</li>
+        </ol>
+        <div class="button-row">
+          <a id="busy-auth-link" class="action-button" href="https://accounts.google.com/"
+             target="_blank" rel="noopener" hidden>
+            Anmelde-Link &ouml;ffnen
+          </a>
+        </div>
+        <div class="form-grid">
+          <label for="busy-code">Weiterleitungs-URL oder Code</label>
+          <input id="busy-code" type="text" autocomplete="off"
+                 placeholder="http://localhost:1/?code=4/0A...">
+        </div>
+        <div class="button-row">
+          <button id="btn-busy-code" class="action-button" type="button">
+            Code einl&ouml;sen
+          </button>
+        </div>
+      </div>
+      <h3>Zu spiegelnde Quellen</h3>
+      <div id="busy-source-list" class="busy-source-list"></div>
+      <label class="busy-toggle">
+        <input id="busy-enabled" type="checkbox">
+        <span>Belegt-Sync aktiviert</span>
+      </label>
+      <div class="button-row">
+        <button id="btn-busy-save" class="action-button" type="button">Speichern</button>
+      </div>
+      <p id="busy-status" class="message" hidden></p>
+      <p id="busy-message" class="message" hidden></p>
+    </section>
   </main>
   <script type="module" src="static/admin/main.js"></script>
 </body>

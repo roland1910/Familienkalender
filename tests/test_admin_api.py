@@ -1160,3 +1160,122 @@ class TestGoogleContactsFlow:
         response = client.delete(f"/api/admin/sources/{source_id}")
         assert response.status_code == 200
         assert not tokens_file.exists()
+
+
+class TestBusySyncEndpoints:
+    def _set_credentials(self, client: TestClient) -> None:
+        client.put(
+            "/api/admin/settings/google",
+            json={"client_id": "cid.apps.googleusercontent.com", "client_secret": "cs"},
+        )
+
+    def test_default_status_not_connected_disabled(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        payload = client.get("/api/admin/busy-sync").json()["busy_sync"]
+        assert payload["connected"] is False
+        assert payload["enabled"] is False
+        assert payload["source_ids"] == []
+        assert payload["status"]["error"] is None
+
+    def test_lists_existing_sources(self, client: TestClient, storage: Storage) -> None:
+        sid = storage.add_source(type="caldav", name="Roland MV", config={})
+        payload = client.get("/api/admin/busy-sync").json()["busy_sync"]
+        assert any(s["id"] == sid and s["name"] == "Roland MV" for s in payload["sources"])
+
+    def test_enable_and_select_source(self, client: TestClient, storage: Storage) -> None:
+        sid = storage.add_source(type="caldav", name="Roland MV", config={})
+        response = client.put(
+            "/api/admin/busy-sync", json={"enabled": True, "source_ids": [sid]}
+        )
+        assert response.status_code == 200
+        payload = response.json()["busy_sync"]
+        assert payload["enabled"] is True
+        assert payload["source_ids"] == [sid]
+        # Persisted.
+        from app import settings
+
+        assert settings.is_busy_sync_enabled(storage) is True
+        assert settings.get_busy_sync_source_ids(storage) == [sid]
+
+    def test_unknown_source_id_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/busy-sync", json={"enabled": True, "source_ids": [9999]}
+        )
+        assert response.status_code == 400
+        assert "Unbekannte" in response.json()["detail"]
+
+    def test_write_auth_url_requires_credentials(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.post("/api/admin/google/write-auth-url")
+        assert response.status_code == 400
+
+    def test_write_auth_url_uses_write_scope(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        self._set_credentials(client)
+        response = client.post("/api/admin/google/write-auth-url")
+        assert response.status_code == 200
+        auth_url = response.json()["auth_url"]
+        assert "calendar.events" in auth_url
+
+    def test_write_connect_stores_separate_token(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        self._set_credentials(client)
+
+        async def fake_exchange(code, *, client_id, client_secret, client=None):
+            return {"client_id": client_id, "client_secret": client_secret,
+                    "refresh_token": "rt-write", "access_token": "at-write",
+                    "access_token_expires_at": "2026-07-03T13:00:00+00:00"}
+
+        monkeypatch.setattr("app.admin.google_oauth.exchange_code", fake_exchange)
+        response = client.post(
+            "/api/admin/google/write-connect", json={"code": "4/write-code"}
+        )
+        assert response.status_code == 200
+        assert response.json()["busy_sync"]["connected"] is True
+        # Token material never in the response.
+        assert "rt-write" not in response.text
+        assert "at-write" not in response.text
+        # Stored in the dedicated write token file.
+        from app.google_busy import busy_write_token_path
+
+        stored = json.loads(busy_write_token_path().read_text(encoding="utf-8"))
+        assert stored["refresh_token"] == "rt-write"
+
+    def test_write_connect_maps_oauth_error(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._set_credentials(client)
+
+        async def fake_exchange(code, *, client_id, client_secret, client=None):
+            raise GoogleOAuthError("Der Code ist ungültig oder abgelaufen.")
+
+        monkeypatch.setattr("app.admin.google_oauth.exchange_code", fake_exchange)
+        response = client.post(
+            "/api/admin/google/write-connect", json={"code": "4/x"}
+        )
+        assert response.status_code == 400
+        assert "abgelaufen" in response.json()["detail"]
+
+    def test_disconnect_write_token(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._set_credentials(client)
+
+        async def fake_exchange(code, *, client_id, client_secret, client=None):
+            return {"client_id": client_id, "client_secret": client_secret,
+                    "refresh_token": "rt-write", "access_token": "at-write",
+                    "access_token_expires_at": "2026-07-03T13:00:00+00:00"}
+
+        monkeypatch.setattr("app.admin.google_oauth.exchange_code", fake_exchange)
+        client.post("/api/admin/google/write-connect", json={"code": "4/x"})
+        assert client.get("/api/admin/busy-sync").json()["busy_sync"]["connected"] is True
+        response = client.delete("/api/admin/google/write-token")
+        assert response.status_code == 200
+        assert response.json()["busy_sync"]["connected"] is False

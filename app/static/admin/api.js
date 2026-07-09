@@ -100,6 +100,29 @@ export function triggerSync() {
   return request("POST", "api/sync");
 }
 
+export function getBusySync() {
+  return request("GET", "api/admin/busy-sync");
+}
+
+export function saveBusySync(enabled, sourceIds) {
+  return request("PUT", "api/admin/busy-sync", {
+    enabled,
+    source_ids: sourceIds,
+  });
+}
+
+export function busyWriteAuthUrl() {
+  return request("POST", "api/admin/google/write-auth-url");
+}
+
+export function busyWriteConnect(code) {
+  return request("POST", "api/admin/google/write-connect", { code });
+}
+
+export function disconnectBusyWrite() {
+  return request("DELETE", "api/admin/google/write-token");
+}
+
 export function getSlideshow() {
   return request("GET", "api/admin/slideshow");
 }
