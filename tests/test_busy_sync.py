@@ -292,6 +292,25 @@ class TestInsertUpdateDelete:
         result = await _run(storage, backend)
         assert result.inserted == 1
 
+    async def test_deselecting_a_source_deletes_its_blocks(self, env: Storage) -> None:
+        # A source was selected and had active blocks; the admin then
+        # deselects it. Its desired set becomes empty, so the diff must
+        # delete the mapped blocks on the next run (not just stop adding
+        # new ones).
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        add_mv_event(storage, 1, "u1", datetime(2026, 7, 20, 15, tzinfo=UTC))
+        backend = RecordingBackend()
+        result1 = await _run(storage, backend)
+        assert result1.inserted == 1
+        assert storage.count_busy_blocks() == 1
+
+        settings.set_busy_sync_source_ids(storage, [])
+        result2 = await _run(storage, backend)
+        assert result2.deleted == 1
+        assert storage.count_busy_blocks() == 0
+        assert backend.own_blocks == {}
+
 
 @pytest.mark.anyio
 class TestWindowBoundaries:
