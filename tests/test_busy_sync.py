@@ -370,6 +370,32 @@ class TestErrorIsolation:
         status = settings.get_busy_sync_status(storage)
         assert status["error"] is not None
 
+    async def test_malformed_google_payload_type_error_is_recorded_not_raised(
+        self, env: Storage
+    ) -> None:
+        # A broken/unexpected Google response body (e.g. "null" instead of an
+        # object) makes json.loads(body)["id"] raise TypeError — this must be
+        # caught and recorded like any other busy-sync failure, not propagate
+        # and take down the periodic calendar sync.
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        add_mv_event(storage, 1, "u1", datetime(2026, 7, 20, 15, tzinfo=UTC))
+
+        def broken(request: httpx.Request) -> httpx.Response:
+            if str(request.url) == "https://oauth2.googleapis.com/token":
+                return httpx.Response(200, json={"access_token": "at", "expires_in": 3599})
+            if request.method == "GET":
+                return httpx.Response(200, json={"items": []})
+            if request.method == "POST":
+                return httpx.Response(200, content=b"null")
+            return httpx.Response(404)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(broken)) as client:
+            result = await run_busy_sync(storage, now=NOW, client=client)
+        assert result.error is not None
+        status = settings.get_busy_sync_status(storage)
+        assert status["error"] is not None
+
 
 class TestSourceKey:
     def test_key_matches_storage_identity(self) -> None:

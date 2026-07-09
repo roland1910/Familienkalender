@@ -198,7 +198,14 @@ async def run_busy_sync(
         mapping = {block.source_key: block for block in storage.list_busy_blocks()}
         write_client = BusyWriteClient(busy_write_token_path(), client)
         result = await _reconcile(storage, write_client, desired, mapping, run_at)
-    except (BusyWriteError, httpx.HTTPError, OSError, ValueError, KeyError) as exc:
+    except (
+        BusyWriteError,
+        httpx.HTTPError,
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+    ) as exc:
         error = sanitize_error(str(exc))
         logger.warning("Busy sync failed: %s", error)
         settings.set_busy_sync_status(
