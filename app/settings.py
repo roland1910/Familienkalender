@@ -34,6 +34,12 @@ FEED_TOKEN_KEY = "feed_token"
 # forwards external port 8098 to the feed listener). Bare host only —
 # no scheme, port or path; empty/missing falls back to the request host.
 FEED_PUBLIC_HOST_KEY = "feed_public_host"
+# One-way "Busy MV" sync (MoreValue → Xalt primary calendar): master
+# on/off switch, the source ids whose events are mirrored, and the last-run
+# status (JSON, error already sanitized). See app.busy_sync.
+BUSY_SYNC_ENABLED_KEY = "busy_sync_enabled"
+BUSY_SYNC_SOURCE_IDS_KEY = "busy_sync_source_ids"
+BUSY_SYNC_STATUS_KEY = "busy_sync_status"
 
 # DNS limits: 253 chars total, labels of 1-63 chars, letters/digits/
 # hyphens, no leading/trailing hyphen. Also matches plain IPv4 literals.
@@ -148,6 +154,71 @@ def set_feed_public_host(storage: Storage, host: str) -> None:
     """Persist the public feed host; an empty value clears the override
     (validation happens in the API layer)."""
     storage.set_setting(FEED_PUBLIC_HOST_KEY, host)
+
+
+def is_busy_sync_enabled(storage: Storage) -> bool:
+    """Whether the one-way Busy MV sync is switched on (default off)."""
+    return storage.get_setting(BUSY_SYNC_ENABLED_KEY) == "1"
+
+
+def set_busy_sync_enabled(storage: Storage, enabled: bool) -> None:
+    """Persist the Busy MV sync on/off switch."""
+    storage.set_setting(BUSY_SYNC_ENABLED_KEY, "1" if enabled else "0")
+
+
+def get_busy_sync_source_ids(storage: Storage) -> list[int]:
+    """The source ids whose events are mirrored as Busy MV blocks.
+
+    Stored as a JSON list of ints; a missing or unparseable value yields the
+    empty list (nothing mirrored). Non-int entries are skipped defensively.
+    """
+    raw = storage.get_setting(BUSY_SYNC_SOURCE_IDS_KEY)
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(items, list):
+        return []
+    return [int(item) for item in items if isinstance(item, int) and not isinstance(item, bool)]
+
+
+def set_busy_sync_source_ids(storage: Storage, source_ids: list[int]) -> None:
+    """Persist the mirrored-source id list (deduplicated, order preserved)."""
+    unique = list(dict.fromkeys(source_ids))
+    storage.set_setting(BUSY_SYNC_SOURCE_IDS_KEY, json.dumps(unique))
+
+
+def get_busy_sync_status(storage: Storage) -> dict:
+    """The last Busy-sync status dict (empty when the sync never ran).
+
+    Shape: {"last_run": iso|None, "active_blocks": int, "error": str|None}.
+    """
+    raw = storage.get_setting(BUSY_SYNC_STATUS_KEY)
+    if not raw:
+        return {"last_run": None, "active_blocks": 0, "error": None}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {"last_run": None, "active_blocks": 0, "error": None}
+    return {
+        "last_run": data.get("last_run"),
+        "active_blocks": int(data.get("active_blocks", 0) or 0),
+        "error": data.get("error"),
+    }
+
+
+def set_busy_sync_status(
+    storage: Storage, *, last_run: str, active_blocks: int, error: str | None
+) -> None:
+    """Persist the Busy-sync status (error must already be sanitized)."""
+    storage.set_setting(
+        BUSY_SYNC_STATUS_KEY,
+        json.dumps(
+            {"last_run": last_run, "active_blocks": active_blocks, "error": error}
+        ),
+    )
 
 
 def get_power_devices(storage: Storage) -> list[PowerDevice]:

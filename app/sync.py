@@ -9,6 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, time, timedelta
 
+from app import busy_sync
 from app.models import LOCAL_TZ, CalendarEvent, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google, google_contacts, limits
@@ -96,6 +97,14 @@ async def _sync_all_locked(
             logger.warning("Sync failed for source %s (%s): %s", source.id, source.name, error)
             storage.update_sync_status(source.id, synced_at=synced_at, error=error)
             results[source.id] = error
+    # After the calendar sources are up to date, mirror MoreValue
+    # appointments as "Busy MV" blocks into Xalt. run_busy_sync isolates its
+    # own errors and no-ops when disabled or without a write token, so it can
+    # never break the calendar sync; the extra guard is defence in depth.
+    try:
+        await busy_sync.run_busy_sync(storage, now=synced_at)
+    except Exception:  # pragma: no cover - run_busy_sync already isolates errors
+        logger.exception("Unexpected error in busy sync")
     return results
 
 

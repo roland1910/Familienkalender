@@ -371,3 +371,47 @@ class TestSyncLock:
         )
 
         assert max_active == 1
+
+
+@pytest.mark.anyio
+class TestBusySyncIntegration:
+    async def test_busy_sync_runs_after_sources(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        called = {}
+
+        async def fake_busy(storage_arg, *, now=None, client=None):
+            from app.busy_sync import BusySyncResult
+
+            called["ran"] = True
+            called["now"] = now
+            return BusySyncResult(0, 0, 0, 0, 0, None)
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.busy_sync.run_busy_sync", fake_busy)
+        await sync_all(storage, now=FIXED_NOW)
+        assert called["ran"] is True
+        assert called["now"] == FIXED_NOW
+
+    async def test_busy_sync_error_does_not_break_calendar_sync(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("busy sync exploded")
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.busy_sync.run_busy_sync", boom)
+        # Must not raise: busy-sync errors are isolated from the calendar sync.
+        results = await sync_all(storage, now=FIXED_NOW)
+        assert results  # calendar sources still processed
