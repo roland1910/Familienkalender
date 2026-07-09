@@ -706,6 +706,13 @@ async def delete_source(source_id: int) -> dict:
         tokens_file = google.token_path(source_id)
         if tokens_file.exists():
             tokens_file.unlink()
+    # A deleted source may still be referenced in the busy-sync selection —
+    # drop it so the setting never points at a nonexistent source.
+    selected = settings.get_busy_sync_source_ids(storage)
+    if source_id in selected:
+        settings.set_busy_sync_source_ids(
+            storage, [sid for sid in selected if sid != source_id]
+        )
     return {"deleted": source_id}
 
 

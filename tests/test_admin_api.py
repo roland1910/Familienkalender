@@ -645,6 +645,17 @@ class TestUpdateAndDeleteSource:
     def test_delete_missing_source_is_404(self, client: TestClient, storage: Storage) -> None:
         assert client.delete("/api/admin/sources/99").status_code == 404
 
+    def test_delete_source_removes_it_from_busy_sync_source_ids(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        source_id = storage.add_source(type="caldav", name="Roland MV", config=CALDAV_CONFIG)
+        settings.set_busy_sync_source_ids(storage, [source_id])
+        response = client.delete(f"/api/admin/sources/{source_id}")
+        assert response.status_code == 200
+        assert settings.get_busy_sync_source_ids(storage) == []
+
 
 class TestFeedAdminEndpoints:
     def test_get_feed_generates_the_token_and_returns_https_url_and_path(
