@@ -9,6 +9,7 @@ from app.google_oauth import (
     CALENDAR_SCOPE,
     CONTACTS_SCOPE,
     REDIRECT_URI,
+    WRITE_SCOPE,
     GoogleOAuthError,
     build_auth_url,
     exchange_code,
@@ -52,6 +53,12 @@ class TestBuildAuthUrl:
         params = _params_of(build_auth_url(CLIENT_ID, scope=CONTACTS_SCOPE))
         assert params["scope"] == CONTACTS_SCOPE
         assert CONTACTS_SCOPE == "https://www.googleapis.com/auth/contacts.readonly"
+
+    def test_scope_can_be_overridden_for_write(self) -> None:
+        # The busy-sync flow needs read+write access to calendar events.
+        params = _params_of(build_auth_url(CLIENT_ID, scope=WRITE_SCOPE))
+        assert params["scope"] == WRITE_SCOPE
+        assert WRITE_SCOPE == "https://www.googleapis.com/auth/calendar.events"
 
 
 def _params_of(url: str) -> dict[str, str]:

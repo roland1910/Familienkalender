@@ -40,6 +40,15 @@ CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 # contact birthdays come from People API connections instead, which needs
 # this scope alone (no calendar scope required for it).
 CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.readonly"
+# Read+write access to calendar events — used by the busy-sync flow, which
+# writes neutral "Busy MV" blocks into Roland's primary Xalt calendar so his
+# colleagues see when he is unavailable. This is the project's ONLY write
+# scope; it is granted to a SEPARATE token (google_busywrite_token.json),
+# never mixed with the read-only calendar/contacts tokens. calendar.events
+# (not the broader calendar scope) is the least privilege that still allows
+# creating/updating/deleting events. A Workspace admin may block this scope;
+# the connect step then fails with a clear German message (no crash).
+WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 # Backwards-compatible alias (older imports referenced SCOPE).
 SCOPE = CALENDAR_SCOPE
 

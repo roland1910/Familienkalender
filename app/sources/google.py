@@ -141,6 +141,29 @@ async def _refresh_access_token(
     return tokens
 
 
+# Fixed title and private-marker key of the blocks the add-on writes into
+# Roland's Xalt calendar (see app.google_busy). When the same account is
+# also read as a read-only source, these self-created blocks must NOT be
+# read back — otherwise they would duplicate the MoreValue appointments they
+# mirror in the calendar views and the feed. They are skipped here so they
+# never reach the DB.
+BUSY_MARKER_KEY = "familienkalender_busy"
+BUSY_BLOCK_TITLE = "Busy MV"
+
+
+def _is_own_busy_block(item: dict[str, Any]) -> bool:
+    """Whether a Google event is one of the add-on's own "Busy MV" blocks.
+
+    Primary signal: the private marker key. Defensive fallback: the fixed
+    "Busy MV" title (covers a block whose marker was somehow stripped). Both
+    are checked so a self-created block is never read back into the calendar.
+    """
+    private = (item.get("extendedProperties") or {}).get("private") or {}
+    if isinstance(private, dict) and BUSY_MARKER_KEY in private:
+        return True
+    return item.get("summary") == BUSY_BLOCK_TITLE
+
+
 def _item_to_event(item: dict[str, Any]) -> CalendarEvent:
     all_day = "date" in item["start"]
     if all_day:
@@ -230,6 +253,11 @@ async def fetch_events(
         payload = json.loads(body)
         for item in payload.get("items", []):
             if item.get("status") == "cancelled":
+                continue
+            # Never read back the add-on's own "Busy MV" blocks (see
+            # _is_own_busy_block): they mirror MoreValue appointments and
+            # would otherwise duplicate them in the calendar and feed.
+            if _is_own_busy_block(item):
                 continue
             # A malformed item (missing start/end fields) must not abort
             # the whole fetch: skip it and keep the rest.

@@ -146,6 +146,64 @@ class TestFetchEvents:
 
         assert events[0].title == ""
 
+    async def test_skips_own_busy_blocks_by_marker(self, tmp_path: Path) -> None:
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        captured: list[httpx.Request] = []
+        busy_block = {
+            "id": "gevt-busy",
+            "status": "confirmed",
+            "summary": "Busy MV",
+            "extendedProperties": {"private": {"familienkalender_busy": "3|uid|x"}},
+            "start": {"dateTime": "2026-07-11T10:00:00+02:00"},
+            "end": {"dateTime": "2026-07-11T11:00:00+02:00"},
+        }
+        pages = [{"items": [busy_block, TIMED_ITEM]}]
+        async with make_client(captured, pages=pages) as client:
+            events = await fetch_events(
+                CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+            )
+        # The self-created block is skipped; the normal event survives.
+        assert [event.uid for event in events] == ["evt-timed"]
+
+    async def test_skips_own_busy_blocks_by_title_fallback(self, tmp_path: Path) -> None:
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        captured: list[httpx.Request] = []
+        # Marker stripped, but the fixed title still identifies it.
+        busy_block = {
+            "id": "gevt-busy-2",
+            "status": "confirmed",
+            "summary": "Busy MV",
+            "start": {"dateTime": "2026-07-11T10:00:00+02:00"},
+            "end": {"dateTime": "2026-07-11T11:00:00+02:00"},
+        }
+        pages = [{"items": [busy_block, TIMED_ITEM]}]
+        async with make_client(captured, pages=pages) as client:
+            events = await fetch_events(
+                CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+            )
+        assert [event.uid for event in events] == ["evt-timed"]
+
+    async def test_normal_event_with_other_extended_props_kept(self, tmp_path: Path) -> None:
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        captured: list[httpx.Request] = []
+        # A foreign event carrying an unrelated private property must be kept.
+        normal = {
+            "id": "evt-normal",
+            "status": "confirmed",
+            "summary": "Echtes Meeting",
+            "extendedProperties": {"private": {"some_other_key": "value"}},
+            "start": {"dateTime": "2026-07-11T10:00:00+02:00"},
+            "end": {"dateTime": "2026-07-11T11:00:00+02:00"},
+        }
+        async with make_client(captured, pages=[{"items": [normal]}]) as client:
+            events = await fetch_events(
+                CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+            )
+        assert [event.uid for event in events] == ["evt-normal"]
+
     async def test_requests_single_events_within_window(self, tmp_path: Path) -> None:
         tokens_file = tmp_path / "tokens.json"
         write_tokens(tokens_file)
