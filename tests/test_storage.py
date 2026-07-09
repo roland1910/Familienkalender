@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models import CalendarEvent
+from app.models import BusyBlock, CalendarEvent
 from app.storage import Storage, resolve_data_dir
 
 BERLIN_OFFSET_SUMMER = "+02:00"
@@ -946,3 +946,73 @@ class TestTagOptions:
         assert len(emojis) == len(set(emojis))
         assert "😀" in emojis
         assert "🙁" in emojis
+
+
+class TestBusyBlocks:
+    def test_upsert_and_list_roundtrip(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        block = BusyBlock(
+            source_key="3|uid-1|2026-07-10T16:00:00+00:00",
+            google_event_id="gevt-abc",
+            start=datetime(2026, 7, 10, 18, 0, tzinfo=UTC),
+            end=datetime(2026, 7, 10, 19, 0, tzinfo=UTC),
+            all_day=False,
+        )
+        storage.upsert_busy_block(block, updated_at=datetime(2026, 7, 3, tzinfo=UTC))
+        stored = storage.list_busy_blocks()
+        assert stored == [block]
+        assert storage.count_busy_blocks() == 1
+
+    def test_upsert_updates_existing_key(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        key = "3|uid-1|2026-07-10T16:00:00+00:00"
+        storage.upsert_busy_block(
+            BusyBlock(key, "gevt-1", datetime(2026, 7, 10, 18, tzinfo=UTC),
+                      datetime(2026, 7, 10, 19, tzinfo=UTC), False),
+            updated_at=datetime(2026, 7, 3, tzinfo=UTC),
+        )
+        storage.upsert_busy_block(
+            BusyBlock(key, "gevt-1", datetime(2026, 7, 10, 20, tzinfo=UTC),
+                      datetime(2026, 7, 10, 21, tzinfo=UTC), False),
+            updated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        )
+        stored = storage.list_busy_blocks()
+        assert len(stored) == 1
+        assert stored[0].start == datetime(2026, 7, 10, 20, tzinfo=UTC)
+
+    def test_all_day_block_roundtrip(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        block = BusyBlock(
+            source_key="3|uid-2|2026-07-12",
+            google_event_id="gevt-day",
+            start=date(2026, 7, 12),
+            end=date(2026, 7, 13),
+            all_day=True,
+        )
+        storage.upsert_busy_block(block, updated_at=datetime(2026, 7, 3, tzinfo=UTC))
+        assert storage.list_busy_blocks() == [block]
+
+    def test_delete_busy_block(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        key = "3|uid-1|2026-07-10T16:00:00+00:00"
+        storage.upsert_busy_block(
+            BusyBlock(key, "gevt-1", datetime(2026, 7, 10, 18, tzinfo=UTC),
+                      datetime(2026, 7, 10, 19, tzinfo=UTC), False),
+            updated_at=datetime(2026, 7, 3, tzinfo=UTC),
+        )
+        storage.delete_busy_block(key)
+        assert storage.list_busy_blocks() == []
+        assert storage.count_busy_blocks() == 0
+
+    def test_blocks_survive_reopening(self, tmp_path: Path) -> None:
+        block = BusyBlock(
+            source_key="3|uid-1|2026-07-10T16:00:00+00:00",
+            google_event_id="gevt-1",
+            start=datetime(2026, 7, 10, 18, tzinfo=UTC),
+            end=datetime(2026, 7, 10, 19, tzinfo=UTC),
+            all_day=False,
+        )
+        make_storage(tmp_path).upsert_busy_block(
+            block, updated_at=datetime(2026, 7, 3, tzinfo=UTC)
+        )
+        assert make_storage(tmp_path).list_busy_blocks() == [block]

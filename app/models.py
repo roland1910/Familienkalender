@@ -191,6 +191,25 @@ class Source:
 
 
 @dataclass(frozen=True, slots=True)
+class BusyBlock:
+    """One "Busy MV" block the add-on maintains in Roland's Xalt calendar.
+
+    Maps a source event (identified by ``source_key`` = source_id|uid|start,
+    the same identity the events table uses) to the Google event id of the
+    block that mirrors it, plus the block's current time range. This mapping
+    lets the busy-sync diff decide precisely which blocks to create, patch or
+    delete — every write targets a known, self-created event id, never a
+    foreign calendar entry.
+    """
+
+    source_key: str
+    google_event_id: str
+    start: datetime | date
+    end: datetime | date
+    all_day: bool
+
+
+@dataclass(frozen=True, slots=True)
 class StoredEvent:
     """An event as read back from storage, with source metadata attached."""
 

@@ -24,6 +24,7 @@ from app.models import (
     MAX_TAGS_PER_DAY,
     SOURCE_TYPES,
     TAG_OPTIONS,
+    BusyBlock,
     CalendarEvent,
     Source,
     StoredEvent,
@@ -80,6 +81,14 @@ CREATE TABLE IF NOT EXISTS photos (
     path TEXT NOT NULL UNIQUE,
     mtime REAL NOT NULL,
     shown INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS busy_blocks (
+    source_key TEXT PRIMARY KEY,
+    google_event_id TEXT NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
 );
 """
 
@@ -618,6 +627,62 @@ class Storage:
                 )
         result.sort(key=lambda item: as_local_datetime(item.event.start))
         return result
+
+    # -- busy blocks (one-way "Busy MV" sync into Xalt) ------------------
+
+    def list_busy_blocks(self) -> list[BusyBlock]:
+        """All persisted busy-block mappings (source_key → Google event id)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT source_key, google_event_id, start, end, all_day"
+                " FROM busy_blocks ORDER BY source_key"
+            ).fetchall()
+        return [_row_to_busy_block(row) for row in rows]
+
+    def upsert_busy_block(self, block: BusyBlock, *, updated_at: datetime) -> None:
+        """Insert or update the mapping for one source key."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO busy_blocks"
+                " (source_key, google_event_id, start, end, all_day, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (source_key) DO UPDATE SET"
+                " google_event_id = excluded.google_event_id,"
+                " start = excluded.start, end = excluded.end,"
+                " all_day = excluded.all_day, updated_at = excluded.updated_at",
+                (
+                    block.source_key,
+                    block.google_event_id,
+                    _encode_moment(block.start),
+                    _encode_moment(block.end),
+                    int(block.all_day),
+                    updated_at.astimezone(UTC).isoformat(),
+                ),
+            )
+
+    def delete_busy_block(self, source_key: str) -> None:
+        """Drop the mapping for one source key (the block was deleted upstream)."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM busy_blocks WHERE source_key = ?", (source_key,)
+            )
+
+    def count_busy_blocks(self) -> int:
+        """Number of active busy-block mappings (for the admin status view)."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM busy_blocks").fetchone()
+        return int(row["n"])
+
+
+def _row_to_busy_block(row: sqlite3.Row) -> BusyBlock:
+    all_day = bool(row["all_day"])
+    return BusyBlock(
+        source_key=row["source_key"],
+        google_event_id=row["google_event_id"],
+        start=_decode_moment(row["start"], all_day),
+        end=_decode_moment(row["end"], all_day),
+        all_day=all_day,
+    )
 
 
 # Unbounded cache (equivalent to lru_cache(maxsize=None)): there is
