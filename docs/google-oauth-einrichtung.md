@@ -32,6 +32,8 @@ Der Adminbereich führt durch die Verbindung — einmal für **Marina** (an ihre
 
 **Geburtstage aus Google-Kontakten:** Über den Button „Geburtstage (Google-Kontakte) hinzufügen" lassen sich zusätzlich die Geburtstage aus den Kontakten eines Google-Kontos einbinden (ganztägige Termine „🎂 Name"). Dieser Assistent fordert einen anderen Zugriff an — nur **Kontakte lesen** (`contacts.readonly`) — und setzt voraus, dass die **People API** im Cloud-Projekt aktiviert ist (siehe Schritt 3). Kein Alter wird angezeigt; Geburtstage ohne Jahr werden ebenso übernommen.
 
+**Belegt-Sync (MoreValue → Xalt):** Die Sektion „Belegt-Sync" verbindet – als **einziger schreibender** Zugriff des Add-ons – das **Xalt-Konto** mit dem Zugriff **Kalender-Termine lesen und schreiben** (`calendar.events`). Damit schreibt das Add-on neutrale „Busy MV"-Blöcke in Rolands **primären** Xalt-Kalender (Frei/Belegt für die Kollegen). Der Schreib-Token wird getrennt vom Lese-Token gespeichert; das Add-on verwaltet **ausschließlich eigene, markierte Blöcke**. Da `calendar.events` mehr als Lesezugriff ist, kann ein **Workspace-Administrator** diesen Scope blockieren (dann scheitert das Verbinden mit einer deutschen Fehlermeldung — kein Absturz); ggf. muss die App vom Workspace-Admin freigegeben werden.
+
 ## Möglicher Stolperstein: Kundenkonto (Workspace)
 
 Manche Workspace-Administratoren blockieren „nicht überprüfte" Dritt-Apps. Falls die Verbindung mit dem Kundenkonto scheitert:
