@@ -673,6 +673,18 @@ class Storage:
             row = conn.execute("SELECT COUNT(*) AS n FROM busy_blocks").fetchone()
         return int(row["n"])
 
+    def clear_busy_blocks(self) -> None:
+        """Drop ALL busy-block mappings (a deliberate local state reset).
+
+        Used when the write token is disconnected: the Google-side "Busy MV"
+        blocks are intentionally left in place (see delete_google_write_token
+        in app.admin), but the local mapping must not survive an account
+        switch — otherwise a later reconnect could patch/delete google_event_ids
+        that now belong to a different Google account's calendar.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM busy_blocks")
+
 
 def _row_to_busy_block(row: sqlite3.Row) -> BusyBlock:
     all_day = bool(row["all_day"])

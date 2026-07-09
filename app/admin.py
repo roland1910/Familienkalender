@@ -530,8 +530,16 @@ async def delete_google_write_token() -> dict:
     The maintained "Busy MV" blocks in Xalt are left in place — without the
     token the add-on can no longer reach them; the admin can clean them up in
     Google Calendar directly. Idempotent.
+
+    The local busy_blocks mapping (source_key -> google_event_id) IS reset,
+    though: it is a deliberate state reset for account-switch safety. If a
+    different Google account is connected afterwards, the old mapping's
+    google_event_ids would belong to a foreign calendar — reconciliation
+    must start from an empty mapping rather than risk patching/deleting
+    events in the newly connected account.
     """
     google_busy.busy_write_token_path().unlink(missing_ok=True)
+    get_storage().clear_busy_blocks()
     return _busy_sync_payload()
 
 

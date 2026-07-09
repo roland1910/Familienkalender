@@ -1290,3 +1290,21 @@ class TestBusySyncEndpoints:
         response = client.delete("/api/admin/google/write-token")
         assert response.status_code == 200
         assert response.json()["busy_sync"]["connected"] is False
+
+    def test_disconnect_write_token_clears_local_busy_blocks_mapping(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # A stale local mapping must not survive an account switch — the
+        # Google-side blocks are deliberately left in place (see the
+        # docstring of delete_google_write_token), only the local mapping
+        # is reset.
+        from app.models import BusyBlock
+
+        storage.upsert_busy_block(
+            BusyBlock("1|u1|2026-07-20T15:00:00+00:00", "gevt-1", NOW, NOW, False),
+            updated_at=NOW,
+        )
+        assert storage.count_busy_blocks() == 1
+        response = client.delete("/api/admin/google/write-token")
+        assert response.status_code == 200
+        assert storage.count_busy_blocks() == 0
