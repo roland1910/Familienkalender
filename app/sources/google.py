@@ -27,7 +27,7 @@ from urllib.parse import quote
 
 import httpx
 
-from app.models import CalendarEvent
+from app.models import CalendarEvent, is_busy_block_title
 from app.sources import limits
 from app.storage import resolve_data_dir
 
@@ -141,14 +141,13 @@ async def _refresh_access_token(
     return tokens
 
 
-# Fixed title and private-marker key of the blocks the add-on writes into
-# Roland's Xalt calendar (see app.google_busy). When the same account is
-# also read as a read-only source, these self-created blocks must NOT be
-# read back — otherwise they would duplicate the MoreValue appointments they
-# mirror in the calendar views and the feed. They are skipped here so they
-# never reach the DB.
+# Private-marker key of the blocks the add-on writes into Roland's Xalt
+# calendar (see app.google_busy; the block title is BUSY_BLOCK_TITLE in
+# app.models). When the same account is also read as a read-only source, these
+# self-created blocks must NOT be read back — otherwise they would duplicate the
+# MoreValue appointments they mirror in the calendar views and the feed. They
+# are skipped here so they never reach the DB.
 BUSY_MARKER_KEY = "familienkalender_busy"
-BUSY_BLOCK_TITLE = "Busy MV"
 
 
 def _is_own_busy_block(item: dict[str, Any]) -> bool:
@@ -161,7 +160,7 @@ def _is_own_busy_block(item: dict[str, Any]) -> bool:
     private = (item.get("extendedProperties") or {}).get("private") or {}
     if isinstance(private, dict) and BUSY_MARKER_KEY in private:
         return True
-    return item.get("summary") == BUSY_BLOCK_TITLE
+    return is_busy_block_title(item.get("summary"))
 
 
 def _item_to_event(item: dict[str, Any]) -> CalendarEvent:

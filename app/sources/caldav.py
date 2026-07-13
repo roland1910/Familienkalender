@@ -23,7 +23,7 @@ import icalendar
 import recurring_ical_events
 from defusedxml import ElementTree as SafeET
 
-from app.models import LOCAL_TZ, CalendarEvent
+from app.models import LOCAL_TZ, CalendarEvent, is_busy_block_title
 from app.sources import limits
 from app.url_validation import validate_source_url
 
@@ -94,7 +94,20 @@ def _extract_events(
 ) -> list[CalendarEvent]:
     calendar = icalendar.Calendar.from_ical(ics_text)
     occurrences = recurring_ical_events.of(calendar).between(window_start, window_end)
-    return [_component_to_event(component) for component in occurrences]
+    events: list[CalendarEvent] = []
+    for component in occurrences:
+        event = _component_to_event(component)
+        # Skip the add-on's own "Busy MV" blocks. Roland runs an external tool
+        # that syncs his Xalt Google calendar back into MoreValue (Nextcloud),
+        # so the "Busy MV" blocks we write into Xalt reappear here. Reading them
+        # back would duplicate the MoreValue appointments in the views/feed and,
+        # worse, feed them into the busy-sync again (mirror loop). CalDAV/iCal
+        # carries no private marker like Google, so the skip is purely by the
+        # fixed title (matched exactly, normalized) — see app.models.
+        if is_busy_block_title(event.title):
+            continue
+        events.append(event)
+    return events
 
 
 def _calendar_data_texts(multistatus_xml: bytes) -> list[str]:

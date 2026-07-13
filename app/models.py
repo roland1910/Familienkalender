@@ -62,6 +62,26 @@ def is_valid_feed_priority(value: int) -> bool:
     )
 
 
+# Fixed, neutral title of the "Busy MV" blocks the add-on writes into Roland's
+# Xalt calendar (see app.google_busy). Single source of truth for the write
+# body AND for both read clients: the Google and CalDAV readers skip
+# appointments with this title so a self-created block that returns via Roland's
+# external Xalt->MoreValue sync is never read back (loop guard).
+BUSY_BLOCK_TITLE = "Busy MV"
+
+
+def is_busy_block_title(title: str | None) -> bool:
+    """Whether ``title`` is exactly the "Busy MV" block title (normalized).
+
+    Comparison trims outer whitespace and ignores case. A title that merely
+    contains "Busy MV" (e.g. "Busy MV Vorbereitung") is a real appointment and
+    must NOT match — only the exact normalized title does.
+    """
+    if not title:
+        return False
+    return title.strip().casefold() == BUSY_BLOCK_TITLE.casefold()
+
+
 @dataclass(frozen=True, slots=True)
 class TagOption:
     """One selectable day-tag symbol (id is stable, emoji is the display)."""

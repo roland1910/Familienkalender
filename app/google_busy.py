@@ -33,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from app.models import LOCAL_TZ, CalendarEvent
+from app.models import BUSY_BLOCK_TITLE, LOCAL_TZ, CalendarEvent
 from app.sources import limits
 from app.sources.google import (
     _is_expired,
@@ -63,8 +63,9 @@ MARKER_KEY = "familienkalender_busy"
 OWNER_KEY = "familienkalender_owner"
 OWNER_VALUE = "1"
 
-# Fixed, neutral title of every block — no appointment detail leaks.
-BUSY_TITLE = "Busy MV"
+# Fixed, neutral title of every block — no appointment detail leaks. Single
+# source of truth in app.models so the read clients skip the same title.
+BUSY_TITLE = BUSY_BLOCK_TITLE
 
 # events.list for the add-on's own blocks pages very rarely (only as many
 # blocks as MoreValue appointments in the window); cap the loop defensively.

@@ -262,6 +262,68 @@ class TestPerEventErrorIsolation:
         assert all("KAPUTT" not in record.getMessage() for record in caplog.records)
 
 
+def busy_mv_ics(summary: str, uid: str = "busy-mv@example.com") -> str:
+    """A minimal VEVENT with a given SUMMARY (used for the Busy MV skip tests)."""
+    return (
+        "BEGIN:VCALENDAR\n"
+        "VERSION:2.0\n"
+        "PRODID:-//Test//Familienkalender//EN\n"
+        "BEGIN:VEVENT\n"
+        f"UID:{uid}\n"
+        "DTSTAMP:20260701T000000Z\n"
+        "DTSTART;TZID=Europe/Berlin:20260714T100000\n"
+        "DTEND;TZID=Europe/Berlin:20260714T110000\n"
+        f"SUMMARY:{summary}\n"
+        "END:VEVENT\n"
+        "END:VCALENDAR\n"
+    )
+
+
+@pytest.mark.anyio
+class TestBusyBlockSkip:
+    """The CalDAV reader skips the add-on's own "Busy MV" blocks.
+
+    Roland runs an external Xalt->MoreValue sync, so the "Busy MV" blocks the
+    add-on writes into Xalt come back through Nextcloud. Reading them would
+    duplicate the mirrored appointments and re-feed the busy-sync (loop).
+    """
+
+    async def test_skips_busy_mv_block_keeps_normal_events(self) -> None:
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(
+            fixture("simple.ics"), busy_mv_ics("Busy MV"), fixture("allday.ics")
+        )
+        async with make_client(xml, captured) as client:
+            events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+        # Only the two real appointments survive; the "Busy MV" block is gone.
+        assert {event.uid for event in events} == {
+            "simple-1@example.com",
+            "allday-1@example.com",
+        }
+
+    @pytest.mark.parametrize("summary", ["  busy mv ", "BUSY MV", "Busy MV"])
+    async def test_skips_busy_mv_title_case_and_whitespace_insensitive(
+        self, summary: str
+    ) -> None:
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(busy_mv_ics(summary))
+        async with make_client(xml, captured) as client:
+            events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+        assert events == []
+
+    async def test_keeps_event_that_only_contains_busy_mv(self) -> None:
+        captured: list[httpx.Request] = []
+        # "Busy MV Vorbereitung" is a real appointment, not one of our blocks.
+        xml = multistatus_report(busy_mv_ics("Busy MV Vorbereitung", uid="prep@example.com"))
+        async with make_client(xml, captured) as client:
+            events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+        assert [event.uid for event in events] == ["prep@example.com"]
+        assert events[0].title == "Busy MV Vorbereitung"
+
+
 PROPFIND_MULTISTATUS = """<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
   <d:response>
