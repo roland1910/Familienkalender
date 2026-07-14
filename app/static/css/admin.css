@@ -569,3 +569,84 @@ body {
   background: var(--ok-bg);
   color: var(--ok-text);
 }
+
+/* Change log (Änderungsprotokoll) — a compact, touch-readable list of the
+   last four weeks of calendar changes in both directions. All colors come
+   from the semantic theme variables, so it works in light and dark. */
+.changelog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.changelog-item {
+  display: grid;
+  grid-template-columns: auto auto auto auto 1fr;
+  align-items: center;
+  gap: 6px 12px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 16px;
+}
+
+.changelog-time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.changelog-direction {
+  font-size: 14px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.changelog-scope {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.changelog-action {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  justify-self: start;
+}
+
+.changelog-action.changelog-added {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.changelog-action.changelog-removed {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.changelog-action.changelog-updated {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.changelog-title {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* Narrow screens: let the rows wrap instead of overflowing. */
+@media (max-width: 640px) {
+  .changelog-item {
+    grid-template-columns: auto 1fr;
+  }
+  .changelog-title {
+    grid-column: 1 / -1;
+  }
+}

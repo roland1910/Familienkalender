@@ -12,13 +12,13 @@ renders titles as text only.
 
 import os
 import sys
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path, PurePosixPath
 
 # Allow running as a plain script: `python scripts/seed_demo.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.models import LOCAL_TZ, CalendarEvent
+from app.models import LOCAL_TZ, AuditEntry, CalendarEvent
 from app.storage import DB_FILENAME, Storage
 
 # The add-on's production data directory inside the container.
@@ -140,6 +140,47 @@ def _firma_events(today: date) -> list[CalendarEvent]:
     ]
 
 
+def _demo_audit_entries(now: datetime) -> list[AuditEntry]:
+    """A few change-log entries so the admin section is not empty in the demo.
+
+    Covers both directions and all three actions with recent timestamps.
+    """
+    return [
+        AuditEntry(
+            ts=(now - timedelta(hours=1)).isoformat(),
+            direction="in",
+            scope="Marina",
+            action="added",
+            title="Zahnarzt Emil",
+            event_start=(now + timedelta(days=1)).isoformat(),
+        ),
+        AuditEntry(
+            ts=(now - timedelta(hours=3)).isoformat(),
+            direction="in",
+            scope="Kunde",
+            action="updated",
+            title="Kundentermin München",
+            event_start=(now + timedelta(days=1)).isoformat(),
+        ),
+        AuditEntry(
+            ts=(now - timedelta(days=1)).isoformat(),
+            direction="in",
+            scope="Firma",
+            action="removed",
+            title="Team-Meeting",
+            event_start=(now + timedelta(days=4)).isoformat(),
+        ),
+        AuditEntry(
+            ts=(now - timedelta(days=2)).isoformat(),
+            direction="out",
+            scope="Xalt (Busy MV)",
+            action="added",
+            title="Busy MV",
+            event_start=(now + timedelta(days=2)).isoformat(),
+        ),
+    ]
+
+
 def seed_demo(data_dir: Path, *, today: date | None = None) -> dict[str, int]:
     """Create demo sources and events in ``data_dir``; idempotent.
 
@@ -150,6 +191,10 @@ def seed_demo(data_dir: Path, *, today: date | None = None) -> dict[str, int]:
     storage = Storage(Path(data_dir) / DB_FILENAME)
 
     existing = {source.name: source.id for source in storage.list_sources()}
+    # Only seed the change log on a genuinely fresh database, so re-running
+    # the seed does not accumulate duplicate demo entries (idempotency).
+    if not existing:
+        storage.add_audit_entries(_demo_audit_entries(datetime.now(tz=UTC)))
     source_ids: dict[str, int] = {}
     for name, source_type, display_mode in DEMO_SOURCES:
         if name in existing:

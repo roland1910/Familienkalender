@@ -362,6 +362,23 @@
       <p id="busy-status" class="message" hidden></p>
       <p id="busy-message" class="message" hidden></p>
     </section>
+
+    <section class="admin-section" aria-labelledby="changelog-heading">
+      <h2 id="changelog-heading">&Auml;nderungsprotokoll (letzte 4 Wochen)</h2>
+      <p>Alle Kalender-&Auml;nderungen der letzten vier Wochen &#8211; in beide
+        Richtungen: <strong>eingehend</strong> (aus den Quellen in den
+        Familienkalender: neu hinzugekommene, ge&auml;nderte und entfernte
+        Termine) und <strong>ausgehend</strong> (Belegt-Sync: in Xalt angelegte,
+        aktualisierte und gel&ouml;schte &#8222;Busy MV&#8220;-Bl&ouml;cke).
+        &Auml;ltere Eintr&auml;ge werden automatisch entfernt.</p>
+      <div class="button-row">
+        <button id="btn-changelog-refresh" class="action-button" type="button">
+          Aktualisieren
+        </button>
+      </div>
+      <ul id="changelog-list" class="changelog-list"></ul>
+      <p id="changelog-message" class="message" hidden></p>
+    </section>
   </main>
   <script type="module" src="static/admin/main.js"></script>
 </body>

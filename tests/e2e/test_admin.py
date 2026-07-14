@@ -584,3 +584,23 @@ class TestBusySync:
             "href", "https://accounts.google.com/o/oauth2/v2/auth?scope=events"
         )
         expect(section.locator("#busy-connect-step")).to_be_visible()
+
+
+class TestChangelog:
+    def test_section_shows_seeded_entries(self, page: Page, server_url: str) -> None:
+        """Das Änderungsprotokoll zeigt die Demo-Einträge beider Richtungen."""
+        goto_admin(page, server_url)
+        section = page.locator("section[aria-labelledby='changelog-heading']")
+        expect(section.locator("#changelog-list .changelog-item").first).to_be_visible()
+        # Incoming and outgoing demo entries are present.
+        expect(section).to_contain_text("Zahnarzt Emil")
+        expect(section).to_contain_text("eingehend")
+        expect(section).to_contain_text("ausgehend")
+        # German action labels appear.
+        expect(section).to_contain_text("hinzugefügt")
+
+    def test_refresh_button_reloads(self, page: Page, server_url: str) -> None:
+        goto_admin(page, server_url)
+        section = page.locator("section[aria-labelledby='changelog-heading']")
+        section.locator("#btn-changelog-refresh").click()
+        expect(section.locator("#changelog-message")).to_contain_text("Aktualisiert")

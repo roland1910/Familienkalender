@@ -100,6 +100,10 @@ export function triggerSync() {
   return request("POST", "api/sync");
 }
 
+export function getChangelog() {
+  return request("GET", "api/admin/changelog");
+}
+
 export function getBusySync() {
   return request("GET", "api/admin/busy-sync");
 }
