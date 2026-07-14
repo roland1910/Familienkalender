@@ -1308,3 +1308,70 @@ class TestBusySyncEndpoints:
         response = client.delete("/api/admin/google/write-token")
         assert response.status_code == 200
         assert storage.count_busy_blocks() == 0
+
+
+class TestChangelogEndpoint:
+    def test_returns_entries_newest_first(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app.models import AuditEntry
+
+        now = datetime.now(UTC)
+        storage.add_audit_entries(
+            [
+                AuditEntry(
+                    ts=(now - timedelta(days=2)).isoformat(),
+                    direction="in",
+                    scope="Marina",
+                    action="added",
+                    title="Alt",
+                    event_start="2026-07-10T16:00:00+00:00",
+                ),
+                AuditEntry(
+                    ts=(now - timedelta(hours=1)).isoformat(),
+                    direction="out",
+                    scope="Xalt (Busy MV)",
+                    action="removed",
+                    title="Busy MV",
+                    event_start="2026-07-11",
+                ),
+            ]
+        )
+        response = client.get("/api/admin/changelog")
+        assert response.status_code == 200
+        entries = response.json()["entries"]
+        assert [e["title"] for e in entries] == ["Busy MV", "Alt"]
+        assert entries[0]["direction"] == "out"
+        assert entries[0]["action"] == "removed"
+
+    def test_excludes_entries_older_than_retention(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app.models import AuditEntry
+
+        now = datetime.now(UTC)
+        storage.add_audit_entries(
+            [
+                AuditEntry(
+                    ts=(now - timedelta(days=40)).isoformat(),
+                    direction="in",
+                    scope="Marina",
+                    action="added",
+                    title="ZuAlt",
+                ),
+                AuditEntry(
+                    ts=(now - timedelta(days=1)).isoformat(),
+                    direction="in",
+                    scope="Marina",
+                    action="added",
+                    title="Frisch",
+                ),
+            ]
+        )
+        entries = client.get("/api/admin/changelog").json()["entries"]
+        assert [e["title"] for e in entries] == ["Frisch"]
+
+    def test_empty_changelog_returns_empty_list(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        assert client.get("/api/admin/changelog").json()["entries"] == []

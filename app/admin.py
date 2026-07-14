@@ -14,7 +14,7 @@ a PATCH sending the placeholder back keeps the stored secret.
 
 import logging
 import secrets
-from datetime import time
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -36,7 +36,7 @@ from app.models import (
 from app.sanitize import sanitize_error
 from app.settings import get_evening_boundary
 from app.sources import caldav, google
-from app.storage import get_storage
+from app.storage import AUDIT_RETENTION_DAYS, get_storage
 from app.url_validation import SourceURLError, validate_source_url
 
 logger = logging.getLogger(__name__)
@@ -426,6 +426,38 @@ async def update_feed_host(update: FeedHostUpdate, request: Request) -> dict:
     storage = get_storage()
     settings.set_feed_public_host(storage, host)
     return _feed_payload(request, settings.ensure_feed_token(storage))
+
+
+# -- change log (Änderungsprotokoll) ---------------------------------------
+
+# Hard cap on the number of change-log rows returned in one response; the
+# prune keeps the table to ~28 days, this bounds a pathological burst.
+AUDIT_MAX_ENTRIES = 1000
+
+
+@router.get("/changelog")
+async def get_changelog() -> dict:
+    """The change log of the last retention window, newest first.
+
+    Covers both directions: incoming (source → Familienkalender: added/updated/
+    removed events per source) and outgoing (Belegt-Sync → Xalt). Titles are
+    foreign strings — the frontend renders them via textContent only.
+    """
+    since = (datetime.now(UTC) - timedelta(days=AUDIT_RETENTION_DAYS)).isoformat()
+    entries = get_storage().get_audit_entries(since, limit=AUDIT_MAX_ENTRIES)
+    return {
+        "entries": [
+            {
+                "ts": entry.ts,
+                "direction": entry.direction,
+                "scope": entry.scope,
+                "action": entry.action,
+                "title": entry.title,
+                "event_start": entry.event_start,
+            }
+            for entry in entries
+        ]
+    }
 
 
 # -- busy sync (MoreValue -> Xalt) -----------------------------------------

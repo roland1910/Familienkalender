@@ -486,6 +486,7 @@ class TestAdminGate:
         for method, url in (
             ("GET", "/api/admin/settings"),
             ("GET", "/api/admin/sources"),
+            ("GET", "/api/admin/changelog"),
             ("POST", "/api/admin/sources"),
             ("PUT", "/api/admin/settings"),
             ("PUT", "/api/admin/settings/power"),
