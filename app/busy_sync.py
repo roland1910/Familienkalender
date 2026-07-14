@@ -34,7 +34,7 @@ from app.google_busy import (
     busy_write_token_path,
     has_write_token,
 )
-from app.models import LOCAL_TZ, BusyBlock, StoredEvent
+from app.models import BUSY_BLOCK_TITLE, LOCAL_TZ, AuditEntry, BusyBlock, StoredEvent
 from app.sanitize import sanitize_error
 from app.storage import Storage, _encode_moment
 
@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 # How far ahead MoreValue appointments are mirrored (Roland's choice).
 BUSY_SYNC_FUTURE_DAYS = 180
+
+# Change-log scope label for the outgoing "Busy MV" writes into Xalt.
+BUSY_AUDIT_SCOPE = "Xalt (Busy MV)"
 
 
 def busy_sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -76,6 +79,9 @@ class BusySyncResult:
     orphans_removed: int
     active_blocks: int
     error: str | None
+    # Change-log entries for the writes this run performed (outgoing
+    # direction). Persisted by run_busy_sync, isolated from the sync itself.
+    audit_entries: tuple[AuditEntry, ...] = ()
 
 
 def _desired_events(
@@ -126,6 +132,21 @@ async def _reconcile(
     # is legitimate (not an orphan) iff it is still mapped to a desired event.
     # Built as we go so a freshly inserted block is not mistaken for an orphan.
     known_ids: set[str] = set()
+    # Outgoing change-log entries for the writes performed this run.
+    audit: list[AuditEntry] = []
+    ts_iso = now.astimezone(UTC).isoformat()
+
+    def _audit(action: str, title: str, event_start: str | None) -> None:
+        audit.append(
+            AuditEntry(
+                ts=ts_iso,
+                direction="out",
+                scope=BUSY_AUDIT_SCOPE,
+                action=action,
+                title=title,
+                event_start=event_start,
+            )
+        )
 
     # 1. Insert / update from the desired set.
     for key, item in desired.items():
@@ -138,6 +159,7 @@ async def _reconcile(
             )
             known_ids.add(event_id)
             inserted += 1
+            _audit("added", item.event.title, _encode_moment(item.event.start))
         else:
             known_ids.add(existing.google_event_id)
             if _times_differ(existing, item):
@@ -153,6 +175,7 @@ async def _reconcile(
                     updated_at=now,
                 )
                 updated += 1
+                _audit("updated", item.event.title, _encode_moment(item.event.start))
 
     # 2. Delete mapped blocks whose source event is gone or out of window.
     for key, block in mapping.items():
@@ -160,6 +183,9 @@ async def _reconcile(
             await client.delete_block(block.google_event_id)
             storage.delete_busy_block(key)
             deleted += 1
+            # The source appointment is gone, so its title is unavailable —
+            # the block only ever carried the neutral "Busy MV" title anyway.
+            _audit("removed", BUSY_BLOCK_TITLE, _encode_moment(block.start))
 
     # 3. Reconcile orphans: own blocks in the calendar not backed by a
     #    still-desired mapping (a lost mapping row, a leftover from an earlier
@@ -170,9 +196,10 @@ async def _reconcile(
         if event_id and event_id not in known_ids:
             await client.delete_block(event_id)
             orphans += 1
+            _audit("removed", BUSY_BLOCK_TITLE, None)
 
     active = storage.count_busy_blocks()
-    return BusySyncResult(inserted, updated, deleted, orphans, active, None)
+    return BusySyncResult(inserted, updated, deleted, orphans, active, None, tuple(audit))
 
 
 async def run_busy_sync(
@@ -222,6 +249,12 @@ async def run_busy_sync(
         )
         return BusySyncResult(0, 0, 0, 0, storage.count_busy_blocks(), error)
 
+    # Record what was written to Xalt in the change log — isolated so an
+    # audit-write failure never turns a successful busy sync into an error.
+    try:
+        storage.add_audit_entries(list(result.audit_entries))
+    except Exception:  # pragma: no cover - defensive, audit must never break sync
+        logger.exception("Failed to record outgoing change log")
     settings.set_busy_sync_status(
         storage,
         last_run=run_at.astimezone(UTC).isoformat(),

@@ -10,10 +10,10 @@ import logging
 from datetime import UTC, datetime, time, timedelta
 
 from app import busy_sync
-from app.models import LOCAL_TZ, CalendarEvent, Source
+from app.models import LOCAL_TZ, AuditEntry, CalendarEvent, EventChange, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google, google_contacts, limits
-from app.storage import Storage
+from app.storage import AUDIT_RETENTION_DAYS, Storage
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,35 @@ async def _fetch_source_events(
     return [limits.clamp_event_text(event) for event in events]
 
 
+def _record_incoming_changes(
+    storage: Storage, source_name: str, changes: list[EventChange], ts_iso: str
+) -> None:
+    """Log a source's incoming diff to the change log (isolated best-effort).
+
+    Never raises: a failure to write the audit trail must not affect the
+    source's sync status or the sync run. No entries are written when the diff
+    is empty, so an unchanged sync produces no change-log noise.
+    """
+    if not changes:
+        return
+    try:
+        storage.add_audit_entries(
+            [
+                AuditEntry(
+                    ts=ts_iso,
+                    direction="in",
+                    scope=source_name,
+                    action=change.action,
+                    title=change.title,
+                    event_start=change.event_start,
+                )
+                for change in changes
+            ]
+        )
+    except Exception:  # pragma: no cover - defensive, audit must never break sync
+        logger.exception("Failed to record incoming change log for %s", source_name)
+
+
 async def sync_all(storage: Storage, *, now: datetime | None = None) -> dict[int, str | None]:
     """Sync every enabled source; returns per-source error (None = success).
 
@@ -82,16 +111,18 @@ async def _sync_all_locked(
     results: dict[int, str | None] = {}
     # One consistent timestamp for the whole run, not one per source.
     synced_at = now or datetime.now(UTC)
+    synced_at_iso = synced_at.astimezone(UTC).isoformat()
     for source in storage.list_sources():
         if not source.enabled:
             continue
         try:
             events = await _fetch_source_events(source, window_start, window_end)
-            storage.sync_events(
+            changes = storage.sync_events(
                 source.id, events, window_start, window_end, synced_at=synced_at
             )
             storage.update_sync_status(source.id, synced_at=synced_at, error=None)
             results[source.id] = None
+            _record_incoming_changes(storage, source.name, changes, synced_at_iso)
         except Exception as exc:
             error = sanitize_error(str(exc))
             logger.warning("Sync failed for source %s (%s): %s", source.id, source.name, error)
@@ -105,6 +136,14 @@ async def _sync_all_locked(
         await busy_sync.run_busy_sync(storage, now=synced_at)
     except Exception:  # pragma: no cover - run_busy_sync already isolates errors
         logger.exception("Unexpected error in busy sync")
+    # Keep the change log bounded: drop entries older than the retention
+    # window at the end of every run. Isolated so a prune failure never
+    # breaks the sync.
+    try:
+        cutoff = (synced_at - timedelta(days=AUDIT_RETENTION_DAYS)).astimezone(UTC).isoformat()
+        storage.prune_audit_log(cutoff)
+    except Exception:  # pragma: no cover - defensive, prune must never break sync
+        logger.exception("Failed to prune the change log")
     return results
 
 

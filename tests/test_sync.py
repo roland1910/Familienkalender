@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app.models import CalendarEvent
+from app.models import AuditEntry, CalendarEvent
 from app.sources import limits
 from app.storage import Storage
 from app.sync import (
@@ -371,6 +371,72 @@ class TestSyncLock:
         )
 
         assert max_active == 1
+
+
+@pytest.mark.anyio
+class TestIncomingChangeLog:
+    async def test_added_events_are_logged_incoming(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+
+        async def fake_fetch(*args, **kwargs):
+            return [make_event(uid="new-1")]
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        await sync_all(storage, now=FIXED_NOW)
+
+        entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        assert len(entries) == 1
+        assert entries[0].direction == "in"
+        assert entries[0].scope == "Firma"
+        assert entries[0].action == "added"
+        assert entries[0].title == "Termin"
+
+    async def test_unchanged_second_sync_logs_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+
+        async def fake_fetch(*args, **kwargs):
+            return [make_event(uid="stable")]
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        await sync_all(storage, now=FIXED_NOW)
+        # Second run with identical data: no new change-log entries.
+        await sync_all(storage, now=FIXED_NOW)
+
+        entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        assert len(entries) == 1
+
+    async def test_prune_removes_entries_older_than_retention(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        # An old entry, well before the retention window from FIXED_NOW.
+        storage.add_audit_entries(
+            [
+                AuditEntry(
+                    ts="2026-01-01T00:00:00+00:00",
+                    direction="in",
+                    scope="Firma",
+                    action="added",
+                    title="alt",
+                )
+            ]
+        )
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        await sync_all(storage, now=FIXED_NOW)
+
+        entries = storage.get_audit_entries("2020-01-01T00:00:00+00:00")
+        assert entries == []
 
 
 @pytest.mark.anyio

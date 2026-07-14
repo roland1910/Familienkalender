@@ -426,3 +426,73 @@ class TestSourceKey:
             all_day=False,
         )
         assert source_key(3, event) == "3|u1|2026-07-20T15:00:00+00:00"
+
+
+@pytest.mark.anyio
+class TestOutgoingChangeLog:
+    async def test_insert_logs_added_entry(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        add_mv_event(storage, 1, "u1", datetime(2026, 7, 20, 15, tzinfo=UTC))
+        backend = RecordingBackend()
+        await _run(storage, backend)
+
+        entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        assert len(entries) == 1
+        assert entries[0].direction == "out"
+        assert entries[0].scope == "Xalt (Busy MV)"
+        assert entries[0].action == "added"
+        assert entries[0].title == "MoreValue-Meeting"
+
+    async def test_patch_logs_updated_entry(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        add_mv_event(storage, 1, "u1", datetime(2026, 7, 20, 15, tzinfo=UTC))
+        backend = RecordingBackend()
+        await _run(storage, backend)
+        event = CalendarEvent(
+            uid="u1",
+            title="MoreValue-Meeting",
+            start=datetime(2026, 7, 20, 15, tzinfo=UTC),
+            end=datetime(2026, 7, 20, 17, tzinfo=UTC),
+            all_day=False,
+        )
+        storage.sync_events(
+            1, [event], datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2027, 1, 1, tzinfo=UTC), synced_at=NOW,
+        )
+        await _run(storage, backend)
+
+        entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        actions = [e.action for e in entries if e.direction == "out"]
+        assert "updated" in actions
+
+    async def test_delete_logs_removed_entry(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        add_mv_event(storage, 1, "u1", datetime(2026, 7, 20, 15, tzinfo=UTC))
+        backend = RecordingBackend()
+        await _run(storage, backend)
+        # The source event vanishes -> the block is deleted.
+        storage.sync_events(
+            1, [], datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2027, 1, 1, tzinfo=UTC), synced_at=NOW,
+        )
+        await _run(storage, backend)
+
+        entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        removed = [e for e in entries if e.direction == "out" and e.action == "removed"]
+        assert len(removed) == 1
+        assert removed[0].title == "Busy MV"
+
+    async def test_idempotent_run_logs_nothing(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        add_mv_event(storage, 1, "u1", datetime(2026, 7, 20, 15, tzinfo=UTC))
+        backend = RecordingBackend()
+        await _run(storage, backend)
+        before = len(storage.get_audit_entries("2026-01-01T00:00:00+00:00"))
+        # Second, no-op run writes no new change-log entries.
+        await _run(storage, backend)
+        after = len(storage.get_audit_entries("2026-01-01T00:00:00+00:00"))
+        assert before == after == 1
