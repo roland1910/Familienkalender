@@ -24,8 +24,10 @@ from app.models import (
     MAX_TAGS_PER_DAY,
     SOURCE_TYPES,
     TAG_OPTIONS,
+    AuditEntry,
     BusyBlock,
     CalendarEvent,
+    EventChange,
     Source,
     StoredEvent,
     TagLimitError,
@@ -37,6 +39,10 @@ from app.models import (
 )
 
 DB_FILENAME = "familienkalender.db"
+
+# How long change-log entries are kept before the periodic prune drops them
+# (Roland wants "the last 4 weeks"). Shared with the admin API window.
+AUDIT_RETENTION_DAYS = 28
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -90,6 +96,17 @@ CREATE TABLE IF NOT EXISTS busy_blocks (
     all_day INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    action TEXT NOT NULL,
+    title TEXT NOT NULL,
+    event_start TEXT,
+    details TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 """
 
 # Emojis allowed in day_tags — everything else is rejected before it ever
@@ -533,29 +550,61 @@ class Storage:
         window_end: datetime,
         *,
         synced_at: datetime,
-    ) -> None:
-        """Upsert the fetched events and delete window events that vanished.
+    ) -> list[EventChange]:
+        """Upsert the fetched events, delete vanished ones, return the diff.
 
         ``events`` is the complete fetch result for [window_start, window_end);
         stored events of this source starting inside the window that are not in
         the result set were deleted upstream and are removed here too. Events
         outside the window are left alone.
+
+        The returned diff (against the CURRENT database state, computed from the
+        rows and events already in hand — no extra query) drives the change log:
+        - ``added``: a fetched event whose key (uid|start) was not stored before.
+        - ``removed``: a stored, in-window event no longer present upstream.
+        - ``updated``: a still-present event whose title/end/all_day/location
+          changed. A pure time shift is not an update — it changes the key and
+          thus shows as removed(old)+added(new). When nothing changed the diff
+          is empty (no change-log noise); a first sync against an already
+          populated DB (e.g. right after a redeploy) therefore logs nothing.
         """
         fetched_keys = {(event.uid, _encode_moment(event.start)) for event in events}
         synced_at_raw = synced_at.astimezone(UTC).isoformat()
+        changes: list[EventChange] = []
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, uid, start, all_day FROM events WHERE source_id = ?",
+                "SELECT id, uid, title, start, end, all_day, location"
+                " FROM events WHERE source_id = ?",
                 (source_id,),
             ).fetchall()
-            stale_ids = [
-                row["id"]
-                for row in rows
-                if (row["uid"], row["start"]) not in fetched_keys
-                and window_start
-                <= as_local_datetime(_decode_moment(row["start"], bool(row["all_day"])))
-                < window_end
-            ]
+            existing = {(row["uid"], row["start"]): row for row in rows}
+            stale_ids = []
+            for row in rows:
+                if (row["uid"], row["start"]) in fetched_keys:
+                    continue
+                if (
+                    window_start
+                    <= as_local_datetime(
+                        _decode_moment(row["start"], bool(row["all_day"]))
+                    )
+                    < window_end
+                ):
+                    stale_ids.append(row["id"])
+                    changes.append(
+                        EventChange("removed", row["title"], row["start"])
+                    )
+            for event in events:
+                encoded_start = _encode_moment(event.start)
+                row = existing.get((event.uid, encoded_start))
+                if row is None:
+                    changes.append(EventChange("added", event.title, encoded_start))
+                elif (
+                    row["title"] != event.title
+                    or row["end"] != _encode_moment(event.end)
+                    or bool(row["all_day"]) != event.all_day
+                    or row["location"] != event.location
+                ):
+                    changes.append(EventChange("updated", event.title, encoded_start))
             if stale_ids:
                 conn.executemany(
                     "DELETE FROM events WHERE id = ?", [(item,) for item in stale_ids]
@@ -582,6 +631,52 @@ class Storage:
                     for event in events
                 ],
             )
+        return changes
+
+    # -- audit log (Änderungsprotokoll) ----------------------------------
+
+    def add_audit_entries(self, entries: list[AuditEntry]) -> None:
+        """Append change-log entries in one batch (no-op on an empty list)."""
+        if not entries:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO audit_log"
+                " (ts, direction, scope, action, title, event_start, details)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        entry.ts,
+                        entry.direction,
+                        entry.scope,
+                        entry.action,
+                        entry.title,
+                        entry.event_start,
+                        entry.details,
+                    )
+                    for entry in entries
+                ],
+            )
+
+    def get_audit_entries(self, since_ts: str, *, limit: int = 1000) -> list[AuditEntry]:
+        """Change-log entries with ``ts >= since_ts``, newest first, capped.
+
+        ``ts`` is an ISO-8601 UTC string; all entries are written in the same
+        UTC format, so the lexicographic comparison matches chronological order.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT ts, direction, scope, action, title, event_start, details"
+                " FROM audit_log WHERE ts >= ? ORDER BY ts DESC, id DESC LIMIT ?",
+                (since_ts, limit),
+            ).fetchall()
+        return [_row_to_audit_entry(row) for row in rows]
+
+    def prune_audit_log(self, before_ts: str) -> int:
+        """Delete change-log entries older than ``before_ts``; return the count."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM audit_log WHERE ts < ?", (before_ts,))
+            return cursor.rowcount
 
     def get_events(self, range_start: datetime, range_end: datetime) -> list[StoredEvent]:
         """All stored events of enabled sources overlapping [range_start, range_end).
@@ -684,6 +779,18 @@ class Storage:
         """
         with self._connect() as conn:
             conn.execute("DELETE FROM busy_blocks")
+
+
+def _row_to_audit_entry(row: sqlite3.Row) -> AuditEntry:
+    return AuditEntry(
+        ts=row["ts"],
+        direction=row["direction"],
+        scope=row["scope"],
+        action=row["action"],
+        title=row["title"],
+        event_start=row["event_start"],
+        details=row["details"],
+    )
 
 
 def _row_to_busy_block(row: sqlite3.Row) -> BusyBlock:

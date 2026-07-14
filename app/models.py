@@ -229,6 +229,49 @@ class BusyBlock:
     all_day: bool
 
 
+# Change log (Änderungsprotokoll): a small audit trail of what each sync
+# changed, in both directions — incoming (source → Familienkalender) and
+# outgoing (Belegt-Sync → Xalt). See app.storage (audit_log table),
+# app.sync (incoming diff) and app.busy_sync (outgoing writes).
+AUDIT_DIRECTIONS = ("in", "out")
+AUDIT_ACTIONS = ("added", "updated", "removed")
+
+
+@dataclass(frozen=True, slots=True)
+class EventChange:
+    """One incoming event difference detected while syncing a single source.
+
+    ``action`` is one of AUDIT_ACTIONS; ``event_start`` is the storage-encoded
+    start (UTC ISO for timed, ISO date for all-day) so the caller can log it
+    without re-encoding. A pure time shift of an appointment surfaces as a
+    ``removed`` (old start) plus an ``added`` (new start), because the start is
+    part of the event identity.
+    """
+
+    action: str
+    title: str
+    event_start: str
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEntry:
+    """One row of the change log (Änderungsprotokoll).
+
+    ``ts`` is an ISO-8601 UTC timestamp, ``direction`` one of AUDIT_DIRECTIONS,
+    ``scope`` the source name (incoming) or target label (outgoing), ``action``
+    one of AUDIT_ACTIONS. ``title`` is a foreign string (appointment title) and
+    must only ever be rendered via textContent in the frontend.
+    """
+
+    ts: str
+    direction: str
+    scope: str
+    action: str
+    title: str
+    event_start: str | None = None
+    details: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class StoredEvent:
     """An event as read back from storage, with source metadata attached."""

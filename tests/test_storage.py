@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from app.models import BusyBlock, CalendarEvent
-from app.storage import Storage, resolve_data_dir
+from app.models import AuditEntry, BusyBlock, CalendarEvent
+from app.storage import AUDIT_RETENTION_DAYS, Storage, resolve_data_dir
 
 BERLIN_OFFSET_SUMMER = "+02:00"
 
@@ -1016,3 +1016,175 @@ class TestBusyBlocks:
             block, updated_at=datetime(2026, 7, 3, tzinfo=UTC)
         )
         assert make_storage(tmp_path).list_busy_blocks() == [block]
+
+
+def audit_entry(
+    ts: str,
+    *,
+    direction: str = "in",
+    scope: str = "Marina",
+    action: str = "added",
+    title: str = "Termin",
+    event_start: str | None = "2026-07-10T16:00:00+00:00",
+) -> AuditEntry:
+    return AuditEntry(
+        ts=ts,
+        direction=direction,
+        scope=scope,
+        action=action,
+        title=title,
+        event_start=event_start,
+    )
+
+
+class TestAuditLog:
+    def test_add_and_get_returns_newest_first(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_audit_entries(
+            [
+                audit_entry("2026-07-10T10:00:00+00:00", title="A"),
+                audit_entry("2026-07-12T10:00:00+00:00", title="C"),
+                audit_entry("2026-07-11T10:00:00+00:00", title="B"),
+            ]
+        )
+        got = storage.get_audit_entries("2026-07-01T00:00:00+00:00")
+        assert [e.title for e in got] == ["C", "B", "A"]
+
+    def test_empty_batch_is_a_noop(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_audit_entries([])
+        assert storage.get_audit_entries("2026-07-01T00:00:00+00:00") == []
+
+    def test_since_ts_filters_out_older_entries(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_audit_entries(
+            [
+                audit_entry("2026-06-01T10:00:00+00:00", title="old"),
+                audit_entry("2026-07-11T10:00:00+00:00", title="new"),
+            ]
+        )
+        got = storage.get_audit_entries("2026-07-01T00:00:00+00:00")
+        assert [e.title for e in got] == ["new"]
+
+    def test_limit_caps_the_result(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_audit_entries(
+            [audit_entry(f"2026-07-{day:02d}T10:00:00+00:00") for day in range(1, 11)]
+        )
+        got = storage.get_audit_entries("2026-07-01T00:00:00+00:00", limit=3)
+        assert len(got) == 3
+        # Newest first: the three highest timestamps.
+        assert [e.ts for e in got] == [
+            "2026-07-10T10:00:00+00:00",
+            "2026-07-09T10:00:00+00:00",
+            "2026-07-08T10:00:00+00:00",
+        ]
+
+    def test_prune_drops_entries_before_cutoff(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_audit_entries(
+            [
+                audit_entry("2026-06-01T10:00:00+00:00", title="old"),
+                audit_entry("2026-07-11T10:00:00+00:00", title="keep"),
+            ]
+        )
+        removed = storage.prune_audit_log("2026-07-01T00:00:00+00:00")
+        assert removed == 1
+        remaining = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        assert [e.title for e in remaining] == ["keep"]
+
+    def test_round_trip_preserves_all_fields(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        entry = AuditEntry(
+            ts="2026-07-11T10:00:00+00:00",
+            direction="out",
+            scope="Xalt (Busy MV)",
+            action="removed",
+            title="Busy MV",
+            event_start="2026-07-11",
+            details=None,
+        )
+        storage.add_audit_entries([entry])
+        got = storage.get_audit_entries("2026-07-01T00:00:00+00:00")
+        assert got == [entry]
+
+    def test_retention_default_is_four_weeks(self) -> None:
+        assert AUDIT_RETENTION_DAYS == 28
+
+
+class TestSyncEventsDiff:
+    def test_new_events_are_reported_as_added(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        changes = storage.sync_events(
+            source_id, [timed_event(uid="a")], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        assert [(c.action, c.title) for c in changes] == [("added", "Termin")]
+
+    def test_unchanged_resync_reports_no_diff(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        events = [timed_event(uid="a"), timed_event(uid="b")]
+        storage.sync_events(source_id, events, WINDOW_START, WINDOW_END, synced_at=NOW)
+        # Second identical sync: nothing changed, so no change-log noise.
+        changes = storage.sync_events(
+            source_id, events, WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        assert changes == []
+
+    def test_title_change_is_reported_as_updated(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        storage.sync_events(
+            source_id, [timed_event(uid="a", title="Alt")], WINDOW_START, WINDOW_END,
+            synced_at=NOW,
+        )
+        changes = storage.sync_events(
+            source_id, [timed_event(uid="a", title="Neu")], WINDOW_START, WINDOW_END,
+            synced_at=NOW,
+        )
+        assert [(c.action, c.title) for c in changes] == [("updated", "Neu")]
+
+    def test_location_change_is_reported_as_updated(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        storage.sync_events(
+            source_id, [timed_event(uid="a", location=None)], WINDOW_START, WINDOW_END,
+            synced_at=NOW,
+        )
+        changes = storage.sync_events(
+            source_id, [timed_event(uid="a", location="München")], WINDOW_START,
+            WINDOW_END, synced_at=NOW,
+        )
+        assert [c.action for c in changes] == ["updated"]
+
+    def test_vanished_in_window_event_is_reported_as_removed(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        storage.sync_events(
+            source_id, [timed_event(uid="a", title="Weg")], WINDOW_START, WINDOW_END,
+            synced_at=NOW,
+        )
+        changes = storage.sync_events(
+            source_id, [], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        assert [(c.action, c.title) for c in changes] == [("removed", "Weg")]
+
+    def test_time_shift_is_removed_plus_added(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        old = timed_event(
+            uid="a",
+            start=datetime(2026, 7, 10, 8, tzinfo=UTC),
+            end=datetime(2026, 7, 10, 9, tzinfo=UTC),
+        )
+        storage.sync_events(source_id, [old], WINDOW_START, WINDOW_END, synced_at=NOW)
+        shifted = timed_event(
+            uid="a",
+            start=datetime(2026, 7, 10, 10, tzinfo=UTC),
+            end=datetime(2026, 7, 10, 11, tzinfo=UTC),
+        )
+        changes = storage.sync_events(
+            source_id, [shifted], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        assert sorted(c.action for c in changes) == ["added", "removed"]
