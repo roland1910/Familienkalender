@@ -84,6 +84,31 @@ def seed_two_sources(storage: Storage) -> tuple[int, int]:
     return full_id, filtered_id
 
 
+class TestConfigEndpoint:
+    """GET /api/config — public frontend configuration (no admin gate)."""
+
+    def test_default_view_defaults_to_month(self, client: TestClient) -> None:
+        response = client.get("/api/config")
+        assert response.status_code == 200
+        assert response.json() == {"default_view": "month"}
+
+    def test_reflects_the_stored_setting(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.set_setting("default_view", "week")
+        assert client.get("/api/config").json() == {"default_view": "week"}
+
+    def test_invalid_stored_value_falls_back_to_month(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.set_setting("default_view", "quatsch")
+        assert client.get("/api/config").json() == {"default_view": "month"}
+
+    def test_contains_only_the_known_field(self, client: TestClient) -> None:
+        # The endpoint is public — it must never grow secrets by accident.
+        assert set(client.get("/api/config").json().keys()) == {"default_view"}
+
+
 class TestSourcesEndpoint:
     def test_lists_sources_without_secrets(self, client: TestClient, storage: Storage) -> None:
         seed_two_sources(storage)

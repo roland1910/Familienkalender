@@ -530,6 +530,13 @@ class TestNonAdminEndpointsStayOpen:
         )
         assert response.status_code == 200
 
+    def test_config_endpoint_is_open(self, data_dir: Path) -> None:
+        # The calendar frontend reads the server-side default view without
+        # admin rights (kiosk devices lose their localStorage on restart).
+        response = ingress_client().get("/api/config")
+        assert response.status_code == 200
+        assert response.json()["default_view"] in {"month", "week"}
+
     def test_tags_endpoints_are_open(self, data_dir: Path) -> None:
         client = ingress_client()
         response = client.get(

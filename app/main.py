@@ -19,7 +19,7 @@ from app.auth import is_admin_request
 from app.filtering import filter_events
 from app.models import LOCAL_TZ, StoredEvent
 from app.power import router as power_router
-from app.settings import get_evening_boundary
+from app.settings import get_default_view, get_evening_boundary
 from app.slideshow import admin_router as slideshow_admin_router
 from app.slideshow import periodic_photo_scan
 from app.slideshow import router as slideshow_router
@@ -224,6 +224,17 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def health() -> dict[str, str]:
     """Liveness probe for the add-on watchdog."""
     return {"status": "ok"}
+
+
+@app.get("/api/config")
+async def config() -> dict[str, str]:
+    """Public frontend configuration — deliberately only the default view.
+
+    Read by every calendar client on startup (no admin gate): kiosk
+    browsers lose their localStorage on restart, so the initial view must
+    come from the server. Nothing secret may ever be added here.
+    """
+    return {"default_view": get_default_view(get_storage())}
 
 
 @app.get("/api/me")

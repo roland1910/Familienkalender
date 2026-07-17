@@ -8,14 +8,18 @@ import pytest
 
 from app.settings import (
     DEFAULT_POWER_DEVICES,
+    DEFAULT_VIEW_KEY,
     EVENING_BOUNDARY_KEY,
     FEED_PUBLIC_HOST_KEY,
     POWER_DEVICES_KEY,
     PowerDevice,
+    get_default_view,
     get_evening_boundary,
     get_feed_public_host,
     get_power_devices,
+    is_valid_default_view,
     is_valid_public_host,
+    set_default_view,
     set_feed_public_host,
     set_power_devices,
 )
@@ -59,6 +63,31 @@ class TestEveningBoundary:
     ) -> None:
         monkeypatch.setenv("EVENING_BOUNDARY", "25:99")
         assert get_evening_boundary(storage) == time(17, 0)
+
+
+class TestDefaultView:
+    def test_defaults_to_month(self, storage: Storage) -> None:
+        assert get_default_view(storage) == "month"
+
+    def test_set_and_get_round_trip(self, storage: Storage) -> None:
+        set_default_view(storage, "week")
+        assert get_default_view(storage) == "week"
+        set_default_view(storage, "month")
+        assert get_default_view(storage) == "month"
+
+    def test_invalid_stored_value_falls_back_to_month(self, storage: Storage) -> None:
+        # Defense in depth: the admin API validates on write, but a value
+        # written by another path must not leak to the frontend.
+        storage.set_setting(DEFAULT_VIEW_KEY, "disco")
+        assert get_default_view(storage) == "month"
+
+    @pytest.mark.parametrize("view", ["month", "week"])
+    def test_valid_views(self, view: str) -> None:
+        assert is_valid_default_view(view)
+
+    @pytest.mark.parametrize("view", ["", "day", "MONTH", "Woche", "week "])
+    def test_invalid_views(self, view: str) -> None:
+        assert not is_valid_default_view(view)
 
 
 class TestPowerDevices:

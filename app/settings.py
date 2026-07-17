@@ -40,6 +40,15 @@ FEED_PUBLIC_HOST_KEY = "feed_public_host"
 BUSY_SYNC_ENABLED_KEY = "busy_sync_enabled"
 BUSY_SYNC_SOURCE_IDS_KEY = "busy_sync_source_ids"
 BUSY_SYNC_STATUS_KEY = "busy_sync_status"
+# Server-side default calendar view (month/week) for devices without a
+# per-device choice in localStorage — the kiosk browser loses its storage
+# on every restart, so the initial view must come from the server.
+DEFAULT_VIEW_KEY = "default_view"
+
+# The calendar views the frontend knows; mirrors VIEWS in
+# app/static/js/view-memory.js.
+CALENDAR_VIEWS = ("month", "week")
+FALLBACK_VIEW = "month"
 
 # DNS limits: 253 chars total, labels of 1-63 chars, letters/digits/
 # hyphens, no leading/trailing hyphen. Also matches plain IPv4 literals.
@@ -102,6 +111,30 @@ def get_evening_boundary(storage: Storage) -> time:
             except ValueError:
                 continue
     return DEFAULT_EVENING_BOUNDARY
+
+
+def is_valid_default_view(view: str) -> bool:
+    """Whether view is a calendar view the frontend can start in."""
+    return view in CALENDAR_VIEWS
+
+
+def get_default_view(storage: Storage) -> str:
+    """The configured default calendar view; anything invalid yields "month".
+
+    Re-validated on read (defense in depth): a value written by another
+    path must never push an unknown view name into the frontend.
+    """
+    raw = storage.get_setting(DEFAULT_VIEW_KEY)
+    if raw and is_valid_default_view(raw):
+        return raw
+    if raw:
+        logger.warning("Ignoring invalid stored default view: %r", raw)
+    return FALLBACK_VIEW
+
+
+def set_default_view(storage: Storage, view: str) -> None:
+    """Persist the default calendar view (validation happens in the API layer)."""
+    storage.set_setting(DEFAULT_VIEW_KEY, view)
 
 
 def get_feed_token(storage: Storage) -> str | None:
