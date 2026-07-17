@@ -306,6 +306,22 @@ class TestSettings:
         page.locator("#btn-save-settings").click()
         expect(page.locator("#settings-message")).to_have_text("Gespeichert.")
 
+    def test_default_view_roundtrip(self, page: Page, server_url: str) -> None:
+        goto_admin(page, server_url)
+        select = page.locator("#default-view")
+        expect(select).to_have_value("month")
+        select.select_option("week")
+        page.locator("#btn-save-settings").click()
+        expect(page.locator("#settings-message")).to_have_text("Gespeichert.")
+
+        page.reload()
+        expect(select).to_have_value("week")
+
+        # Reset so other tests keep starting in the month view.
+        select.select_option("month")
+        page.locator("#btn-save-settings").click()
+        expect(page.locator("#settings-message")).to_have_text("Gespeichert.")
+
 
 class TestShortcode:
     def test_shortcode_roundtrip_in_the_source_row(

@@ -68,6 +68,42 @@ class TestSettingsEndpoints:
         assert response.status_code == 400
         assert "Uhrzeit" in response.json()["detail"]
 
+    def test_get_settings_includes_default_view(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        assert client.get("/api/admin/settings").json()["default_view"] == "month"
+
+    def test_put_default_view_persists(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings",
+            json={"evening_boundary": "17:00", "default_view": "week"},
+        )
+        assert response.status_code == 200
+        assert response.json()["default_view"] == "week"
+        assert storage.get_setting("default_view") == "week"
+
+    def test_put_invalid_default_view_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings",
+            json={"evening_boundary": "17:00", "default_view": "disco"},
+        )
+        assert response.status_code == 400
+        assert "Ansicht" in response.json()["detail"]
+        assert storage.get_setting("default_view") is None
+
+    def test_put_without_default_view_keeps_the_stored_value(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # Older clients (or partial updates) may send only the boundary.
+        storage.set_setting("default_view", "week")
+        response = client.put("/api/admin/settings", json={"evening_boundary": "18:00"})
+        assert response.status_code == 200
+        assert storage.get_setting("default_view") == "week"
+
     def test_put_google_credentials_and_masked_status(
         self, client: TestClient, storage: Storage
     ) -> None:

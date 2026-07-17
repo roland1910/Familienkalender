@@ -25,8 +25,11 @@ export function getSettings() {
   return request("GET", "api/admin/settings");
 }
 
-export function saveSettings(eveningBoundary) {
-  return request("PUT", "api/admin/settings", { evening_boundary: eveningBoundary });
+export function saveSettings(eveningBoundary, defaultView) {
+  return request("PUT", "api/admin/settings", {
+    evening_boundary: eveningBoundary,
+    default_view: defaultView,
+  });
 }
 
 export function savePowerDevices(devices) {

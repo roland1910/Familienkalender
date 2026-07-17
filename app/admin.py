@@ -82,6 +82,9 @@ FEED_HOST_PORT = feed_constants.FEED_HOST_PORT
 
 class SettingsUpdate(BaseModel):
     evening_boundary: str
+    # Default calendar view (month/week) for devices without a stored
+    # per-device choice; None leaves the stored value untouched.
+    default_view: str | None = None
 
 
 class PowerDeviceIn(BaseModel):
@@ -255,6 +258,7 @@ def _settings_payload() -> dict:
     client_secret = storage.get_setting(settings.GOOGLE_CLIENT_SECRET_KEY)
     return {
         "evening_boundary": get_evening_boundary(storage).strftime("%H:%M"),
+        "default_view": settings.get_default_view(storage),
         "google_credentials": {
             "configured": bool(client_id and client_secret),
             "client_id_masked": _mask_client_id(client_id) if client_id else None,
@@ -280,7 +284,17 @@ async def update_settings(update: SettingsUpdate) -> dict:
         raise HTTPException(
             status_code=400, detail="Ungültige Uhrzeit — bitte im Format HH:MM angeben."
         ) from exc
-    get_storage().set_setting(settings.EVENING_BOUNDARY_KEY, update.evening_boundary)
+    if update.default_view is not None and not settings.is_valid_default_view(
+        update.default_view
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Ungültige Standard-Ansicht — erlaubt sind Monat und Woche.",
+        )
+    storage = get_storage()
+    storage.set_setting(settings.EVENING_BOUNDARY_KEY, update.evening_boundary)
+    if update.default_view is not None:
+        settings.set_default_view(storage, update.default_view)
     return _settings_payload()
 
 

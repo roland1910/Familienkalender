@@ -210,6 +210,13 @@
           Kalender nur Termine, die über diese Uhrzeit hinausreichen; am Wochenende
           und an bayerischen Feiertagen werden alle Termine gezeigt)</label>
         <input id="evening-boundary" type="time" step="60">
+        <label for="default-view">Standard-Ansicht (gilt, solange am Gerät noch
+          keine eigene Ansicht gewählt wurde &#8211; z. B. nach einem Neustart
+          des Kiosk-Displays)</label>
+        <select id="default-view">
+          <option value="month">Monat</option>
+          <option value="week">Woche</option>
+        </select>
       </div>
       <div class="button-row">
         <button id="btn-save-settings" class="action-button" type="button">Speichern</button>
