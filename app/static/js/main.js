@@ -1,6 +1,13 @@
 // App wiring: navigation, data loading, auto-refresh, view rendering.
 
-import { fetchEvents, fetchMe, fetchSources, fetchTagOptions, fetchTags } from "./api.js";
+import {
+  fetchConfig,
+  fetchEvents,
+  fetchMe,
+  fetchSources,
+  fetchTagOptions,
+  fetchTags,
+} from "./api.js";
 import {
   addDays,
   addMonths,
@@ -20,7 +27,7 @@ import { loadScreensaverEnabled, saveScreensaverEnabled } from "./screensaver-me
 import { isSlideshowRunning, startSlideshow, stopSlideshow } from "./slideshow-view.js";
 import { state } from "./state.js";
 import { loadTheme, nextTheme, saveTheme } from "./theme-memory.js";
-import { loadViewState, saveViewState } from "./view-memory.js";
+import { loadViewState, resolveInitialView, saveViewState } from "./view-memory.js";
 import { applyWeekAutoZoom, renderWeekView, weekRange } from "./week-view.js";
 
 const REFRESH_INTERVAL_MS = 60000;
@@ -225,10 +232,12 @@ function onWindowResized() {
 // Restore the persisted UI position before the first render. The mode is
 // deliberately included: the kiosk may live on the power view for hours,
 // and a reload (watchdog, HA restart) should bring it back there instead
-// of silently falling back to the calendar.
+// of silently falling back to the calendar. Returns whether a valid
+// per-device state was restored — if not, the server default view applies
+// (see applyServerDefaultView).
 function restoreViewState() {
   const saved = loadViewState();
-  if (!saved) return; // missing or invalid -> keep the defaults
+  if (!saved) return false; // missing or invalid -> keep the defaults
   state.view = saved.view;
   state.anchor = saved.anchor;
   // view and mode are independent enums (see view-memory.js), so restoring
@@ -242,6 +251,24 @@ function restoreViewState() {
   // render()/refresh() again right after restoreViewState() anyway), not a
   // real user-triggered transition.
   if (saved.mode === "power") switchMode("power");
+  return true;
+}
+
+// No per-device view stored (typical: the kiosk browser loses its
+// localStorage on every restart) — ask the server for the configured
+// default view (admin setting "Standard-Ansicht"). Awaited BEFORE the
+// first render, so the kiosk starts straight in the configured view with
+// no month->week flicker; the request is one tiny same-server call, and
+// any failure just keeps the built-in month default. Deliberately not
+// persisted: only real user choices go to localStorage, so a later change
+// of the server default still reaches devices without their own choice.
+async function applyServerDefaultView() {
+  try {
+    const config = await fetchConfig();
+    state.view = resolveInitialView(null, config.default_view);
+  } catch {
+    // keep the built-in default (month)
+  }
 }
 
 // -- screensaver (photo slideshow on idle) ---------------------------------
@@ -333,12 +360,12 @@ function initTheme() {
   });
 }
 
-function init() {
+async function init() {
   initPopover({ onTagsChanged: render });
   initTheme();
   initScreensaver();
   applyAdminVisibility();
-  restoreViewState();
+  if (!restoreViewState()) await applyServerDefaultView();
   document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
   document.getElementById("btn-next").addEventListener("click", () => navigate(1));
   document.getElementById("btn-today").addEventListener("click", goToToday);

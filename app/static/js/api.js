@@ -19,6 +19,14 @@ export async function fetchSources() {
   return payload.sources;
 }
 
+export async function fetchConfig() {
+  const response = await fetch("api/config");
+  if (!response.ok) {
+    throw new Error(`Konfiguration laden fehlgeschlagen: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function fetchMe() {
   const response = await fetch("api/me");
   if (!response.ok) {

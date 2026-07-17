@@ -8,6 +8,7 @@ import { test } from "node:test";
 import {
   deserializeViewState,
   loadViewState,
+  resolveInitialView,
   saveViewState,
   serializeViewState,
   STORAGE_KEY,
@@ -129,4 +130,35 @@ test("saveViewState: a throwing storage is ignored (best effort, no crash)", () 
 
 test("saveViewState: unavailable storage (undefined) is ignored", () => {
   saveViewState({ view: "week", anchor: new Date(2026, 6, 5), mode: "calendar" }, undefined);
+});
+
+// -- resolveInitialView: priority of the initial calendar view --------------
+//
+// (a) a valid per-device choice from localStorage always wins, (b) else the
+// server default (GET /api/config), (c) else "month". The server default
+// must never override a deliberate user choice.
+
+test("resolveInitialView: a saved per-device view always wins", () => {
+  assert.equal(resolveInitialView("month", "week"), "month");
+  assert.equal(resolveInitialView("week", "month"), "week");
+  assert.equal(resolveInitialView("week", "week"), "week");
+});
+
+test("resolveInitialView: without a saved view the server default applies", () => {
+  assert.equal(resolveInitialView(null, "week"), "week");
+  assert.equal(resolveInitialView(undefined, "month"), "month");
+});
+
+test("resolveInitialView: invalid saved views fall through to the server default", () => {
+  assert.equal(resolveInitialView("disco", "week"), "week");
+  assert.equal(resolveInitialView("", "week"), "week");
+  assert.equal(resolveInitialView(42, "week"), "week");
+});
+
+test("resolveInitialView: invalid server defaults fall back to month", () => {
+  assert.equal(resolveInitialView(null, "disco"), "month");
+  assert.equal(resolveInitialView(null, ""), "month");
+  assert.equal(resolveInitialView(null, null), "month");
+  assert.equal(resolveInitialView(undefined, undefined), "month");
+  assert.equal(resolveInitialView(null, 7), "month");
 });

@@ -39,6 +39,18 @@ export function deserializeViewState(raw) {
   return { view, anchor: day, mode };
 }
 
+// Priority of the initial calendar view: (a) a valid per-device choice
+// (from the persisted view state) always wins, (b) else the server-side
+// default from GET /api/config (settings key default_view — the kiosk
+// browser loses its localStorage on every restart), (c) else "month".
+// Both inputs are untrusted (localStorage / network payload) and are
+// validated against the known views.
+export function resolveInitialView(savedView, serverDefault) {
+  if (VIEWS.has(savedView)) return savedView;
+  if (VIEWS.has(serverDefault)) return serverDefault;
+  return "month";
+}
+
 export function loadViewState(storage = globalThis.localStorage) {
   try {
     return deserializeViewState(storage.getItem(STORAGE_KEY));
