@@ -36,9 +36,9 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
 3. **Quality-Gate:** `ruff check` (und Frontend-Lint, sobald vorhanden) muss vor jedem Commit sauber sein. Code gut lesbar und wartbar halten; nach jedem größeren Arbeitspaket läuft ein separater Quality-Review-Agent.
 4. **Security:** Keine Secrets im Repo, in Commits oder im Chat. Credentials kommen zur Laufzeit aus der Admin-UI/HA-Optionen; für lokale Entwicklung aus `secrets.local.json` (gitignored). Security-Review bei jedem Meilenstein, der Credentials, Netzwerk oder Nutzereingaben berührt. **Frontend/Stored-XSS:** Event-Titel und -Location stammen aus fremden Kalendern/Einladungen — sie werden im Frontend ausschließlich via `textContent` gerendert, niemals via `innerHTML`.
 5. **Sprache:** UI-Texte und Nutzer-Doku Deutsch; Code, Bezeichner und Kommentare Englisch.
-6. **Deployment** auf den Pi macht ausschließlich der Orchestrator (Hauptsession), nicht Implementierungs-Agenten. Erprobte Prozedur:
+6. **Deployment** auf den Pi macht ausschließlich der Orchestrator (Hauptsession), nicht Implementierungs-Agenten. Erprobte Prozedur (Pi seit 2026-07-17 über WLAN unter **192.168.1.4**, vorher LAN 192.168.1.3):
    ```
-   git archive main | ssh -i ~/.ssh/id_ed25519 root@192.168.1.3 "tar -x -C /addons/familienkalender"
+   git archive main | ssh -i ~/.ssh/id_ed25519 root@192.168.1.4 "tar -x -C /addons/familienkalender"
    ssh ... "ha store reload && ha addons rebuild local_familienkalender && ha addons restart local_familienkalender"
    ```
    Wichtig: `ha store reload` (nicht `ha addons reload`) macht Änderungen an config.yaml/neuen Add-ons sichtbar. Danach Logs prüfen: `ha addons logs local_familienkalender`.
