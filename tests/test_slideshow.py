@@ -8,6 +8,8 @@ MEDIA_ROOT pointed there — no real /media needed.
 """
 
 import os
+import struct
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -43,6 +45,76 @@ def _make_image(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # A tiny but non-empty file; content is irrelevant to the scanner.
     path.write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+
+
+# -- hand-built minimal EXIF JPEGs (no image library in the test deps) -------
+
+
+def _jpeg_with_exif_payload(tiff: bytes) -> bytes:
+    """A minimal JPEG: SOI + one APP1 segment carrying the given TIFF blob."""
+    payload = b"Exif\x00\x00" + tiff
+    return b"\xff\xd8" + b"\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload + b"\xff\xd9"
+
+
+def _tiff_datetime_original(dt: str, order: str = "<") -> bytes:
+    """TIFF blob: IFD0 -> ExifIFD pointer -> DateTimeOriginal (0x9003)."""
+    prefix = b"II" if order == "<" else b"MM"
+    ascii_bytes = dt.encode("ascii") + b"\x00"
+    header = prefix + struct.pack(order + "H", 42) + struct.pack(order + "I", 8)
+    # IFD0 at 8 (len 18: count + 1 entry + next ptr) -> Exif IFD at 26,
+    # Exif IFD (len 18) -> string data at 44.
+    ifd0 = (
+        struct.pack(order + "H", 1)
+        + struct.pack(order + "HHII", 0x8769, 4, 1, 26)
+        + struct.pack(order + "I", 0)
+    )
+    exif_ifd = (
+        struct.pack(order + "H", 1)
+        + struct.pack(order + "HHII", 0x9003, 2, len(ascii_bytes), 44)
+        + struct.pack(order + "I", 0)
+    )
+    return header + ifd0 + exif_ifd + ascii_bytes
+
+
+def _tiff_datetime_ifd0(dt: str, order: str = "<") -> bytes:
+    """TIFF blob with only the fallback DateTime tag (0x0132) in IFD0."""
+    prefix = b"II" if order == "<" else b"MM"
+    ascii_bytes = dt.encode("ascii") + b"\x00"
+    header = prefix + struct.pack(order + "H", 42) + struct.pack(order + "I", 8)
+    # IFD0 at 8 (len 18) -> string data at 26.
+    ifd0 = (
+        struct.pack(order + "H", 1)
+        + struct.pack(order + "HHII", 0x0132, 2, len(ascii_bytes), 26)
+        + struct.pack(order + "I", 0)
+    )
+    return header + ifd0 + ascii_bytes
+
+
+def _tiff_both_tags(original: str, fallback: str) -> bytes:
+    """TIFF with both DateTime (IFD0) and DateTimeOriginal (Exif IFD), LE."""
+    order = "<"
+    orig_bytes = original.encode("ascii") + b"\x00"
+    fall_bytes = fallback.encode("ascii") + b"\x00"
+    header = b"II" + struct.pack(order + "H", 42) + struct.pack(order + "I", 8)
+    # IFD0 at 8 with two entries (len 2 + 24 + 4 = 30) -> Exif IFD at 38
+    # (len 18) -> fallback string at 56, original string at 76.
+    ifd0 = (
+        struct.pack(order + "H", 2)
+        + struct.pack(order + "HHII", 0x0132, 2, len(fall_bytes), 56)
+        + struct.pack(order + "HHII", 0x8769, 4, 1, 38)
+        + struct.pack(order + "I", 0)
+    )
+    exif_ifd = (
+        struct.pack(order + "H", 1)
+        + struct.pack(order + "HHII", 0x9003, 2, len(orig_bytes), 76)
+        + struct.pack(order + "I", 0)
+    )
+    return header + ifd0 + exif_ifd + fall_bytes + orig_bytes
+
+
+def _write_exif_jpeg(path: Path, dt: str, order: str = "<") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_jpeg_with_exif_payload(_tiff_datetime_original(dt, order)))
 
 
 class TestNormalizeMediaDir:
@@ -361,3 +433,213 @@ class TestImageEndpoint:
         except OSError:
             pytest.skip("symlink creation not permitted on this platform")
         assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
+
+
+class TestExifTakenAt:
+    """The hand-rolled EXIF parser (untrusted input, must never raise)."""
+
+    def test_datetime_original_little_endian(self, media_root: Path) -> None:
+        img = media_root / "x.jpg"
+        _write_exif_jpeg(img, "2019:08:16 17:30:05", order="<")
+        taken = slideshow.photo_taken_at(str(img))
+        assert taken == slideshow.TakenAt(year=2019, month=8, day=16, hour=17, minute=30)
+
+    def test_datetime_original_big_endian(self, media_root: Path) -> None:
+        img = media_root / "x.jpg"
+        _write_exif_jpeg(img, "2021:12:31 23:59:59", order=">")
+        taken = slideshow.photo_taken_at(str(img))
+        assert taken == slideshow.TakenAt(year=2021, month=12, day=31, hour=23, minute=59)
+
+    def test_fallback_datetime_tag_in_ifd0(self, media_root: Path) -> None:
+        img = media_root / "x.jpg"
+        img.write_bytes(_jpeg_with_exif_payload(_tiff_datetime_ifd0("2020:02:29 08:15:00")))
+        taken = slideshow.photo_taken_at(str(img))
+        assert taken == slideshow.TakenAt(year=2020, month=2, day=29, hour=8, minute=15)
+
+    def test_datetime_original_wins_over_fallback(self, media_root: Path) -> None:
+        img = media_root / "x.jpg"
+        img.write_bytes(
+            _jpeg_with_exif_payload(
+                _tiff_both_tags("2018:05:04 12:00:00", "2023:01:01 00:00:00")
+            )
+        )
+        taken = slideshow.photo_taken_at(str(img))
+        assert taken is not None
+        assert (taken.year, taken.month, taken.day) == (2018, 5, 4)
+
+    def test_invalid_exif_date_is_ignored(self, media_root: Path) -> None:
+        # Month 13 — structurally fine EXIF, semantically invalid date.
+        img = media_root / "x.jpg"
+        _write_exif_jpeg(img, "2019:13:16 17:30:05")
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_truncated_jpeg_returns_none(self, media_root: Path) -> None:
+        img = media_root / "x.jpg"
+        full = _jpeg_with_exif_payload(_tiff_datetime_original("2019:08:16 17:30:05"))
+        img.write_bytes(full[: len(full) // 2])
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_hostile_ifd_offset_returns_none(self, media_root: Path) -> None:
+        # IFD0 offset points far beyond the buffer — must not raise.
+        tiff = b"II" + struct.pack("<H", 42) + struct.pack("<I", 0xFFFFFF0)
+        img = media_root / "x.jpg"
+        img.write_bytes(_jpeg_with_exif_payload(tiff))
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_hostile_value_offset_returns_none(self, media_root: Path) -> None:
+        # The ASCII value offset points beyond the buffer.
+        order = "<"
+        header = b"II" + struct.pack(order + "H", 42) + struct.pack(order + "I", 8)
+        ifd0 = (
+            struct.pack(order + "H", 1)
+            + struct.pack(order + "HHII", 0x0132, 2, 20, 0xFFFF00)
+            + struct.pack(order + "I", 0)
+        )
+        img = media_root / "x.jpg"
+        img.write_bytes(_jpeg_with_exif_payload(header + ifd0))
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_garbage_bytes_return_none(self, media_root: Path) -> None:
+        img = media_root / "x.jpg"
+        img.write_bytes(b"\xff\xd8\xff\xe0not really exif at all")
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_missing_file_returns_none(self, media_root: Path) -> None:
+        assert slideshow.photo_taken_at(str(media_root / "nope.jpg")) is None
+
+
+class TestFilenameTakenAt:
+    """Date extraction from filename patterns (with plausibility checks)."""
+
+    def test_compact_datetime_with_underscore(self, media_root: Path) -> None:
+        img = media_root / "IMG_20190816_173005.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(
+            year=2019, month=8, day=16, hour=17, minute=30
+        )
+
+    def test_compact_datetime_with_dash_and_pxl_prefix(self, media_root: Path) -> None:
+        img = media_root / "PXL_20230102-070809.png"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(
+            year=2023, month=1, day=2, hour=7, minute=8
+        )
+
+    def test_dashed_date_with_dotted_time(self, media_root: Path) -> None:
+        img = media_root / "2021-06-05 14.33.10.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(
+            year=2021, month=6, day=5, hour=14, minute=33
+        )
+
+    def test_whatsapp_pattern_date_only(self, media_root: Path) -> None:
+        img = media_root / "IMG-20180923-WA0007.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(
+            year=2018, month=9, day=23
+        )
+
+    def test_bare_date(self, media_root: Path) -> None:
+        img = media_root / "20170501.webp"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(
+            year=2017, month=5, day=1
+        )
+
+    def test_invalid_month_returns_none(self, media_root: Path) -> None:
+        img = media_root / "20211345_999999.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_valid_date_with_invalid_time_yields_date_only(self, media_root: Path) -> None:
+        img = media_root / "20210505_996060.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(
+            year=2021, month=5, day=5
+        )
+
+    def test_implausible_year_returns_none(self, media_root: Path) -> None:
+        img = media_root / "12345678.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_future_year_beyond_next_returns_none(self, media_root: Path) -> None:
+        year = date.today().year + 3
+        img = media_root / f"{year}0101.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_long_digit_run_does_not_match(self, media_root: Path) -> None:
+        # A longer digit run (e.g. a phone-scan id) must not be misread as
+        # a date somewhere inside it.
+        img = media_root / "123201908160001234.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) is None
+
+
+class TestFolderYearTakenAt:
+    def test_year_folder_below_media_root(self, media_root: Path) -> None:
+        img = media_root / "2015" / "Urlaub" / "strand.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(year=2015)
+
+    def test_nested_year_folder(self, media_root: Path) -> None:
+        img = media_root / "Fotos" / "2008" / "winter.png"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(year=2008)
+
+    def test_non_year_folders_yield_none(self, media_root: Path) -> None:
+        img = media_root / "Familie" / "Ausflug" / "wald.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) is None
+
+    def test_partial_year_like_folder_does_not_match(self, media_root: Path) -> None:
+        # Only an exact four-digit 19xx/20xx segment counts.
+        img = media_root / "Urlaub2019x" / "meer.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) is None
+
+
+class TestTakenAtPriority:
+    def test_exif_wins_over_filename_and_folder(self, media_root: Path) -> None:
+        img = media_root / "2001" / "20200101_120000.jpg"
+        _write_exif_jpeg(img, "2019:08:16 17:30:05")
+        taken = slideshow.photo_taken_at(str(img))
+        assert taken is not None
+        assert taken.year == 2019
+
+    def test_filename_wins_over_folder(self, media_root: Path) -> None:
+        img = media_root / "2001" / "20200101_120000.jpg"
+        _make_image(img)  # no usable EXIF
+        taken = slideshow.photo_taken_at(str(img))
+        assert taken is not None
+        assert taken.year == 2020
+
+    def test_folder_is_last_resort(self, media_root: Path) -> None:
+        img = media_root / "2001" / "strand.jpg"
+        _make_image(img)
+        assert slideshow.photo_taken_at(str(img)) == slideshow.TakenAt(year=2001)
+
+
+class TestNextPhotoTakenField:
+    def test_next_carries_structured_taken(self, client: TestClient, media_root: Path) -> None:
+        _write_exif_jpeg(media_root / "Bilder" / "x.jpg", "2019:08:16 17:30:05")
+        client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Bilder")]})
+        payload = client.get("/api/slideshow/next").json()
+        assert payload["taken"] == {
+            "year": 2019, "month": 8, "day": 16, "hour": 17, "minute": 30,
+        }
+
+    def test_next_taken_is_null_when_nothing_extractable(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _make_image(media_root / "Bilder" / "photo.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Bilder")]})
+        payload = client.get("/api/slideshow/next").json()
+        assert payload["taken"] is None
+
+    def test_next_does_not_leak_the_path(self, client: TestClient, media_root: Path) -> None:
+        _make_image(media_root / "Bilder" / "photo.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Bilder")]})
+        payload = client.get("/api/slideshow/next").json()
+        assert set(payload.keys()) == {"id", "name", "taken"}

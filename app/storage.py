@@ -511,8 +511,9 @@ class Storage:
         ``rng_random`` is an injectable ``random.random``-style callable
         (returns a float in [0, 1)) so tests get deterministic ordering;
         production passes ``None`` and SQLite's own ``RANDOM()`` is used.
-        Returns ``{"id", "name"}`` (name = basename for display) or None
-        when the index is empty.
+        Returns ``{"id", "name", "path"}`` (name = basename for display,
+        path = stored filesystem path for server-side metadata lookups —
+        the API layer must never expose it) or None when the index is empty.
         """
         with self._connect() as conn:
             row = self._pick_unshown(conn, rng_random)
@@ -522,7 +523,11 @@ class Storage:
             if row is None:
                 return None
             conn.execute("UPDATE photos SET shown = 1 WHERE id = ?", (row["id"],))
-            return {"id": row["id"], "name": Path(row["path"]).name}
+            return {
+                "id": row["id"],
+                "name": Path(row["path"]).name,
+                "path": row["path"],
+            }
 
     @staticmethod
     def _pick_unshown(
