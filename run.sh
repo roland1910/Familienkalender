@@ -29,6 +29,10 @@ SSL_SOURCE_KEYFILE="$(bashio::config 'ssl_keyfile')"
 : "${SSL_SOURCE_KEYFILE:=/ssl/privkey.pem}"
 export SSL_SOURCE_CERTFILE SSL_SOURCE_KEYFILE
 
+# Enable the hourly background photo-index rescan (app/main.py gates it
+# behind this flag so test/dev servers without /media never scan).
+export SLIDESHOW_SCAN=1
+
 # The staged, app-readable copies uvicorn actually loads.
 STAGE_DIR=/run/familienkalender-ssl
 export SSL_CERTFILE="${STAGE_DIR}/fullchain.pem"
