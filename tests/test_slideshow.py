@@ -285,6 +285,9 @@ class TestImageEndpoint:
         image = client.get(f"/api/slideshow/image/{photo_id}")
         assert image.status_code == 200
         assert image.headers["content-type"] == "image/jpeg"
+        # Photos may be cached briefly — deliberately NOT the no-cache
+        # policy of the app delivery (static assets/HTML).
+        assert image.headers["cache-control"] == "private, max-age=60"
 
     def test_unknown_id_is_404(self, client: TestClient) -> None:
         assert client.get("/api/slideshow/image/999999").status_code == 404

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -40,6 +40,26 @@ DEFAULT_ALLOWED_CLIENT_IPS = "172.30.32.2,127.0.0.1"
 # Global cap for request bodies: no endpoint of this app takes payloads
 # anywhere near this size (the largest are small JSON settings updates).
 MAX_REQUEST_BODY_BYTES = 16 * 1024
+
+# App delivery (static assets + HTML entry pages) must never be served
+# stale: without an explicit Cache-Control browsers cache heuristically,
+# and after an add-on update the kiosk/ingress iframe keeps running old
+# JS (a hard reload does not reach the iframe). "no-cache" forces
+# revalidation on every request while conditional requests
+# (ETag/Last-Modified -> 304) keep delivery fast. API endpoints are not
+# covered — they set their own policy (e.g. the slideshow image
+# endpoint's private, max-age=60).
+CACHE_CONTROL_REVALIDATE = "no-cache"
+
+
+class RevalidatingStaticFiles(StaticFiles):
+    """StaticFiles whose responses force revalidation (see CACHE_CONTROL_REVALIDATE)."""
+
+    def file_response(self, *args, **kwargs) -> Response:
+        # Covers both 200 (FileResponse) and 304 (NotModifiedResponse).
+        response = super().file_response(*args, **kwargs)
+        response.headers["cache-control"] = CACHE_CONTROL_REVALIDATE
+        return response
 
 
 def _allowed_client_ips() -> frozenset[str]:
@@ -217,7 +237,7 @@ app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(IngressPathMiddleware)
 # Added last so it runs first: nothing is processed for disallowed clients.
 app.add_middleware(ClientIPAllowlistMiddleware)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", RevalidatingStaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/api/health")
@@ -336,7 +356,10 @@ async def trigger_sync() -> dict:
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     """Serve the German placeholder page (relative asset URLs, ingress-safe)."""
-    return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse(
+        (STATIC_DIR / "index.html").read_text(encoding="utf-8"),
+        headers={"Cache-Control": CACHE_CONTROL_REVALIDATE},
+    )
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -350,5 +373,9 @@ async def admin_page(request: Request) -> HTMLResponse:
         return HTMLResponse(
             (STATIC_DIR / "admin" / "forbidden.html").read_text(encoding="utf-8"),
             status_code=403,
+            headers={"Cache-Control": CACHE_CONTROL_REVALIDATE},
         )
-    return HTMLResponse((STATIC_DIR / "admin" / "admin.html").read_text(encoding="utf-8"))
+    return HTMLResponse(
+        (STATIC_DIR / "admin" / "admin.html").read_text(encoding="utf-8"),
+        headers={"Cache-Control": CACHE_CONTROL_REVALIDATE},
+    )

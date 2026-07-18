@@ -41,7 +41,7 @@ Aggregierter Familienkalender als lokales Home-Assistant-Add-on. Zeigt die Kalen
    git archive main | ssh -i ~/.ssh/id_ed25519 root@192.168.1.4 "tar -x -C /addons/familienkalender"
    ssh ... "ha store reload && ha addons rebuild local_familienkalender && ha addons restart local_familienkalender"
    ```
-   Wichtig: `ha store reload` (nicht `ha addons reload`) macht Änderungen an config.yaml/neuen Add-ons sichtbar. Danach Logs prüfen: `ha addons logs local_familienkalender`.
+   Wichtig: `ha store reload` (nicht `ha addons reload`) macht Änderungen an config.yaml/neuen Add-ons sichtbar. Danach Logs prüfen: `ha addons logs local_familienkalender`. Das frühere Gotcha „Browser cacht altes JS nach Add-on-Update" ist seit Etappe 27 behoben: `/static/*` und die HTML-Einstiege (`/`, `/admin`) werden mit `Cache-Control: no-cache` ausgeliefert (`RevalidatingStaticFiles` + Header auf den HTML-Responses in `app/main.py`; Revalidierung per ETag → 304, bleibt schnell) — nach einem Deploy reicht ein normaler Reload. Die Slideshow-Bilder behalten bewusst `private, max-age=60`.
 7. **Rollen & Modelle:** Implementierung komplexer Logik → Fable/inherit; mechanische Arbeit & Quality-Review → Sonnet; Boilerplate/Doku → Haiku; Security-Review → Fable. Implementierungs-Agenten laufen im Hintergrund.
 
 ## Kommandos
