@@ -9,6 +9,7 @@
 
 import { fetchNextPhoto, photoImageUrl } from "./api.js";
 import { el } from "./dom.js";
+import { formatFolderTrail, formatTakenAt } from "./slideshow-format.js";
 
 // How long each photo stays on screen. A window override lets the E2E test
 // use a short interval without waiting the full duration.
@@ -51,13 +52,26 @@ function buildOverlay() {
   const layerA = el("div", "slideshow-layer");
   const layerB = el("div", "slideshow-layer");
   const caption = el("p", "slideshow-caption");
-  node.append(layerA, layerB, caption);
+  // Taken-at date (top right) and folder trail (top left) of the visible
+  // photo — purely decorative metadata, hidden from assistive tech.
+  const takenAt = el("p", "slideshow-taken");
+  takenAt.setAttribute("aria-hidden", "true");
+  const folderTrail = el("p", "slideshow-folders");
+  folderTrail.setAttribute("aria-hidden", "true");
+  node.append(layerA, layerB, caption, takenAt, folderTrail);
   layers = [layerA, layerB];
   activeLayer = 0;
-  return { node, caption };
+  return { node, caption, takenAt, folderTrail };
 }
 
-async function showNext(caption) {
+// Set an overlay badge's text (foreign strings → textContent only) and hide
+// it entirely when there is nothing to show.
+function setBadge(node, text) {
+  node.textContent = text;
+  node.hidden = text === "";
+}
+
+async function showNext({ caption, takenAt, folderTrail }) {
   let photo;
   try {
     photo = await fetchNextPhoto();
@@ -82,8 +96,12 @@ async function showNext(caption) {
   layers[next].classList.add("slideshow-layer-visible");
   layers[activeLayer].classList.remove("slideshow-layer-visible");
   activeLayer = next;
-  // Foreign filename → textContent only (never markup).
+  // The metadata badges belong to the incoming photo, so they swap in the
+  // same frame the cross-fade starts (same treatment as the caption).
+  // Foreign filename/folder names → textContent only (never markup).
   caption.textContent = photo.name ?? "";
+  setBadge(takenAt, formatTakenAt(photo.taken));
+  setBadge(folderTrail, formatFolderTrail(photo.folders));
 }
 
 // Escape the characters that could break out of the CSS url("...") context.
@@ -100,8 +118,8 @@ export function startSlideshow(container) {
   const built = buildOverlay();
   overlay = built.node;
   container.append(overlay);
-  showNext(built.caption);
-  timer = setInterval(() => showNext(built.caption), SLIDE_INTERVAL_MS);
+  showNext(built);
+  timer = setInterval(() => showNext(built), SLIDE_INTERVAL_MS);
 }
 
 /** Stop the slideshow and remove its overlay. */

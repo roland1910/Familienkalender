@@ -1067,3 +1067,32 @@ body.mode-power .status-badge {
   background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
   pointer-events: none;
 }
+
+/* Metadata badges in the letterbox area: taken-at date top right, folder
+   trail top left. Deliberately fixed colors — the slideshow is always
+   black, independent of the light/dark theme. Hidden entirely (the
+   `hidden` attribute) when there is nothing to show. */
+.slideshow-taken,
+.slideshow-folders {
+  position: absolute;
+  top: 16px;
+  margin: 0;
+  padding: 6px 14px;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 18px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.slideshow-taken {
+  right: 16px;
+}
+
+.slideshow-folders {
+  left: 16px;
+}
