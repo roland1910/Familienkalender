@@ -507,6 +507,25 @@ def _taken_from_folder(path: str, root: str) -> TakenAt | None:
     return None
 
 
+def photo_folders(path: str, root: str | None = None) -> list[str]:
+    """The directory segments of a photo below the media root (no filename).
+
+    ``/media/Photos/2019/Urlaub/IMG.jpg`` -> ``["Photos", "2019",
+    "Urlaub"]``; a photo directly in the root (or a path that does not lie
+    below the root at all) yields an empty list. Shown top-left in the
+    slideshow; the segment names are foreign strings, rendered by the
+    frontend via textContent only.
+    """
+    try:
+        media = root if root is not None else media_root()
+        relative = os.path.relpath(Path(path).parent, media)
+    except ValueError:
+        return []  # different drive on Windows dev machines
+    if relative.startswith("..") or relative in (".", ""):
+        return []
+    return list(Path(relative).parts)
+
+
 def photo_taken_at(path: str, root: str | None = None) -> TakenAt | None:
     """Best-effort (possibly partial) taken-at moment for a photo, or None.
 
@@ -536,14 +555,15 @@ def photo_taken_at(path: str, root: str | None = None) -> TakenAt | None:
 
 @router.get("/next")
 async def next_photo() -> dict:
-    """A random not-yet-shown photo ``{id, name, taken}``; 404 on empty index.
+    """A random not-yet-shown photo ``{id, name, taken, folders}``.
 
-    Marks the returned photo as shown (rotation with memory, see
-    storage.pick_next_photo). When every photo has been shown the cycle
-    resets automatically. ``taken`` is the (possibly partial) taken-at
-    moment resolved at serve time (EXIF > filename > year folder) or null;
-    the extraction reads the file, so it runs off the event loop. The
-    stored path itself is never exposed.
+    404 when the index is empty. Marks the returned photo as shown
+    (rotation with memory, see storage.pick_next_photo); when every photo
+    has been shown the cycle resets automatically. ``taken`` is the
+    (possibly partial) taken-at moment resolved at serve time (EXIF >
+    filename > year folder) or null; the extraction reads the file, so it
+    runs off the event loop. ``folders`` lists the photo's directory
+    segments below the media root. The stored path itself is never exposed.
     """
     picked = get_storage().pick_next_photo()
     if picked is None:
@@ -553,6 +573,7 @@ async def next_photo() -> dict:
         "id": picked["id"],
         "name": picked["name"],
         "taken": taken.as_dict() if taken is not None else None,
+        "folders": photo_folders(picked["path"]),
     }
 
 

@@ -642,4 +642,44 @@ class TestNextPhotoTakenField:
         _make_image(media_root / "Bilder" / "photo.jpg")
         client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Bilder")]})
         payload = client.get("/api/slideshow/next").json()
-        assert set(payload.keys()) == {"id", "name", "taken"}
+        assert set(payload.keys()) == {"id", "name", "taken", "folders"}
+
+
+class TestPhotoFolders:
+    """Path segments below the media root (for the top-left overlay)."""
+
+    def test_nested_folders(self, media_root: Path) -> None:
+        img = media_root / "Photos" / "2019" / "Urlaub" / "IMG.jpg"
+        _make_image(img)
+        assert slideshow.photo_folders(str(img)) == ["Photos", "2019", "Urlaub"]
+
+    def test_photo_directly_in_root_yields_empty_list(self, media_root: Path) -> None:
+        img = media_root / "IMG.jpg"
+        _make_image(img)
+        assert slideshow.photo_folders(str(img)) == []
+
+    def test_single_folder(self, media_root: Path) -> None:
+        img = media_root / "Familie" / "IMG.jpg"
+        _make_image(img)
+        assert slideshow.photo_folders(str(img)) == ["Familie"]
+
+    def test_path_outside_root_yields_empty_list(self, tmp_path: Path, media_root: Path) -> None:
+        img = tmp_path / "outside" / "IMG.jpg"
+        _make_image(img)
+        assert slideshow.photo_folders(str(img)) == []
+
+    def test_next_response_carries_folders(self, client: TestClient, media_root: Path) -> None:
+        _make_image(media_root / "Photos" / "2019" / "Urlaub" / "IMG.jpg")
+        client.put(
+            "/api/admin/slideshow", json={"dirs": [str(media_root / "Photos")]}
+        )
+        payload = client.get("/api/slideshow/next").json()
+        assert payload["folders"] == ["Photos", "2019", "Urlaub"]
+
+    def test_next_response_empty_folders_at_root(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _make_image(media_root / "IMG.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(media_root)]})
+        payload = client.get("/api/slideshow/next").json()
+        assert payload["folders"] == []
