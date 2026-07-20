@@ -3,6 +3,11 @@
 // The next image is preloaded before the swap so there is no black flash,
 // and the swap is a soft cross-fade (two stacked <img> layers).
 //
+// The layers MUST be real <img> elements, never CSS background-image divs:
+// backgrounds ignore the EXIF orientation tag, so portrait photos from a
+// phone showed up rotated by 90° on the kiosk display. <img> honours it
+// (`image-orientation: from-image`, also set explicitly in the CSS).
+//
 // Photos come from GET /api/slideshow/next ({id, name}); the image bytes
 // from api/slideshow/image/{id}. The `name` is only ever set via
 // textContent (foreign filename) — see the caption element below.
@@ -24,20 +29,26 @@ let timer = null;
 let running = false;
 
 /**
- * Load an image URL and resolve once it is decoded (so the swap never
- * shows a half-loaded frame). Rejects on error so the caller can skip a
- * broken/vanished photo and try the next one.
+ * Point a layer at an image URL and resolve once it has finished loading,
+ * so the cross-fade never reveals a half-loaded frame. The still-invisible
+ * layer doubles as the preloader — no separate Image object needed.
+ * Rejects on error so the caller can skip a broken/vanished photo.
  */
-function preload(url) {
+function loadIntoLayer(img, url) {
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    // Detach the handlers once they have fired so the Image and its closures
-    // become collectable. On a 30s kiosk cadence this runs thousands of times
-    // over weeks; leaving the listeners attached would pin every previous
-    // Image (and this closure) for the lifetime of the page.
+    // Re-assigning the same src does not reliably fire `load` again, and the
+    // photo index legitimately repeats a URL (single-photo folder, or the
+    // wrap-around of a full rotation). Already-decoded means we are done.
+    if (img.getAttribute("src") === url && img.complete && img.naturalWidth > 0) {
+      resolve();
+      return;
+    }
+    // Detach the handlers once they have fired so their closures become
+    // collectable. On a 30s kiosk cadence this runs thousands of times over
+    // weeks; leaving them attached would pin every previous closure.
     img.onload = () => {
       img.onload = img.onerror = null;
-      resolve(url);
+      resolve();
     };
     img.onerror = () => {
       img.onload = img.onerror = null;
@@ -47,10 +58,18 @@ function preload(url) {
   });
 }
 
+function buildLayer() {
+  const img = el("img", "slideshow-layer");
+  // Decorative: the filename is already announced by the caption element.
+  img.alt = "";
+  img.draggable = false;
+  return img;
+}
+
 function buildOverlay() {
   const node = el("div", "slideshow-overlay");
-  const layerA = el("div", "slideshow-layer");
-  const layerB = el("div", "slideshow-layer");
+  const layerA = buildLayer();
+  const layerB = buildLayer();
   const caption = el("p", "slideshow-caption");
   // Taken-at date (top right) and folder trail (top left) of the visible
   // photo — purely decorative metadata, hidden from assistive tech.
@@ -80,19 +99,19 @@ async function showNext({ caption, takenAt, folderTrail }) {
   }
   if (!running) return;
   const url = photoImageUrl(photo.id);
+  const next = (activeLayer + 1) % 2;
   try {
-    await preload(url);
+    // Loads into the still-invisible layer, so this is the preload.
+    await loadIntoLayer(layers[next], url);
   } catch {
     return; // broken/vanished file — skip, next tick fetches another
   }
   if (!running) return;
-  const next = (activeLayer + 1) % 2;
-  // Cross-fade: paint the new image onto the inactive layer, fade it in, fade
-  // the old one out. The now-inactive layer keeps its old background-image
-  // (we never clear it), but this is not a leak: with only two layers, at any
-  // time only the two most-recently-shown image URLs are referenced, so the
-  // browser holds at most two decoded images — not a growing set.
-  layers[next].style.backgroundImage = `url("${cssUrl(url)}")`;
+  // Cross-fade: fade the freshly loaded layer in, the old one out. The
+  // now-inactive layer keeps its old src (we never clear it), but this is not
+  // a leak: with only two layers, at any time only the two most-recently-shown
+  // image URLs are referenced, so the browser holds at most two decoded
+  // images — not a growing set.
   layers[next].classList.add("slideshow-layer-visible");
   layers[activeLayer].classList.remove("slideshow-layer-visible");
   activeLayer = next;
@@ -102,13 +121,6 @@ async function showNext({ caption, takenAt, folderTrail }) {
   caption.textContent = photo.name ?? "";
   setBadge(takenAt, formatTakenAt(photo.taken));
   setBadge(folderTrail, formatFolderTrail(photo.folders));
-}
-
-// Escape the characters that could break out of the CSS url("...") context.
-// The URL itself is api/slideshow/image/<number> (id is a number), so this
-// is belt-and-suspenders against a future path-shaped id.
-function cssUrl(url) {
-  return url.replace(/["\\]/g, "\\$&");
 }
 
 /** Start the slideshow inside `container` (idempotent). */

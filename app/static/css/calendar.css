@@ -1046,14 +1046,22 @@ body.mode-power .status-badge {
   overflow: hidden;
 }
 
-/* Two stacked layers cross-fade: only the visible one is opaque. Each
-   holds one photo as a contained, centered background image on black. */
+/* Two stacked layers cross-fade: only the visible one is opaque. Each is a
+   real <img> holding one photo, contained and centered on black.
+   MUST stay an <img>, never a background-image: CSS backgrounds ignore the
+   EXIF orientation tag, which showed portrait photos rotated by 90° on the
+   kiosk. `image-orientation: from-image` is the <img> default; it is spelled
+   out here to state the intent and to guard against engines (the kiosk runs
+   WebKitGTK) whose default might differ. */
 .slideshow-layer {
   position: absolute;
   inset: 0;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  image-orientation: from-image;
   opacity: 0;
   transition: opacity 800ms ease-in-out;
 }
@@ -1064,6 +1072,7 @@ body.mode-power .status-badge {
 
 .slideshow-caption {
   position: absolute;
+  z-index: 1; /* above the photo layers */
   left: 0;
   right: 0;
   bottom: 0;
@@ -1083,6 +1092,7 @@ body.mode-power .status-badge {
 .slideshow-taken,
 .slideshow-folders {
   position: absolute;
+  z-index: 1; /* above the photo layers */
   top: 16px;
   margin: 0;
   padding: 6px 14px;

@@ -74,6 +74,9 @@ def test_toggle_enables_screensaver_and_idle_starts_slideshow(
     expect(overlay).to_be_visible(timeout=5000)
     visible_layer = page.locator(".slideshow-layer-visible")
     expect(visible_layer).to_be_visible()
+    # The photo layer is a real <img> pointing at the image endpoint.
+    assert visible_layer.evaluate("node => node.tagName") == "IMG"
+    assert "api/slideshow/image/1" in visible_layer.get_attribute("src")
     expect(page.locator(".slideshow-caption")).to_have_text("urlaub.jpg")
     # Metadata badges: taken-at date top right, folder trail top left.
     expect(page.locator(".slideshow-taken")).to_have_text("16.08.2019 17:30")
@@ -99,6 +102,43 @@ def test_slideshow_hides_badges_without_metadata(page: Page, server_url: str) ->
     expect(page.locator(".slideshow-caption")).to_have_text("urlaub.jpg")
     expect(page.locator(".slideshow-taken")).to_be_hidden()
     expect(page.locator(".slideshow-folders")).to_be_hidden()
+
+
+def test_photo_layers_are_images_honouring_exif_orientation(
+    page: Page, server_url: str
+) -> None:
+    """Etappe 32 regression: the layers were background-image divs, which
+    ignore the EXIF orientation tag — portrait photos showed up rotated by
+    90° on the kiosk. They must be <img> elements with the orientation
+    explicitly taken from the image (and no background image at all)."""
+    _inject_fast_timings(page)
+    _mock_slideshow(page, taken={"year": 2019}, folders=["Photos", "2019"])
+    goto_calendar(page, server_url)
+    page.locator("#btn-screensaver").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+
+    layers = page.locator(".slideshow-layer")
+    expect(layers).to_have_count(2)
+    for index in range(2):
+        layer = layers.nth(index)
+        assert layer.evaluate("node => node.tagName") == "IMG"
+        styles = layer.evaluate(
+            "node => { const s = getComputedStyle(node);"
+            " return {orientation: s.imageOrientation, fit: s.objectFit,"
+            " background: s.backgroundImage}; }"
+        )
+        assert styles["orientation"] == "from-image", styles
+        assert styles["fit"] == "contain", styles
+        assert styles["background"] == "none", styles
+
+    # The metadata badges and the caption still stack above the photo layers:
+    # higher z-index within the same overlay stacking context.
+    layer_z = int(layers.first.evaluate("node => getComputedStyle(node).zIndex"))
+    for selector in (".slideshow-taken", ".slideshow-folders", ".slideshow-caption"):
+        badge = page.locator(selector)
+        expect(badge).to_be_visible()
+        badge_z = int(badge.evaluate("node => getComputedStyle(node).zIndex"))
+        assert badge_z > layer_z, f"{selector} liegt nicht über den Foto-Ebenen"
 
 
 def test_screensaver_off_by_default_no_slideshow(page: Page, server_url: str) -> None:
