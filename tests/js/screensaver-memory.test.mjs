@@ -1,38 +1,64 @@
-// Unit tests for the per-device screensaver toggle persistence. Default is
-// OFF; only the literal "1" reads as enabled, and a throwing/undefined
-// storage must never crash the app.
+// Unit tests for the per-device screensaver toggle persistence and the
+// priority resolution against the server default (Etappe 29): an explicit
+// device choice always wins, else the server default, else OFF. A
+// throwing/undefined storage must never crash the app.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  loadScreensaverEnabled,
+  loadScreensaverChoice,
+  resolveScreensaverEnabled,
   saveScreensaverEnabled,
   STORAGE_KEY,
 } from "../../app/static/js/screensaver-memory.js";
 
-test("load: missing value defaults to OFF", () => {
-  assert.equal(loadScreensaverEnabled({ getItem: () => null }), false);
+test("choice: missing value reads as null (no device choice)", () => {
+  assert.equal(loadScreensaverChoice({ getItem: () => null }), null);
 });
 
-test("load: '1' reads as ON, anything else as OFF", () => {
-  assert.equal(loadScreensaverEnabled({ getItem: () => "1" }), true);
-  assert.equal(loadScreensaverEnabled({ getItem: () => "0" }), false);
-  assert.equal(loadScreensaverEnabled({ getItem: () => "true" }), false);
-  assert.equal(loadScreensaverEnabled({ getItem: () => "yes" }), false);
+test("choice: '1' reads as ON, '0' as OFF, anything else as null", () => {
+  assert.equal(loadScreensaverChoice({ getItem: () => "1" }), true);
+  assert.equal(loadScreensaverChoice({ getItem: () => "0" }), false);
+  assert.equal(loadScreensaverChoice({ getItem: () => "true" }), null);
+  assert.equal(loadScreensaverChoice({ getItem: () => "yes" }), null);
+  assert.equal(loadScreensaverChoice({ getItem: () => "" }), null);
 });
 
-test("load: a throwing storage falls back to OFF (no crash)", () => {
+test("choice: a throwing storage reads as null (no crash)", () => {
   const fake = {
     getItem: () => {
       throw new Error("storage disabled");
     },
   };
-  assert.equal(loadScreensaverEnabled(fake), false);
+  assert.equal(loadScreensaverChoice(fake), null);
 });
 
-test("load: unavailable storage (undefined) falls back to OFF", () => {
-  assert.equal(loadScreensaverEnabled(undefined), false);
+test("choice: unavailable storage (undefined) reads as null", () => {
+  assert.equal(loadScreensaverChoice(undefined), null);
+});
+
+test("resolve: an explicit device choice always wins over the server default", () => {
+  assert.equal(resolveScreensaverEnabled(true, "off"), true);
+  assert.equal(resolveScreensaverEnabled(false, "on"), false);
+  assert.equal(resolveScreensaverEnabled(true, "on"), true);
+  assert.equal(resolveScreensaverEnabled(false, "off"), false);
+});
+
+test("resolve: without a device choice the server default decides", () => {
+  assert.equal(resolveScreensaverEnabled(null, "on"), true);
+  assert.equal(resolveScreensaverEnabled(null, "off"), false);
+});
+
+test("resolve: without any input the screensaver stays OFF", () => {
+  assert.equal(resolveScreensaverEnabled(null, null), false);
+  assert.equal(resolveScreensaverEnabled(null, undefined), false);
+});
+
+test("resolve: an unknown server value is treated as OFF (untrusted payload)", () => {
+  assert.equal(resolveScreensaverEnabled(null, "ON"), false);
+  assert.equal(resolveScreensaverEnabled(null, "1"), false);
+  assert.equal(resolveScreensaverEnabled(null, "disco"), false);
 });
 
 test("save: ON writes '1', OFF writes '0'", () => {
@@ -55,9 +81,9 @@ test("save: round-trips through the same fake storage", () => {
     setItem: (key, value) => store.set(key, value),
   };
   saveScreensaverEnabled(true, fake);
-  assert.equal(loadScreensaverEnabled(fake), true);
+  assert.equal(loadScreensaverChoice(fake), true);
   saveScreensaverEnabled(false, fake);
-  assert.equal(loadScreensaverEnabled(fake), false);
+  assert.equal(loadScreensaverChoice(fake), false);
 });
 
 test("save: a throwing storage is ignored (best effort, no crash)", () => {

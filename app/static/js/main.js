@@ -8,6 +8,7 @@ import {
   fetchTagOptions,
   fetchTags,
 } from "./api.js";
+import { createConfigRetry } from "./config-retry.js";
 import {
   addDays,
   addMonths,
@@ -23,7 +24,11 @@ import { renderLegend } from "./legend.js";
 import { monthGridRange, renderMonthView } from "./month-view.js";
 import { closeDayPopover, initPopover } from "./popover.js";
 import { startPowerView, stopPowerView } from "./power-view.js";
-import { loadScreensaverEnabled, saveScreensaverEnabled } from "./screensaver-memory.js";
+import {
+  loadScreensaverChoice,
+  resolveScreensaverEnabled,
+  saveScreensaverEnabled,
+} from "./screensaver-memory.js";
 import { isSlideshowRunning, startSlideshow, stopSlideshow } from "./slideshow-view.js";
 import { state } from "./state.js";
 import { loadTheme, nextTheme, saveTheme } from "./theme-memory.js";
@@ -254,20 +259,45 @@ function restoreViewState() {
   return true;
 }
 
-// No per-device view stored (typical: the kiosk browser loses its
-// localStorage on every restart) — ask the server for the configured
-// default view (admin setting "Standard-Ansicht"). Awaited BEFORE the
-// first render, so the kiosk starts straight in the configured view with
-// no month->week flicker; the request is one tiny same-server call, and
-// any failure just keeps the built-in month default. Deliberately not
-// persisted: only real user choices go to localStorage, so a later change
-// of the server default still reaches devices without their own choice.
-async function applyServerDefaultView() {
-  try {
-    const config = await fetchConfig();
-    state.view = resolveInitialView(null, config.default_view);
-  } catch {
-    // keep the built-in default (month)
+// -- server defaults from /api/config ---------------------------------------
+//
+// The kiosk browser loses its localStorage on every restart, so anything
+// the device has no own choice for comes from the server: the default
+// calendar view (admin setting "Standard-Ansicht") and the screensaver
+// default. The first fetch is awaited BEFORE the first render, so the
+// kiosk starts straight in the configured view with no month->week
+// flicker. Boot race: when kiosk and add-on start together after a Pi
+// reboot the fetch can fail — then the built-in fallbacks (month,
+// screensaver off) render immediately and createConfigRetry keeps trying
+// in the background; a late response is only applied while the user has
+// not interacted yet (see markInteraction). Deliberately never persisted:
+// only real user choices go to localStorage, so a later change of the
+// server defaults still reaches devices without their own choice.
+
+let configRetry = null;
+// Whether a valid per-device view state was restored (then the server
+// default view never applies on this load).
+let viewRestored = false;
+// The per-device screensaver choice (true/false) or null when the device
+// has none — only then does the server default arm/disarm the toggle.
+let screensaverChoice = null;
+// Set after init()'s first render: a config applied later (retry after
+// the boot race) must re-render into the now-known default view.
+let initialRenderDone = false;
+
+function applyServerDefaults(config) {
+  if (!viewRestored) {
+    const defaultView = resolveInitialView(null, config.default_view);
+    const viewChanged = defaultView !== state.view;
+    state.view = defaultView;
+    if (viewChanged && initialRenderDone) {
+      render();
+      refresh();
+    }
+  }
+  if (screensaverChoice === null) {
+    screensaverEnabled = resolveScreensaverEnabled(null, config.screensaver_default);
+    applyScreensaverButton();
   }
 }
 
@@ -284,6 +314,10 @@ let lastInteractionAt = Date.now();
 
 function markInteraction() {
   lastInteractionAt = Date.now();
+  // The user is actively using the device — a late /api/config response
+  // (boot-race retry) must never flip the view or arm the screensaver
+  // under their fingers.
+  configRetry?.markInteraction();
   // Any interaction dismisses a running slideshow immediately.
   if (isSlideshowRunning()) stopSlideshow();
 }
@@ -303,6 +337,10 @@ function applyScreensaverButton() {
 
 function toggleScreensaver() {
   screensaverEnabled = !screensaverEnabled;
+  // The tap is an explicit per-device choice — persist it and stop any
+  // pending server default from overriding it (belt and braces: the tap's
+  // pointerdown already ran markInteraction).
+  screensaverChoice = screensaverEnabled;
   saveScreensaverEnabled(screensaverEnabled);
   applyScreensaverButton();
   // Turning it off while the slideshow is up ends it right away.
@@ -311,7 +349,10 @@ function toggleScreensaver() {
 }
 
 function initScreensaver() {
-  screensaverEnabled = loadScreensaverEnabled();
+  screensaverChoice = loadScreensaverChoice();
+  // No server default yet — a missing choice starts OFF until /api/config
+  // arrives (applyServerDefaults may then arm the toggle).
+  screensaverEnabled = resolveScreensaverEnabled(screensaverChoice, null);
   applyScreensaverButton();
   document.getElementById("btn-screensaver").addEventListener("click", toggleScreensaver);
   // Interaction listeners bump the idle timestamp and dismiss the slideshow.
@@ -365,7 +406,14 @@ async function init() {
   initTheme();
   initScreensaver();
   applyAdminVisibility();
-  if (!restoreViewState()) await applyServerDefaultView();
+  viewRestored = restoreViewState();
+  // Fetch the server defaults only when something still needs them; the
+  // first attempt is awaited (no flicker on the happy path), retries after
+  // a boot-race failure run in the background (see applyServerDefaults).
+  if (!viewRestored || screensaverChoice === null) {
+    configRetry = createConfigRetry({ fetchConfig, applyDefaults: applyServerDefaults });
+    await configRetry.start();
+  }
   document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
   document.getElementById("btn-next").addEventListener("click", () => navigate(1));
   document.getElementById("btn-today").addEventListener("click", goToToday);
@@ -383,6 +431,7 @@ async function init() {
   window.addEventListener("orientationchange", onWindowResized);
   render();
   refresh();
+  initialRenderDone = true;
   setInterval(refresh, REFRESH_INTERVAL_MS);
 }
 
