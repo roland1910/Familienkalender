@@ -85,6 +85,9 @@ class SettingsUpdate(BaseModel):
     # Default calendar view (month/week) for devices without a stored
     # per-device choice; None leaves the stored value untouched.
     default_view: str | None = None
+    # Default for the slideshow screensaver ("on"/"off") on devices without
+    # a stored per-device choice; None leaves the stored value untouched.
+    screensaver_default: str | None = None
 
 
 class PowerDeviceIn(BaseModel):
@@ -259,6 +262,7 @@ def _settings_payload() -> dict:
     return {
         "evening_boundary": get_evening_boundary(storage).strftime("%H:%M"),
         "default_view": settings.get_default_view(storage),
+        "screensaver_default": settings.get_screensaver_default(storage),
         "google_credentials": {
             "configured": bool(client_id and client_secret),
             "client_id_masked": _mask_client_id(client_id) if client_id else None,
@@ -291,10 +295,19 @@ async def update_settings(update: SettingsUpdate) -> dict:
             status_code=400,
             detail="Ungültige Standard-Ansicht — erlaubt sind Monat und Woche.",
         )
+    if update.screensaver_default is not None and not settings.is_valid_screensaver_default(
+        update.screensaver_default
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Ungültiger Bildschirmschoner-Standard — erlaubt sind An und Aus.",
+        )
     storage = get_storage()
     storage.set_setting(settings.EVENING_BOUNDARY_KEY, update.evening_boundary)
     if update.default_view is not None:
         settings.set_default_view(storage, update.default_view)
+    if update.screensaver_default is not None:
+        settings.set_screensaver_default(storage, update.screensaver_default)
     return _settings_payload()
 
 

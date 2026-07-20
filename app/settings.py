@@ -45,10 +45,21 @@ BUSY_SYNC_STATUS_KEY = "busy_sync_status"
 # on every restart, so the initial view must come from the server.
 DEFAULT_VIEW_KEY = "default_view"
 
+# Server-side default for the photo-slideshow screensaver ("on"/"off") for
+# devices without a per-device choice in localStorage — same rationale as
+# default_view: the kiosk browser loses its storage on every restart, and
+# Roland wants the screensaver armed there without a manual tap.
+SCREENSAVER_DEFAULT_KEY = "screensaver_default"
+
 # The calendar views the frontend knows; mirrors VIEWS in
 # app/static/js/view-memory.js.
 CALENDAR_VIEWS = ("month", "week")
 FALLBACK_VIEW = "month"
+
+# Screensaver default states; mirrors resolveScreensaverEnabled in
+# app/static/js/screensaver-memory.js.
+SCREENSAVER_DEFAULTS = ("on", "off")
+FALLBACK_SCREENSAVER_DEFAULT = "off"
 
 # DNS limits: 253 chars total, labels of 1-63 chars, letters/digits/
 # hyphens, no leading/trailing hyphen. Also matches plain IPv4 literals.
@@ -135,6 +146,30 @@ def get_default_view(storage: Storage) -> str:
 def set_default_view(storage: Storage, view: str) -> None:
     """Persist the default calendar view (validation happens in the API layer)."""
     storage.set_setting(DEFAULT_VIEW_KEY, view)
+
+
+def is_valid_screensaver_default(value: str) -> bool:
+    """Whether value is a known screensaver default state ("on"/"off")."""
+    return value in SCREENSAVER_DEFAULTS
+
+
+def get_screensaver_default(storage: Storage) -> str:
+    """The configured screensaver default; anything invalid yields "off".
+
+    Re-validated on read (defense in depth): a value written by another
+    path must never arm the screensaver on every device by accident.
+    """
+    raw = storage.get_setting(SCREENSAVER_DEFAULT_KEY)
+    if raw and is_valid_screensaver_default(raw):
+        return raw
+    if raw:
+        logger.warning("Ignoring invalid stored screensaver default: %r", raw)
+    return FALLBACK_SCREENSAVER_DEFAULT
+
+
+def set_screensaver_default(storage: Storage, value: str) -> None:
+    """Persist the screensaver default (validation happens in the API layer)."""
+    storage.set_setting(SCREENSAVER_DEFAULT_KEY, value)
 
 
 def get_feed_token(storage: Storage) -> str | None:

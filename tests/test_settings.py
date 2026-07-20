@@ -12,16 +12,20 @@ from app.settings import (
     EVENING_BOUNDARY_KEY,
     FEED_PUBLIC_HOST_KEY,
     POWER_DEVICES_KEY,
+    SCREENSAVER_DEFAULT_KEY,
     PowerDevice,
     get_default_view,
     get_evening_boundary,
     get_feed_public_host,
     get_power_devices,
+    get_screensaver_default,
     is_valid_default_view,
     is_valid_public_host,
+    is_valid_screensaver_default,
     set_default_view,
     set_feed_public_host,
     set_power_devices,
+    set_screensaver_default,
 )
 from app.storage import Storage
 
@@ -88,6 +92,31 @@ class TestDefaultView:
     @pytest.mark.parametrize("view", ["", "day", "MONTH", "Woche", "week "])
     def test_invalid_views(self, view: str) -> None:
         assert not is_valid_default_view(view)
+
+
+class TestScreensaverDefault:
+    def test_defaults_to_off(self, storage: Storage) -> None:
+        assert get_screensaver_default(storage) == "off"
+
+    def test_set_and_get_round_trip(self, storage: Storage) -> None:
+        set_screensaver_default(storage, "on")
+        assert get_screensaver_default(storage) == "on"
+        set_screensaver_default(storage, "off")
+        assert get_screensaver_default(storage) == "off"
+
+    def test_invalid_stored_value_falls_back_to_off(self, storage: Storage) -> None:
+        # Defense in depth: the admin API validates on write, but a value
+        # written by another path must not arm the screensaver by accident.
+        storage.set_setting(SCREENSAVER_DEFAULT_KEY, "disco")
+        assert get_screensaver_default(storage) == "off"
+
+    @pytest.mark.parametrize("value", ["on", "off"])
+    def test_valid_values(self, value: str) -> None:
+        assert is_valid_screensaver_default(value)
+
+    @pytest.mark.parametrize("value", ["", "ON", "true", "1", "an", "off "])
+    def test_invalid_values(self, value: str) -> None:
+        assert not is_valid_screensaver_default(value)
 
 
 class TestPowerDevices:

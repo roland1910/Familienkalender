@@ -104,6 +104,41 @@ class TestSettingsEndpoints:
         assert response.status_code == 200
         assert storage.get_setting("default_view") == "week"
 
+    def test_get_settings_includes_screensaver_default(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        assert client.get("/api/admin/settings").json()["screensaver_default"] == "off"
+
+    def test_put_screensaver_default_persists(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings",
+            json={"evening_boundary": "17:00", "screensaver_default": "on"},
+        )
+        assert response.status_code == 200
+        assert response.json()["screensaver_default"] == "on"
+        assert storage.get_setting("screensaver_default") == "on"
+
+    def test_put_invalid_screensaver_default_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/settings",
+            json={"evening_boundary": "17:00", "screensaver_default": "vielleicht"},
+        )
+        assert response.status_code == 400
+        assert "Bildschirmschoner" in response.json()["detail"]
+        assert storage.get_setting("screensaver_default") is None
+
+    def test_put_without_screensaver_default_keeps_the_stored_value(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        storage.set_setting("screensaver_default", "on")
+        response = client.put("/api/admin/settings", json={"evening_boundary": "18:00"})
+        assert response.status_code == 200
+        assert storage.get_setting("screensaver_default") == "on"
+
     def test_put_google_credentials_and_masked_status(
         self, client: TestClient, storage: Storage
     ) -> None:
