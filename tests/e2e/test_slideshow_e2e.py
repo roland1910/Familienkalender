@@ -7,8 +7,10 @@ constants injected before the app's modules load, so the test never waits
 the real three minutes.
 """
 
+from collections.abc import Iterator
 from pathlib import Path
 
+import httpx
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -109,6 +111,60 @@ def test_screensaver_off_by_default_no_slideshow(page: Page, server_url: str) ->
     page.wait_for_timeout(FAST_IDLE_MS + 1500)
     expect(page.locator(".slideshow-overlay")).to_have_count(0)
     expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def _put_screensaver_default(server_url: str, value: str) -> None:
+    response = httpx.put(
+        f"{server_url}/api/admin/settings",
+        json={"evening_boundary": "17:00", "screensaver_default": value},
+        timeout=10.0,
+    )
+    assert response.status_code == 200, response.text
+
+
+@pytest.fixture
+def screensaver_default_on(server_url: str) -> Iterator[None]:
+    # Flipped via the admin API (localhost = admin in this suite) and reset
+    # afterwards so the other E2E files keep starting with the saver off.
+    _put_screensaver_default(server_url, "on")
+    yield
+    _put_screensaver_default(server_url, "off")
+
+
+def test_server_default_on_starts_slideshow_without_toggle_tap(
+    screensaver_default_on: None, page: Page, server_url: str
+) -> None:
+    # Fresh context (empty localStorage — the kiosk after a restart) and no
+    # tap on the photo toggle: the server default arms the screensaver.
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    goto_calendar(page, server_url)
+    expect(page.locator("#btn-screensaver")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+
+    # A touch still ends the slideshow and returns to the calendar.
+    page.mouse.click(960, 540)
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def test_device_off_choice_wins_over_server_default_on(
+    screensaver_default_on: None, page: Page, server_url: str
+) -> None:
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    goto_calendar(page, server_url)
+    # Deliberate device choice: switch the armed saver OFF (persisted).
+    toggle = page.locator("#btn-screensaver")
+    expect(toggle).to_have_attribute("aria-pressed", "true")
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+
+    # The server default (on) must NOT re-arm it on reload.
+    page.reload()
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    page.wait_for_timeout(FAST_IDLE_MS + 1500)
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
 
 
 def test_screensaver_toggle_persists_across_reload(page: Page, server_url: str) -> None:
