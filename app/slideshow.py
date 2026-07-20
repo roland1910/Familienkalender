@@ -216,11 +216,127 @@ def iter_images(
                 logger.warning("Skipping unreadable entry %r: %s", entry.path, exc)
 
 
-def _scan_sync() -> int:
-    """Blocking scan of the configured dirs; replaces the index. Returns count."""
+def _dir_is_available(path: str) -> bool:
+    """Whether a configured directory currently exists and can be listed.
+
+    "Available" means the scan can actually see its contents: the path is a
+    directory *and* ``os.scandir`` opens without error. A folder that exists
+    but is unreadable (permission denied, a half-mounted share) counts as
+    unavailable — its zero results are a failure, not an empty album.
+    """
+    try:
+        if not Path(path).is_dir():
+            return False
+        with os.scandir(path):
+            return True
+    except OSError as exc:
+        logger.warning("Slideshow directory unavailable %r: %s", path, exc)
+        return False
+
+
+def _is_under(path: str, directory: str) -> bool:
+    """Whether ``path`` lies inside ``directory`` (textual, already resolved)."""
+    try:
+        return os.path.commonpath([directory, path]) == directory
+    except ValueError:
+        return False  # different drives on Windows dev machines
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    """Outcome of one scan run (see ``_scan_sync``)."""
+
+    count: int
+    unavailable_dirs: int
+    skipped: bool
+
+
+def _scan_sync() -> ScanResult:
+    """Blocking scan of the configured dirs; rebuilds the index.
+
+    Availability guard (Etappe 31, after a real incident): the add-on once
+    started before Home Assistant had mounted the CIFS share under /media,
+    scanned an empty tree and replaced the ~114k-entry index with nothing —
+    the kiosk slideshow went black until a manual rescan. A missing mount
+    must therefore never be mistaken for "the album is empty".
+
+    Semantics:
+
+    * No directories configured at all -> the index is emptied (the admin
+      removed everything; that is a real, intended empty result).
+    * Every configured directory unavailable -> the run is SKIPPED and the
+      index stays exactly as it was (typical: share not mounted yet).
+    * Some available, some not -> only the photos below the *available*
+      directories are rescanned; entries below an unavailable configured
+      directory are carried over unchanged, so a brief network hiccup does
+      not shrink the index. Entries below neither (a directory the admin
+      unconfigured) are dropped as before.
+    * A directory that is reachable and genuinely holds no images still
+      yields zero photos for itself — availability, not emptiness, is what
+      the guard keys on.
+    """
     dirs = get_slideshow_dirs()
-    photos = list(iter_images(dirs))
-    return get_storage().replace_photos(photos)
+    storage = get_storage()
+    if not dirs:
+        return ScanResult(storage.replace_photos([]), 0, False)
+
+    available = [d for d in dirs if _dir_is_available(d)]
+    unavailable = [d for d in dirs if d not in available]
+    if not available:
+        logger.warning(
+            "Slideshow scan skipped: none of the %d configured directories are"
+            " reachable (media share not mounted?) — keeping the existing index",
+            len(dirs),
+        )
+        return ScanResult(storage.count_photos(), len(unavailable), True)
+
+    photos = list(iter_images(available))
+    if unavailable:
+        logger.warning(
+            "Slideshow scan: %d of %d directories unreachable — keeping their"
+            " indexed photos",
+            len(unavailable),
+            len(dirs),
+        )
+        remaining = MAX_INDEXED_PHOTOS - len(photos)
+        if remaining > 0:
+            kept = [
+                entry
+                for entry in storage.list_photo_entries()
+                if any(_is_under(entry[0], d) for d in unavailable)
+            ]
+            photos.extend(kept[:remaining])
+    return ScanResult(storage.replace_photos(photos), len(unavailable), False)
+
+
+# Setting key: JSON status of the last scan run, so the admin UI can warn
+# about unreachable directories on a plain GET (no secrets, counters only).
+SLIDESHOW_SCAN_STATUS_KEY = "slideshow_scan_status"
+
+
+def _store_scan_status(result: ScanResult) -> None:
+    get_storage().set_setting(
+        SLIDESHOW_SCAN_STATUS_KEY,
+        json.dumps(
+            {"unavailable_dirs": result.unavailable_dirs, "skipped": result.skipped}
+        ),
+    )
+
+
+def get_scan_status() -> dict:
+    """Last scan status ``{unavailable_dirs, skipped}`` (zeroed if unknown)."""
+    raw = get_storage().get_setting(SLIDESHOW_SCAN_STATUS_KEY)
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {
+                    "unavailable_dirs": int(data.get("unavailable_dirs") or 0),
+                    "skipped": bool(data.get("skipped")),
+                }
+        except (ValueError, TypeError):
+            pass
+    return {"unavailable_dirs": 0, "skipped": False}
 
 
 async def scan_photos() -> int:
@@ -229,12 +345,17 @@ async def scan_photos() -> int:
     Serialized by ``_scan_lock`` so a save-triggered scan and the hourly
     scan never overlap. The blocking filesystem walk runs via
     ``asyncio.to_thread`` so the event loop stays responsive during the
-    (potentially long, 114k-file) scan.
+    (potentially long, 114k-file) scan. The availability outcome is
+    persisted for the admin UI (see ``get_scan_status``).
     """
     async with _scan_lock:
-        count = await asyncio.to_thread(_scan_sync)
-    logger.info("Slideshow index rebuilt: %d photos", count)
-    return count
+        result = await asyncio.to_thread(_scan_sync)
+        await asyncio.to_thread(_store_scan_status, result)
+    if result.skipped:
+        logger.info("Slideshow index kept unchanged: %d photos", result.count)
+    else:
+        logger.info("Slideshow index rebuilt: %d photos", result.count)
+    return result.count
 
 
 # The photo index is refreshed on a fixed cadence so files added to the
@@ -638,10 +759,19 @@ class SlideshowDirsUpdate(BaseModel):
 
 
 def _slideshow_payload() -> dict:
+    """Directories, indexed count and the last scan's availability state.
+
+    ``unavailable_dirs``/``scan_skipped`` let the admin UI explain a stale or
+    unchanged count ("share not mounted?") — plain counters/flags, no paths
+    beyond the ones already listed in ``dirs``.
+    """
+    status = get_scan_status()
     return {
         "dirs": get_slideshow_dirs(),
         "photo_count": get_storage().count_photos(),
         "media_root": media_root(),
+        "unavailable_dirs": status["unavailable_dirs"],
+        "scan_skipped": status["skipped"],
     }
 
 

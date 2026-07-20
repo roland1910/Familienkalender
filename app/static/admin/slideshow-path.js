@@ -1,8 +1,25 @@
-// Pure path helpers for the navigable slideshow directory browser. Kept
+// Pure helpers for the slideshow admin section (directory browser paths and
+// the scan-availability warning text). Kept
 // framework-free and DOM-free so they can be node-unit-tested. All paths
 // are the absolute, server-validated strings the backend returns; these
 // helpers only slice/label them for display and never widen access — the
 // media root stays the hard boundary (segments never reach above it).
+
+// German warning line for the last scan, or "" when everything was
+// reachable. ``unavailable_dirs`` counts configured directories the scan
+// could not read (typically: the CIFS share was not mounted yet);
+// ``scan_skipped`` means none of them were reachable, so the index was left
+// untouched instead of being wiped. Text only — the caller sets it via
+// textContent and hides the element on "".
+export function scanWarningText({ unavailable_dirs, scan_skipped } = {}) {
+  const count = Number(unavailable_dirs) || 0;
+  if (count <= 0) return "";
+  const folders = count === 1 ? "1 Ordner war" : `${count} Ordner waren`;
+  const tail = scan_skipped
+    ? "der Index wurde deshalb nicht verändert."
+    : "deren Fotos wurden unverändert im Index behalten.";
+  return `Hinweis: ${folders} beim letzten Einlesen nicht erreichbar (Netzwerkfreigabe?) — ${tail}`;
+}
 
 // The display label for a directory path: its last segment, or the whole
 // path if it has none (e.g. the drive/root itself).

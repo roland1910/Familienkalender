@@ -8,6 +8,7 @@ MEDIA_ROOT pointed there — no real /media needed.
 """
 
 import os
+import shutil
 import struct
 from datetime import date
 from pathlib import Path
@@ -344,6 +345,107 @@ class TestAdminApi:
             params={"path": str(media_root / "Photos" / "Urlaub")},
         ).json()
         assert deep_resp["parent"] == str(media_root / "Photos")
+
+
+class TestScanAvailabilityGuard:
+    """A scan must never wipe the index because the share is not mounted.
+
+    Real incident (Etappe 31): after a system restore the add-on started and
+    scanned before the CIFS share was mounted under /media. The scan found 0
+    photos and replaced the ~114k-entry index with the empty set, so the
+    kiosk slideshow showed nothing but black.
+    """
+
+    def test_missing_directory_keeps_the_index(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        _make_image(album / "b.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 2
+
+        # The "share" disappears (unmounted) — the configured dir is gone.
+        shutil.rmtree(album)
+        payload = client.post("/api/admin/slideshow/rescan").json()
+        assert payload["photo_count"] == 2  # index untouched
+        assert payload["unavailable_dirs"] == 1
+        assert payload["scan_skipped"] is True
+
+    def test_available_but_empty_directory_empties_the_index(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # The legitimate case: the folder is reachable and really has no
+        # photos left. Then the index *must* shrink to zero.
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        (album / "a.jpg").unlink()
+        payload = client.post("/api/admin/slideshow/rescan").json()
+        assert payload["photo_count"] == 0
+        assert payload["unavailable_dirs"] == 0
+        assert payload["scan_skipped"] is False
+
+    def test_no_configured_directories_empties_the_index(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # Roland removed every folder — an empty index is the correct answer,
+        # not a "share unavailable" skip.
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        payload = client.put("/api/admin/slideshow", json={"dirs": []}).json()
+        assert payload["photo_count"] == 0
+        assert payload["unavailable_dirs"] == 0
+        assert payload["scan_skipped"] is False
+
+    def test_partial_availability_keeps_the_unavailable_directorys_photos(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        here = media_root / "Hier"
+        gone = media_root / "Weg"
+        _make_image(here / "a.jpg")
+        _make_image(gone / "b.jpg")
+        _make_image(gone / "c.jpg")
+        client.put(
+            "/api/admin/slideshow", json={"dirs": [str(here), str(gone)]}
+        )
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 3
+
+        # One share vanishes, the other gains a photo: the available dir is
+        # rescanned, the unavailable one keeps its indexed photos.
+        shutil.rmtree(gone)
+        _make_image(here / "d.jpg")
+        payload = client.post("/api/admin/slideshow/rescan").json()
+        assert payload["photo_count"] == 4  # a + d (rescanned) + b + c (kept)
+        assert payload["unavailable_dirs"] == 1
+        assert payload["scan_skipped"] is False
+
+    def test_photos_outside_every_configured_directory_are_dropped(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # Keeping is scoped to *unavailable configured* dirs only: an entry
+        # from a directory that is no longer configured at all still goes.
+        old = media_root / "Alt"
+        new = media_root / "Neu"
+        _make_image(old / "a.jpg")
+        _make_image(new / "b.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(old)]})
+        payload = client.put("/api/admin/slideshow", json={"dirs": [str(new)]}).json()
+        assert payload["photo_count"] == 1
+
+    def test_admin_get_reports_the_last_scan_state(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        shutil.rmtree(album)
+        client.post("/api/admin/slideshow/rescan")
+        # The flag survives into a plain GET (the admin UI reads it there).
+        payload = client.get("/api/admin/slideshow").json()
+        assert payload["unavailable_dirs"] == 1
+        assert payload["scan_skipped"] is True
 
 
 class TestImageEndpoint:

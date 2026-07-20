@@ -12,7 +12,7 @@
 
 import * as api from "./api.js";
 import { byId, el, showMessage } from "./dom.js";
-import { breadcrumbSegments, shortName } from "./slideshow-path.js";
+import { breadcrumbSegments, scanWarningText, shortName } from "./slideshow-path.js";
 
 // The current directory list, kept in sync with the backend so add/remove
 // can PUT the whole array.
@@ -29,6 +29,16 @@ let browseSubdirs = [];
 // wrong order. Each navigateTo() call claims the next number; only the call
 // still holding the latest number is allowed to apply its result.
 let navSeq = 0;
+
+// Photo count plus the discreet warning about directories the last scan
+// could not reach (unmounted share) — see scanWarningText.
+function renderScanState(payload) {
+  byId("slideshow-count").textContent = String(payload.photo_count);
+  const warning = byId("slideshow-warning");
+  const text = scanWarningText(payload);
+  warning.textContent = text;
+  warning.hidden = text === "";
+}
 
 function renderDirList() {
   const list = byId("slideshow-dir-list");
@@ -55,7 +65,7 @@ async function saveDirs(dirs) {
   try {
     const payload = await api.saveSlideshowDirs(dirs);
     currentDirs = payload.dirs;
-    byId("slideshow-count").textContent = String(payload.photo_count);
+    renderScanState(payload);
     renderDirList();
     updateAddButton();
     showMessage(messageNode, "Gespeichert.");
@@ -158,7 +168,7 @@ async function rescan() {
   showMessage(messageNode, "Wird eingelesen…");
   try {
     const payload = await api.rescanSlideshow();
-    byId("slideshow-count").textContent = String(payload.photo_count);
+    renderScanState(payload);
     showMessage(messageNode, `Eingelesen: ${payload.photo_count} Fotos.`);
   } catch (error) {
     showMessage(messageNode, error.message, true);
@@ -171,7 +181,7 @@ export async function loadSlideshow() {
   const payload = await api.getSlideshow();
   currentDirs = payload.dirs;
   mediaRoot = payload.media_root ?? "";
-  byId("slideshow-count").textContent = String(payload.photo_count);
+  renderScanState(payload);
   renderDirList();
   // Start the browser at the media root.
   await navigateTo("");

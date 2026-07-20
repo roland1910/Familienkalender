@@ -482,6 +482,17 @@ class Storage:
             row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()
         return int(row["n"])
 
+    def list_photo_entries(self) -> list[tuple[str, float]]:
+        """Every indexed photo as a (path, mtime) pair.
+
+        Used by the scan to carry entries of *currently unavailable*
+        directories over into the rebuilt index (see slideshow._scan_sync):
+        an unmounted share must not silently shrink the index.
+        """
+        with self._connect() as conn:
+            rows = conn.execute("SELECT path, mtime FROM photos").fetchall()
+        return [(row["path"], float(row["mtime"])) for row in rows]
+
     def count_photos(self) -> int:
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()

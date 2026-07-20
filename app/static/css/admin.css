@@ -363,6 +363,14 @@ body {
   color: var(--text-muted);
 }
 
+/* Discreet warning line (e.g. slideshow directories not reachable). */
+.hint.warning {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
 .message {
   margin: 8px 0 0;
   padding: 8px 12px;
