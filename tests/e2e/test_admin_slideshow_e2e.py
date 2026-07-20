@@ -23,7 +23,7 @@ _TREE = {
 
 
 def _route_slideshow(page: Page) -> None:
-    state = {"dirs": [], "photo_count": 0}
+    state = {"dirs": [], "photo_count": 0, "videos": "off"}
 
     def handle_get(route: Route) -> None:
         route.fulfill(json={**state, "media_root": "/media"})
@@ -34,6 +34,9 @@ def _route_slideshow(page: Page) -> None:
         body = _json.loads(route.request.post_data or "{}")
         state["dirs"] = body.get("dirs", [])
         state["photo_count"] = 7 * len(state["dirs"])
+        # Mirrors the backend: an omitted "videos" leaves the value alone.
+        if body.get("videos") is not None:
+            state["videos"] = body["videos"]
         route.fulfill(json={**state, "media_root": "/media"})
 
     def handle_rescan(route: Route) -> None:
@@ -126,3 +129,38 @@ def test_navigate_add_and_rescan(page: Page, server_url: str) -> None:
     expect(page.locator("#slideshow-dir-list .slideshow-dir")).to_have_count(1)
     page.locator("#slideshow-dir-list .action-button.subtle").first.click()
     expect(page.locator("#slideshow-dir-list")).to_contain_text("Noch keine Ordner")
+
+
+def test_video_switch_saves_and_survives_a_reload(page: Page, server_url: str) -> None:
+    """Etappe 33: videos are always indexed, so this switch only governs
+    playback — it saves on its own and must come back from the server."""
+    _route_slideshow(page)
+    _goto_admin(page, server_url)
+
+    select = page.locator("#slideshow-videos")
+    expect(select).to_have_value("off")  # conservative default
+    select.select_option("on")
+    page.locator("#btn-slideshow-videos").click()
+    expect(page.locator("#slideshow-message")).to_contain_text("Gespeichert")
+
+    page.reload()
+    expect(page.locator("#slideshow-videos")).to_have_value("on")
+
+
+def test_adding_a_folder_leaves_the_video_switch_alone(
+    page: Page, server_url: str
+) -> None:
+    """The folder buttons must not silently reset the video setting: they
+    save without a "videos" field, which the backend treats as unchanged."""
+    _route_slideshow(page)
+    _goto_admin(page, server_url)
+
+    page.locator("#slideshow-videos").select_option("on")
+    page.locator("#btn-slideshow-videos").click()
+    expect(page.locator("#slideshow-videos")).to_have_value("on")
+
+    page.locator(".slideshow-browse-enter", has_text="Photos").click()
+    page.locator(".slideshow-browse-enter", has_text="Urlaub").click()
+    page.locator("#btn-slideshow-add").click()
+    expect(page.locator("#slideshow-dir-list .slideshow-dir")).to_have_count(1)
+    expect(page.locator("#slideshow-videos")).to_have_value("on")

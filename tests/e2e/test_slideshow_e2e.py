@@ -31,6 +31,7 @@ def _mock_slideshow(page: Page, taken: dict | None = None, folders: list | None 
     payload = {
         "id": 1,
         "name": "urlaub.jpg",
+        "kind": "image",
         "taken": taken,
         "folders": folders if folders is not None else [],
     }
@@ -218,3 +219,103 @@ def test_screensaver_toggle_persists_across_reload(page: Page, server_url: str) 
     expect(page.locator("#btn-screensaver")).to_have_attribute("aria-pressed", "true")
     # Still armed after reload: the slideshow starts again on idle.
     expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+
+
+# -- videos (Etappe 33) ------------------------------------------------------
+#
+# Real playback is deliberately NOT exercised here: it would need a decodable
+# fixture clip and a codec the CI browser supports, which is exactly the kind
+# of flake an E2E suite should not carry. What IS pinned is the part the
+# kiosk depends on — that a video item gets a proper <video> layer (muted,
+# playsinline, no controls), and that an undecodable clip never leaves the
+# screen standing still but moves on to the next item.
+
+
+def _mock_video_slideshow(page: Page) -> None:
+    """Every item is a video whose bytes are not a decodable clip."""
+    page.route(
+        "**/api/slideshow/next",
+        lambda route: route.fulfill(
+            json={
+                "id": 7,
+                "name": "urlaub.mp4",
+                "kind": "video",
+                "taken": {"year": 2019, "month": 8, "day": 16},
+                "folders": ["Photos", "2019"],
+            }
+        ),
+    )
+    page.route(
+        "**/api/slideshow/image/**",
+        lambda route: route.fulfill(body=b"not-a-real-video", content_type="video/mp4"),
+    )
+
+
+def test_video_item_gets_a_muted_inline_video_layer(page: Page, server_url: str) -> None:
+    _inject_fast_timings(page)
+    _mock_video_slideshow(page)
+    goto_calendar(page, server_url)
+    page.locator("#btn-screensaver").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+
+    video = page.locator("video.slideshow-layer")
+    expect(video).to_have_count(1, timeout=5000)
+    props = video.evaluate(
+        "node => ({muted: node.muted, controls: node.controls,"
+        " inline: node.hasAttribute('playsinline'),"
+        " fit: getComputedStyle(node).objectFit})"
+    )
+    assert props["muted"] is True, props
+    assert props["controls"] is False, props
+    assert props["inline"] is True, props
+    # Same letterboxing as the photos — no cropping, no stretching.
+    assert props["fit"] == "contain", props
+
+
+def test_undecodable_video_moves_on_to_the_next_item(page: Page, server_url: str) -> None:
+    """A codec the kiosk cannot decode must never freeze the slideshow: the
+    error path fetches the next item instead of sitting on a black screen."""
+    _inject_fast_timings(page)
+    png = FIXTURE_PNG.read_bytes()
+    served = {"count": 0}
+
+    def next_item(route) -> None:
+        served["count"] += 1
+        if served["count"] == 1:
+            route.fulfill(
+                json={
+                    "id": 7,
+                    "name": "kaputt.mp4",
+                    "kind": "video",
+                    "taken": None,
+                    "folders": [],
+                }
+            )
+        else:
+            route.fulfill(
+                json={
+                    "id": 8,
+                    "name": "danach.jpg",
+                    "kind": "image",
+                    "taken": None,
+                    "folders": [],
+                }
+            )
+
+    page.route("**/api/slideshow/next", next_item)
+    page.route(
+        "**/api/slideshow/image/7",
+        lambda route: route.fulfill(body=b"not-a-real-video", content_type="video/mp4"),
+    )
+    page.route(
+        "**/api/slideshow/image/8",
+        lambda route: route.fulfill(body=png, content_type="image/png"),
+    )
+
+    goto_calendar(page, server_url)
+    page.locator("#btn-screensaver").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+    # The broken clip is skipped and the following photo is shown instead.
+    expect(page.locator(".slideshow-caption")).to_have_text("danach.jpg", timeout=10000)
+    visible = page.locator(".slideshow-layer-visible")
+    assert visible.evaluate("node => node.tagName") == "IMG"

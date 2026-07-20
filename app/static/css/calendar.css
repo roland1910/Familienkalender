@@ -1046,13 +1046,16 @@ body.mode-power .status-badge {
   overflow: hidden;
 }
 
-/* Two stacked layers cross-fade: only the visible one is opaque. Each is a
-   real <img> holding one photo, contained and centered on black.
-   MUST stay an <img>, never a background-image: CSS backgrounds ignore the
-   EXIF orientation tag, which showed portrait photos rotated by 90° on the
-   kiosk. `image-orientation: from-image` is the <img> default; it is spelled
-   out here to state the intent and to guard against engines (the kiosk runs
-   WebKitGTK) whose default might differ. */
+/* Two stacked layers cross-fade: only the visible one is opaque. Each holds
+   one item — a real <img> for a photo, a <video> for a clip (Etappe 33) —
+   contained and centered on black. The class covers both tags, so a layer
+   swapping kind keeps its geometry and its fade.
+   A photo layer MUST stay an <img>, never a background-image: CSS
+   backgrounds ignore the EXIF orientation tag, which showed portrait photos
+   rotated by 90° on the kiosk. `image-orientation: from-image` is the <img>
+   default (and a no-op on <video>); it is spelled out here to state the
+   intent and to guard against engines (the kiosk runs WebKitGTK) whose
+   default might differ. */
 .slideshow-layer {
   position: absolute;
   inset: 0;

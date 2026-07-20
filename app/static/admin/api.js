@@ -135,8 +135,13 @@ export function getSlideshow() {
   return request("GET", "api/admin/slideshow");
 }
 
-export function saveSlideshowDirs(dirs) {
-  return request("PUT", "api/admin/slideshow", { dirs });
+// `videos` ("on"/"off") is optional: omitted, the backend leaves the current
+// value untouched, so the folder buttons and the video switch save
+// independently of each other.
+export function saveSlideshowDirs(dirs, videos) {
+  const body = { dirs };
+  if (videos !== undefined) body.videos = videos;
+  return request("PUT", "api/admin/slideshow", body);
 }
 
 export function rescanSlideshow() {

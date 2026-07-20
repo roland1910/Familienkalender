@@ -249,17 +249,37 @@
     <section class="admin-section" aria-labelledby="slideshow-heading">
       <h2 id="slideshow-heading">Diashow (Kiosk)</h2>
       <p>Ausgew&auml;hlte Ordner werden regelm&auml;&szlig;ig nach Fotos
-        durchsucht (JPG, PNG, WebP). Am Display l&auml;sst sich die Diashow
-        als Bildschirmschoner aktivieren (Foto-Symbol oben rechts): nach
-        einigen Minuten ohne Ber&uuml;hrung startet sie, jede Ber&uuml;hrung
-        kehrt zum Kalender zur&uuml;ck. Die Einstellung gilt pro Ger&auml;t.</p>
+        (JPG, PNG, WebP) und Videos (MP4, MOV, M4V) durchsucht. Am Display
+        l&auml;sst sich die Diashow als Bildschirmschoner aktivieren
+        (Bilderrahmen-Symbol oben rechts): nach einigen Minuten ohne
+        Ber&uuml;hrung startet sie, jede Ber&uuml;hrung kehrt zum Kalender
+        zur&uuml;ck. Die Einstellung gilt pro Ger&auml;t.</p>
       <p class="hint">Die Fotos liegen auf der Netzwerkfreigabe &#8222;Photos&#8220;,
         die bereits in Home Assistant eingebunden ist (Einstellungen &#8594;
         System &#8594; Speicher). Das Add-on liest sie schreibgesch&uuml;tzt
         unter <code>/media</code>.</p>
-      <p>Aktuell im Index: <strong id="slideshow-count">&#8211;</strong> Fotos.</p>
+      <p>Aktuell im Index: <strong id="slideshow-count">&#8211;</strong> Fotos
+        und Videos.</p>
       <p id="slideshow-warning" class="hint warning" hidden></p>
       <ul id="slideshow-dir-list" class="slideshow-dir-list"></ul>
+
+      <div class="form-grid">
+        <label for="slideshow-videos">Videos abspielen</label>
+        <select id="slideshow-videos">
+          <option value="off">Aus &#8211; nur Fotos zeigen</option>
+          <option value="on">An &#8211; Fotos und Videos zeigen</option>
+        </select>
+      </div>
+      <p class="hint">Videos werden immer mitgelesen; dieser Schalter
+        entscheidet nur, ob sie auch gezeigt werden. Auf schwacher Hardware
+        kann die Wiedergabe &uuml;ber die Netzwerkfreigabe ruckeln &#8211; dann
+        einfach wieder auf &#8222;Aus&#8220; stellen. Videos laufen stumm,
+        ohne Bedienelemente und h&ouml;chstens eine Minute lang.</p>
+      <div class="button-row">
+        <button id="btn-slideshow-videos" class="action-button" type="button">
+          Video-Einstellung speichern
+        </button>
+      </div>
 
       <div class="slideshow-browser">
         <p class="slideshow-browser-title">Ordner ausw&auml;hlen</p>

@@ -1,7 +1,11 @@
 // Admin "Diashow (Kiosk)" section: manage the directories scanned for
-// photos, browse the /media tree to pick new ones, show the indexed count
-// and trigger a rescan. Foreign strings (directory names, error messages)
-// go into the DOM exclusively via textContent — see dom.js.
+// photos and videos, browse the /media tree to pick new ones, show the
+// indexed count, switch video playback on/off and trigger a rescan. Foreign
+// strings (directory names, error messages) go into the DOM exclusively via
+// textContent — see dom.js.
+//
+// The video switch needs no rescan: videos are always indexed, the setting
+// only governs whether /api/slideshow/next may hand one out.
 //
 // The browser is navigable: clicking a folder descends into it (loading its
 // subdirectories from GET /api/admin/slideshow/dirs?path=...), a breadcrumb
@@ -34,6 +38,9 @@ let navSeq = 0;
 // could not reach (unmounted share) — see scanWarningText.
 function renderScanState(payload) {
   byId("slideshow-count").textContent = String(payload.photo_count);
+  // "on"/"off"; anything unexpected falls back to the conservative "off"
+  // rather than silently leaving the select on a stale value.
+  byId("slideshow-videos").value = payload.videos === "on" ? "on" : "off";
   const warning = byId("slideshow-warning");
   const text = scanWarningText(payload);
   warning.textContent = text;
@@ -60,10 +67,10 @@ function renderDirList() {
   }
 }
 
-async function saveDirs(dirs) {
+async function saveDirs(dirs, videos) {
   const messageNode = byId("slideshow-message");
   try {
-    const payload = await api.saveSlideshowDirs(dirs);
+    const payload = await api.saveSlideshowDirs(dirs, videos);
     currentDirs = payload.dirs;
     renderScanState(payload);
     renderDirList();
@@ -72,6 +79,12 @@ async function saveDirs(dirs) {
   } catch (error) {
     showMessage(messageNode, error.message, true);
   }
+}
+
+// Save the video switch on its own — the directory list goes along
+// unchanged, because the backend PUT always replaces the whole list.
+function saveVideos() {
+  saveDirs(currentDirs, byId("slideshow-videos").value);
 }
 
 function addDir() {
@@ -190,4 +203,5 @@ export async function loadSlideshow() {
 export function initSlideshow() {
   byId("btn-slideshow-add").addEventListener("click", addDir);
   byId("btn-slideshow-rescan").addEventListener("click", rescan);
+  byId("btn-slideshow-videos").addEventListener("click", saveVideos);
 }
