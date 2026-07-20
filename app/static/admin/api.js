@@ -25,10 +25,11 @@ export function getSettings() {
   return request("GET", "api/admin/settings");
 }
 
-export function saveSettings(eveningBoundary, defaultView) {
+export function saveSettings(eveningBoundary, defaultView, screensaverDefault) {
   return request("PUT", "api/admin/settings", {
     evening_boundary: eveningBoundary,
     default_view: defaultView,
+    screensaver_default: screensaverDefault,
   });
 }
 

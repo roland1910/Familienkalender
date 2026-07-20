@@ -1,5 +1,6 @@
 // Settings section: evening boundary for the filtered display mode, the
-// default calendar view (month/week) and the device list of the power view.
+// default calendar view (month/week), the screensaver default for devices
+// without their own choice, and the device list of the power view.
 
 import * as api from "./api.js";
 import { byId, showMessage } from "./dom.js";
@@ -9,6 +10,7 @@ export async function loadSettings() {
   const settings = await api.getSettings();
   byId("evening-boundary").value = settings.evening_boundary;
   byId("default-view").value = settings.default_view;
+  byId("screensaver-default").value = settings.screensaver_default;
   byId("power-devices").value = formatDeviceLines(settings.power_devices);
 }
 
@@ -35,7 +37,11 @@ export function initSettings() {
   byId("btn-save-settings").addEventListener("click", async () => {
     const messageNode = byId("settings-message");
     try {
-      await api.saveSettings(byId("evening-boundary").value, byId("default-view").value);
+      await api.saveSettings(
+        byId("evening-boundary").value,
+        byId("default-view").value,
+        byId("screensaver-default").value,
+      );
       showMessage(messageNode, "Gespeichert.");
     } catch (error) {
       showMessage(messageNode, error.message, true);
