@@ -20,7 +20,9 @@ export async function fetchSources() {
 }
 
 export async function fetchConfig() {
-  const response = await fetch("api/config");
+  // Belt and braces to the server-side no-store on /api/*: the kiosk once
+  // answered this request from its heuristic cache with a stale payload.
+  const response = await fetch("api/config", { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Konfiguration laden fehlgeschlagen: HTTP ${response.status}`);
   }

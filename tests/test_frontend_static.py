@@ -52,6 +52,17 @@ def test_js_never_uses_html_injection_sinks() -> None:
             assert sink not in content, f"{path.name} verwendet {sink}"
 
 
+def test_config_fetch_bypasses_the_browser_cache() -> None:
+    """Belt and braces to the server-side no-store (Etappe 30): the
+    /api/config fetch itself asks the browser to skip its cache — the
+    kiosk once served a stale cached /api/config after a deploy."""
+    content = (STATIC_DIR / "js" / "api.js").read_text(encoding="utf-8")
+    assert re.search(
+        r"""fetch\(\s*["']api/config["']\s*,\s*\{\s*cache:\s*["']no-store["']\s*\}\s*\)""",
+        content,
+    ), "api.js: fetchConfig muss { cache: \"no-store\" } setzen"
+
+
 def test_html_pages_have_no_inline_event_handlers() -> None:
     for page in STATIC_DIR.glob("**/*.html"):
         content = page.read_text(encoding="utf-8")
