@@ -46,10 +46,19 @@ MAX_REQUEST_BODY_BYTES = 16 * 1024
 # and after an add-on update the kiosk/ingress iframe keeps running old
 # JS (a hard reload does not reach the iframe). "no-cache" forces
 # revalidation on every request while conditional requests
-# (ETag/Last-Modified -> 304) keep delivery fast. API endpoints are not
-# covered — they set their own policy (e.g. the slideshow image
-# endpoint's private, max-age=60).
+# (ETag/Last-Modified -> 304) keep delivery fast.
 CACHE_CONTROL_REVALIDATE = "no-cache"
+
+# The JSON API must never be cached at all (Etappe 30). Live bug: after
+# the v0.26.0 deploy the kiosk browser answered /api/config from its
+# heuristic cache — an OLD payload without screensaver_default — so the
+# new server default never reached the device. API payloads are small
+# and dynamic; "no-store" (no revalidation dance) is the right policy.
+CACHE_CONTROL_API = "no-store"
+
+# The slideshow image endpoint deliberately keeps its own short-lived
+# caching (private, max-age=60) — photos are large and immutable.
+API_CACHE_EXEMPT_PREFIX = "/api/slideshow/image/"
 
 
 class RevalidatingStaticFiles(StaticFiles):
@@ -60,6 +69,48 @@ class RevalidatingStaticFiles(StaticFiles):
         response = super().file_response(*args, **kwargs)
         response.headers["cache-control"] = CACHE_CONTROL_REVALIDATE
         return response
+
+
+class ApiCacheControlMiddleware:
+    """Stamp Cache-Control: no-store onto every /api/* response.
+
+    See CACHE_CONTROL_API for the rationale. The path is compared after
+    stripping the ASGI root_path — behind HA ingress the path carries the
+    /api/hassio_ingress/<token> prefix (re-added by IngressPathMiddleware),
+    so this middleware must run inside it (added earlier = innermost).
+    The slideshow image endpoint (API_CACHE_EXEMPT_PREFIX) keeps its own
+    policy and is skipped entirely; everything else — including error
+    responses, which would be just as sticky in a cache — gets no-store,
+    overriding any header set further in.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        root_path = scope.get("root_path", "")
+        if root_path and path.startswith(root_path):
+            path = path[len(root_path):]
+        if not path.startswith("/api/") or path.startswith(API_CACHE_EXEMPT_PREFIX):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_no_store(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name.lower() != b"cache-control"
+                ]
+                headers.append((b"cache-control", CACHE_CONTROL_API.encode("latin-1")))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_no_store)
 
 
 def _allowed_client_ips() -> frozenset[str]:
@@ -232,7 +283,9 @@ app.include_router(tags_router)
 app.include_router(power_router)
 app.include_router(slideshow_router)
 app.include_router(slideshow_admin_router)
-# Innermost (added first): runs after allowlist and ingress handling.
+# Innermost (added first): needs the root_path that IngressPathMiddleware
+# sets, so it must run inside it.
+app.add_middleware(ApiCacheControlMiddleware)
 app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(IngressPathMiddleware)
 # Added last so it runs first: nothing is processed for disallowed clients.
