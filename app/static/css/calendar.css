@@ -217,6 +217,14 @@ body {
   border-radius: 0;
 }
 
+/* The standalone icon buttons (theme, screensaver) carry a single emoji —
+   render it at the same size as the mode-switch icons so the symbols stay
+   clearly distinguishable on the kiosk (17px made them squint-alike). */
+#btn-theme,
+#btn-screensaver {
+  font-size: 22px;
+}
+
 .mode-switch .view-button:first-child {
   border-radius: var(--radius) 0 0 var(--radius);
 }
