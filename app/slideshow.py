@@ -46,6 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from app import settings
 from app.auth import require_admin
 from app.storage import get_storage
 
@@ -60,15 +61,30 @@ DEFAULT_MEDIA_ROOT = "/media"
 SLIDESHOW_DIRS_KEY = "slideshow_dirs"
 
 # Recognized image extensions (case-insensitive). Everything else on the
-# share (.mpg videos, #recycle junk, ...) is skipped by the scanner.
+# share (#recycle junk, documents, ...) is skipped by the scanner.
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 
-# Content types for the served extensions.
+# Recognized video extensions — the containers phones actually produce.
+# No transcoding happens anywhere: the file is streamed as-is and the kiosk
+# browser either plays it or reports an error (the frontend then skips on).
+VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".m4v"})
+
+# The two media kinds stored in the index (photos.kind).
+KIND_IMAGE = "image"
+KIND_VIDEO = "video"
+MEDIA_KINDS = (KIND_IMAGE, KIND_VIDEO)
+
+# Content types for the served extensions. This whitelist is what the
+# browser sees; anything not listed falls back to application/octet-stream
+# (which the <img>/<video> layer will simply fail on, never execute).
 _CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
 }
 
 # Upper bound on indexed photos. The real share has ~114k images; this is
@@ -163,8 +179,19 @@ def set_slideshow_dirs(dirs: list[str]) -> None:
     get_storage().set_setting(SLIDESHOW_DIRS_KEY, json.dumps(dirs))
 
 
-def _is_image(name: str) -> bool:
-    return Path(name).suffix.lower() in IMAGE_EXTENSIONS
+def media_kind(name: str) -> str | None:
+    """``"image"``/``"video"`` for a recognized filename, else None.
+
+    The single place the extension whitelists are consulted: the scanner
+    admits a file exactly when this returns a kind, and the kind it returns
+    is what lands in the index (photos.kind).
+    """
+    suffix = Path(name).suffix.lower()
+    if suffix in IMAGE_EXTENSIONS:
+        return KIND_IMAGE
+    if suffix in VIDEO_EXTENSIONS:
+        return KIND_VIDEO
+    return None
 
 
 def _should_skip_dir(name: str) -> bool:
@@ -172,10 +199,15 @@ def _should_skip_dir(name: str) -> bool:
     return name.startswith(".") or name in _SKIP_DIR_NAMES
 
 
-def iter_images(
+def iter_media(
     roots: list[str], *, limit: int = MAX_INDEXED_PHOTOS
-) -> Iterator[tuple[str, float]]:
-    """Yield (path, mtime) for every image below ``roots``, up to ``limit``.
+) -> Iterator[tuple[str, float, str]]:
+    """Yield (path, mtime, kind) for every medium below ``roots``, up to ``limit``.
+
+    Images *and* videos are always indexed, regardless of the
+    ``slideshow_videos`` switch: that switch only governs what
+    ``/api/slideshow/next`` hands out. Making the index depend on it would
+    mean re-walking the whole share (~114k files) on every toggle.
 
     Recursive, iterative (an explicit stack, no recursion depth limit).
     Symlinked directories are not descended into (loop/escape guard).
@@ -185,7 +217,7 @@ def iter_images(
 
     Order note: the explicit stack makes this LIFO, i.e. a depth-first walk
     with no defined ordering across siblings. That is irrelevant for a full
-    scan, but near the ``limit`` (MAX_INDEXED_PHOTOS) it means *which* images
+    scan, but near the ``limit`` (MAX_INDEXED_PHOTOS) it means *which* files
     get indexed is arbitrary — the walk stops at the cap wherever it happens
     to be, not at a stable, predictable subset. Acceptable here: the cap is a
     runaway guard, not a curation feature, and the rotation picks at random
@@ -207,9 +239,12 @@ def iter_images(
                 if entry.is_dir(follow_symlinks=False):
                     if not _should_skip_dir(entry.name):
                         stack.append(entry.path)
-                elif entry.is_file(follow_symlinks=False) and _is_image(entry.name):
-                    yield entry.path, entry.stat(follow_symlinks=False).st_mtime
-                    yielded += 1
+                elif entry.is_file(follow_symlinks=False):
+                    kind = media_kind(entry.name)
+                    if kind is not None:
+                        stat = entry.stat(follow_symlinks=False)
+                        yield entry.path, stat.st_mtime, kind
+                        yielded += 1
             except OSError as exc:
                 # A single entry that vanished or is unreadable — skip it,
                 # keep scanning the rest of the directory.
@@ -290,7 +325,7 @@ def _scan_sync() -> ScanResult:
         )
         return ScanResult(storage.count_photos(), len(unavailable), True)
 
-    photos = list(iter_images(available))
+    photos = list(iter_media(available))
     if unavailable:
         logger.warning(
             "Slideshow scan: %d of %d directories unreachable — keeping their"
@@ -674,25 +709,43 @@ def photo_taken_at(path: str, root: str | None = None) -> TakenAt | None:
 # -- public slideshow API ----------------------------------------------------
 
 
+def enabled_media_kinds() -> tuple[str, ...]:
+    """The media kinds the slideshow may currently hand out.
+
+    Images always; videos only while the ``slideshow_videos`` setting is
+    "on". Videos stay in the index either way — this is purely a delivery
+    filter (see iter_media).
+    """
+    if settings.get_slideshow_videos(get_storage()) == "on":
+        return MEDIA_KINDS
+    return (KIND_IMAGE,)
+
+
 @router.get("/next")
 async def next_photo() -> dict:
-    """A random not-yet-shown photo ``{id, name, taken, folders}``.
+    """A random not-yet-shown medium ``{id, name, kind, taken, folders}``.
 
-    404 when the index is empty. Marks the returned photo as shown
-    (rotation with memory, see storage.pick_next_photo); when every photo
-    has been shown the cycle resets automatically. ``taken`` is the
-    (possibly partial) taken-at moment resolved at serve time (EXIF >
-    filename > year folder) or null; the extraction reads the file, so it
-    runs off the event loop. ``folders`` lists the photo's directory
-    segments below the media root. The stored path itself is never exposed.
+    404 when no eligible medium is indexed. Marks the returned item as shown
+    (rotation with memory, see storage.pick_next_photo); when everything
+    eligible has been shown the cycle resets automatically — videos that are
+    switched off are excluded from both the pick and the reset, so they can
+    never stall the rotation. ``kind`` tells the frontend whether to render
+    an image or a video layer. ``taken`` is the (possibly partial) taken-at
+    moment resolved at serve time (EXIF > filename > year folder) or null;
+    the extraction reads the file, so it runs off the event loop. For videos
+    only the filename/folder steps can contribute (EXIF is JPEG-only), which
+    is exactly what phone video names carry. ``folders`` lists the item's
+    directory segments below the media root. The stored path itself is never
+    exposed.
     """
-    picked = get_storage().pick_next_photo()
+    picked = get_storage().pick_next_photo(kinds=enabled_media_kinds())
     if picked is None:
         raise HTTPException(status_code=404, detail="Keine Fotos im Index.")
     taken = await asyncio.to_thread(photo_taken_at, picked["path"])
     return {
         "id": picked["id"],
         "name": picked["name"],
+        "kind": picked["kind"],
         "taken": taken.as_dict() if taken is not None else None,
         "folders": photo_folders(picked["path"]),
     }
@@ -712,7 +765,7 @@ def _path_is_below_media_root(path: str) -> bool:
 
 @router.get("/image/{photo_id}")
 async def photo_image(photo_id: int) -> FileResponse:
-    """Stream the image with the given DB id.
+    """Stream the image or video with the given DB id.
 
     Access is by id only — never a client path. A 404 (and index cleanup)
     if the id is unknown or the file vanished since the scan. The stored
@@ -742,7 +795,14 @@ async def photo_image(photo_id: int) -> FileResponse:
     media_type = _CONTENT_TYPES.get(
         Path(path).suffix.lower(), "application/octet-stream"
     )
-    # Short private cache: the same image is requested once per rotation
+    # Range/partial requests come for free: Starlette's FileResponse (>= 0.45,
+    # pinned at 1.3.1) advertises ``Accept-Ranges: bytes``, answers a Range
+    # header with 206 + Content-Range and an unsatisfiable one with 416. That
+    # matters for videos — browsers seek and probe with byte ranges, and a
+    # server that ignored them would make playback stall or force a full
+    # download. Verified by tests/test_slideshow.py::TestRangeRequests so a
+    # future dependency bump cannot silently drop it.
+    # Short private cache: the same file is requested once per rotation
     # step and may be preloaded, but must not be cached long behind ingress.
     return FileResponse(
         path,
@@ -756,10 +816,13 @@ async def photo_image(photo_id: int) -> FileResponse:
 
 class SlideshowDirsUpdate(BaseModel):
     dirs: list[str] = Field(max_length=MAX_SLIDESHOW_DIRS)
+    # "on"/"off"; omitted (None) leaves the current value untouched, so the
+    # directory buttons and the video toggle can save independently.
+    videos: str | None = None
 
 
 def _slideshow_payload() -> dict:
-    """Directories, indexed count and the last scan's availability state.
+    """Directories, indexed count, video switch and the last scan's state.
 
     ``unavailable_dirs``/``scan_skipped`` let the admin UI explain a stale or
     unchanged count ("share not mounted?") — plain counters/flags, no paths
@@ -770,6 +833,7 @@ def _slideshow_payload() -> dict:
         "dirs": get_slideshow_dirs(),
         "photo_count": get_storage().count_photos(),
         "media_root": media_root(),
+        "videos": settings.get_slideshow_videos(get_storage()),
         "unavailable_dirs": status["unavailable_dirs"],
         "scan_skipped": status["skipped"],
     }
@@ -789,7 +853,16 @@ async def update_slideshow(update: SlideshowDirsUpdate) -> dict:
     (400, German message, with the offending path). Duplicates are
     collapsed. The rescan runs after saving so the returned photo count
     already reflects the new directories.
+
+    ``videos`` ("on"/"off", optional) switches video playback; anything else
+    is a 400. It needs no rescan — videos are always indexed.
     """
+    if update.videos is not None and not settings.is_valid_slideshow_videos(
+        update.videos
+    ):
+        raise HTTPException(
+            status_code=400, detail="Ungültige Einstellung für Videos."
+        )
     normalized: list[str] = []
     seen: set[str] = set()
     for raw in update.dirs:
@@ -803,6 +876,8 @@ async def update_slideshow(update: SlideshowDirsUpdate) -> dict:
             seen.add(path)
             normalized.append(path)
     set_slideshow_dirs(normalized)
+    if update.videos is not None:
+        settings.set_slideshow_videos(get_storage(), update.videos)
     await scan_photos()
     return _slideshow_payload()
 

@@ -13,7 +13,7 @@ column decides how to decode.
 import json
 import os
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from functools import cache
@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS photos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path TEXT NOT NULL UNIQUE,
     mtime REAL NOT NULL,
-    shown INTEGER NOT NULL DEFAULT 0
+    shown INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'image'
 );
 CREATE TABLE IF NOT EXISTS busy_blocks (
     source_key TEXT PRIMARY KEY,
@@ -225,6 +226,16 @@ class Storage:
             conn.execute(
                 "ALTER TABLE sources ADD COLUMN feed_priority"
                 " INTEGER NOT NULL DEFAULT 0"
+            )
+
+        photo_columns = {row["name"] for row in conn.execute("PRAGMA table_info(photos)")}
+        if "kind" not in photo_columns:
+            # Etappe 33: the index now also holds videos. Every row written
+            # before this column existed came from an image-only scan, so the
+            # DEFAULT 'image' backfills them correctly — no data migration
+            # beyond the ALTER is needed.
+            conn.execute(
+                "ALTER TABLE photos ADD COLUMN kind TEXT NOT NULL DEFAULT 'image'"
             )
 
     def _ensure_private_db_file(self) -> None:
@@ -463,8 +474,16 @@ class Storage:
 
     # -- photos (slideshow) ----------------------------------------------
 
-    def replace_photos(self, photos: list[tuple[str, float]]) -> int:
-        """Replace the photo index with the given (path, mtime) pairs.
+    def replace_photos(self, photos: list[tuple[str, float, str]]) -> int:
+        """Replace the media index with the given (path, mtime, kind) triples.
+
+        ``kind`` is ``"image"`` or ``"video"`` (see slideshow.MEDIA_KINDS).
+        It is stored as its own column rather than derived from the file
+        extension at query time: the rotation has to filter by kind in SQL
+        (videos are only served when the admin switched them on), and a
+        LIKE-chain over the extension whitelist would duplicate that list
+        in SQL and defeat any index. The kind is decided exactly once, by
+        the same whitelist that admitted the file during the scan.
 
         Called after a filesystem scan. Rebuilds the table wholesale in a
         single transaction: paths that vanished disappear, new ones are
@@ -476,22 +495,23 @@ class Storage:
         with self._connect() as conn:
             conn.execute("DELETE FROM photos")
             conn.executemany(
-                "INSERT OR IGNORE INTO photos (path, mtime, shown) VALUES (?, ?, 0)",
+                "INSERT OR IGNORE INTO photos (path, mtime, kind, shown)"
+                " VALUES (?, ?, ?, 0)",
                 photos,
             )
             row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()
         return int(row["n"])
 
-    def list_photo_entries(self) -> list[tuple[str, float]]:
-        """Every indexed photo as a (path, mtime) pair.
+    def list_photo_entries(self) -> list[tuple[str, float, str]]:
+        """Every indexed medium as a (path, mtime, kind) triple.
 
         Used by the scan to carry entries of *currently unavailable*
         directories over into the rebuilt index (see slideshow._scan_sync):
         an unmounted share must not silently shrink the index.
         """
         with self._connect() as conn:
-            rows = conn.execute("SELECT path, mtime FROM photos").fetchall()
-        return [(row["path"], float(row["mtime"])) for row in rows]
+            rows = conn.execute("SELECT path, mtime, kind FROM photos").fetchall()
+        return [(row["path"], float(row["mtime"]), row["kind"]) for row in rows]
 
     def count_photos(self) -> int:
         with self._connect() as conn:
@@ -511,26 +531,45 @@ class Storage:
         with self._connect() as conn:
             conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
 
-    def pick_next_photo(self, rng_random: Callable[[], float] | None = None) -> dict | None:
-        """Pick a random not-yet-shown photo, mark it shown, return it.
+    def pick_next_photo(
+        self,
+        rng_random: Callable[[], float] | None = None,
+        kinds: Sequence[str] = ("image", "video"),
+    ) -> dict | None:
+        """Pick a random not-yet-shown medium, mark it shown, return it.
 
-        Rotation with memory: only photos with ``shown = 0`` are eligible.
-        When none are left the whole index is reset to ``shown = 0`` and a
-        pick is retried once — one full pass through all photos before any
-        repeats, surviving restarts because the state lives in the DB.
+        Rotation with memory: only rows with ``shown = 0`` are eligible.
+        When none are left the rotation state is reset and a pick is retried
+        once — one full pass before any repeats, surviving restarts because
+        the state lives in the DB.
+
+        ``kinds`` restricts both the pick *and* the reset to the currently
+        eligible media kinds. That is what keeps the rotation correct while
+        videos are switched off: the ineligible rows are simply invisible,
+        so "everything has been shown" is decided over the images alone and
+        the cycle never stalls waiting for a video that can never be picked.
+        Resetting only the eligible kinds also means switching videos back on
+        does not replay the images that were just shown.
 
         ``rng_random`` is an injectable ``random.random``-style callable
         (returns a float in [0, 1)) so tests get deterministic ordering;
         production passes ``None`` and SQLite's own ``RANDOM()`` is used.
-        Returns ``{"id", "name", "path"}`` (name = basename for display,
-        path = stored filesystem path for server-side metadata lookups —
-        the API layer must never expose it) or None when the index is empty.
+        Returns ``{"id", "name", "path", "kind"}`` (name = basename for
+        display, path = stored filesystem path for server-side metadata
+        lookups — the API layer must never expose it) or None when no
+        eligible medium is indexed.
         """
+        if not kinds:
+            return None
         with self._connect() as conn:
-            row = self._pick_unshown(conn, rng_random)
+            row = self._pick_unshown(conn, rng_random, kinds)
             if row is None:
-                conn.execute("UPDATE photos SET shown = 0")
-                row = self._pick_unshown(conn, rng_random)
+                placeholders = ",".join("?" for _ in kinds)
+                conn.execute(
+                    f"UPDATE photos SET shown = 0 WHERE kind IN ({placeholders})",
+                    tuple(kinds),
+                )
+                row = self._pick_unshown(conn, rng_random, kinds)
             if row is None:
                 return None
             conn.execute("UPDATE photos SET shown = 1 WHERE id = ?", (row["id"],))
@@ -538,19 +577,26 @@ class Storage:
                 "id": row["id"],
                 "name": Path(row["path"]).name,
                 "path": row["path"],
+                "kind": row["kind"],
             }
 
     @staticmethod
     def _pick_unshown(
-        conn: sqlite3.Connection, rng_random: Callable[[], float] | None
+        conn: sqlite3.Connection,
+        rng_random: Callable[[], float] | None,
+        kinds: Sequence[str],
     ) -> sqlite3.Row | None:
-        """One random unshown photo row, or None if all are shown."""
+        """One random unshown row of an eligible kind, or None if all shown."""
+        placeholders = ",".join("?" for _ in kinds)
+        where = f"WHERE shown = 0 AND kind IN ({placeholders})"
+        params = tuple(kinds)
         if rng_random is None:
             return conn.execute(
-                "SELECT id, path FROM photos WHERE shown = 0 ORDER BY RANDOM() LIMIT 1"
+                f"SELECT id, path, kind FROM photos {where} ORDER BY RANDOM() LIMIT 1",
+                params,
             ).fetchone()
         rows = conn.execute(
-            "SELECT id, path FROM photos WHERE shown = 0 ORDER BY id"
+            f"SELECT id, path, kind FROM photos {where} ORDER BY id", params
         ).fetchall()
         if not rows:
             return None

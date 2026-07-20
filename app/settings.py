@@ -51,6 +51,13 @@ DEFAULT_VIEW_KEY = "default_view"
 # Roland wants the screensaver armed there without a manual tap.
 SCREENSAVER_DEFAULT_KEY = "screensaver_default"
 
+# Whether the slideshow also plays the videos in the index ("on"/"off").
+# Videos are ALWAYS indexed (re-walking ~114k files on every toggle would be
+# absurd); this switch only decides whether /api/slideshow/next is allowed to
+# hand one out. Default "off": decoding phone videos off the CIFS share can
+# stutter on the Pi, so Roland turns it on deliberately.
+SLIDESHOW_VIDEOS_KEY = "slideshow_videos"
+
 # The calendar views the frontend knows; mirrors VIEWS in
 # app/static/js/view-memory.js.
 CALENDAR_VIEWS = ("month", "week")
@@ -60,6 +67,10 @@ FALLBACK_VIEW = "month"
 # app/static/js/screensaver-memory.js.
 SCREENSAVER_DEFAULTS = ("on", "off")
 FALLBACK_SCREENSAVER_DEFAULT = "off"
+
+# Slideshow video playback states and the conservative default.
+SLIDESHOW_VIDEO_STATES = ("on", "off")
+FALLBACK_SLIDESHOW_VIDEOS = "off"
 
 # DNS limits: 253 chars total, labels of 1-63 chars, letters/digits/
 # hyphens, no leading/trailing hyphen. Also matches plain IPv4 literals.
@@ -170,6 +181,30 @@ def get_screensaver_default(storage: Storage) -> str:
 def set_screensaver_default(storage: Storage, value: str) -> None:
     """Persist the screensaver default (validation happens in the API layer)."""
     storage.set_setting(SCREENSAVER_DEFAULT_KEY, value)
+
+
+def is_valid_slideshow_videos(value: str) -> bool:
+    """Whether value is a known slideshow video state ("on"/"off")."""
+    return value in SLIDESHOW_VIDEO_STATES
+
+
+def get_slideshow_videos(storage: Storage) -> str:
+    """The configured slideshow video state; anything invalid yields "off".
+
+    Re-validated on read (defense in depth): a value written by another path
+    must never start handing out videos the admin did not ask for.
+    """
+    raw = storage.get_setting(SLIDESHOW_VIDEOS_KEY)
+    if raw and is_valid_slideshow_videos(raw):
+        return raw
+    if raw:
+        logger.warning("Ignoring invalid stored slideshow video state: %r", raw)
+    return FALLBACK_SLIDESHOW_VIDEOS
+
+
+def set_slideshow_videos(storage: Storage, value: str) -> None:
+    """Persist the slideshow video state (validation happens in the API layer)."""
+    storage.set_setting(SLIDESHOW_VIDEOS_KEY, value)
 
 
 def get_feed_token(storage: Storage) -> str | None:

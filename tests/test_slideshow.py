@@ -166,29 +166,44 @@ class TestNormalizeMediaDir:
             slideshow.normalize_media_dir(str(link))
 
 
-class TestIterImages:
-    def test_finds_images_recursively_and_skips_non_images(self, media_root: Path) -> None:
+class TestIterMedia:
+    def test_finds_images_recursively_and_skips_unknown_types(self, media_root: Path) -> None:
         _make_image(media_root / "a.jpg")
         _make_image(media_root / "sub" / "b.JPEG")
         _make_image(media_root / "sub" / "deep" / "c.png")
         _make_image(media_root / "d.webp")
-        (media_root / "movie.mpg").write_bytes(b"not an image")
+        (media_root / "movie.mpg").write_bytes(b"unsupported container")
         (media_root / "notes.txt").write_text("hi")
-        found = {Path(p).name for p, _ in slideshow.iter_images([str(media_root)])}
+        found = {Path(p).name for p, _, _ in slideshow.iter_media([str(media_root)])}
         assert found == {"a.jpg", "b.JPEG", "c.png", "d.webp"}
+
+    def test_indexes_videos_with_their_kind(self, media_root: Path) -> None:
+        """Videos are always indexed — the slideshow_videos switch only
+        governs delivery, so toggling it never needs a full rescan."""
+        _make_image(media_root / "a.jpg")
+        _make_image(media_root / "clip.mp4")
+        _make_image(media_root / "sub" / "urlaub.MOV")
+        _make_image(media_root / "old.m4v")
+        found = {Path(p).name: kind for p, _, kind in slideshow.iter_media([str(media_root)])}
+        assert found == {
+            "a.jpg": "image",
+            "clip.mp4": "video",
+            "urlaub.MOV": "video",
+            "old.m4v": "video",
+        }
 
     def test_skips_recycle_and_hidden_directories(self, media_root: Path) -> None:
         _make_image(media_root / "keep.jpg")
         _make_image(media_root / "#recycle" / "trash.jpg")
         _make_image(media_root / ".hidden" / "secret.jpg")
         _make_image(media_root / "@eaDir" / "thumb.jpg")
-        found = {Path(p).name for p, _ in slideshow.iter_images([str(media_root)])}
+        found = {Path(p).name for p, _, _ in slideshow.iter_media([str(media_root)])}
         assert found == {"keep.jpg"}
 
     def test_respects_the_limit(self, media_root: Path) -> None:
         for i in range(5):
             _make_image(media_root / f"img{i}.jpg")
-        found = list(slideshow.iter_images([str(media_root)], limit=3))
+        found = list(slideshow.iter_media([str(media_root)], limit=3))
         assert len(found) == 3
 
     @pytest.mark.skipif(
@@ -202,13 +217,29 @@ class TestIterImages:
             (media_root / "link").symlink_to(outside, target_is_directory=True)
         except OSError:
             pytest.skip("symlink creation not permitted on this platform")
-        found = {Path(p).name for p, _ in slideshow.iter_images([str(media_root)])}
+        found = {Path(p).name for p, _, _ in slideshow.iter_media([str(media_root)])}
         assert found == {"real.jpg"}
+
+
+class TestMediaKind:
+    @pytest.mark.parametrize("name", ["a.jpg", "a.JPEG", "a.png", "a.WEBP"])
+    def test_image_extensions(self, name: str) -> None:
+        assert slideshow.media_kind(name) == "image"
+
+    @pytest.mark.parametrize("name", ["a.mp4", "a.MOV", "a.m4v"])
+    def test_video_extensions(self, name: str) -> None:
+        assert slideshow.media_kind(name) == "video"
+
+    @pytest.mark.parametrize("name", ["a.mpg", "a.avi", "a.txt", "a", "a.mp4.exe"])
+    def test_unknown_extensions(self, name: str) -> None:
+        assert slideshow.media_kind(name) is None
 
 
 class TestRotation:
     def test_pick_marks_shown_and_resets_when_all_shown(self, storage: Storage) -> None:
-        storage.replace_photos([("/media/a.jpg", 1.0), ("/media/b.jpg", 2.0)])
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
         # A deterministic rng: always pick the first eligible row.
         seq = iter([0.0, 0.0, 0.0, 0.0])
         rng = lambda: next(seq)  # noqa: E731
@@ -224,12 +255,89 @@ class TestRotation:
         assert storage.pick_next_photo() is None
 
     def test_replace_photos_resets_shown(self, storage: Storage) -> None:
-        storage.replace_photos([("/media/a.jpg", 1.0)])
+        storage.replace_photos([("/media/a.jpg", 1.0, "image")])
         storage.pick_next_photo()  # marks a.jpg shown
-        storage.replace_photos([("/media/a.jpg", 1.0), ("/media/b.jpg", 2.0)])
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
         # After a rescan both are unshown again → two distinct picks.
         names = {storage.pick_next_photo()["name"], storage.pick_next_photo()["name"]}
         assert names == {"a.jpg", "b.jpg"}
+
+    def test_pick_reports_the_kind(self, storage: Storage) -> None:
+        storage.replace_photos([("/media/clip.mp4", 1.0, "video")])
+        assert storage.pick_next_photo()["kind"] == "video"
+
+    def test_images_only_never_picks_a_video(self, storage: Storage) -> None:
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/clip.mp4", 2.0, "video")]
+        )
+        picked = [storage.pick_next_photo(kinds=("image",))["name"] for _ in range(6)]
+        assert set(picked) == {"a.jpg"}
+
+    def test_images_only_rotation_does_not_stall_on_videos(self, storage: Storage) -> None:
+        """The reset must key on the *eligible* kinds only: with videos off,
+        the never-pickable video rows must not keep the cycle from resetting."""
+        storage.replace_photos(
+            [
+                ("/media/a.jpg", 1.0, "image"),
+                ("/media/b.jpg", 2.0, "image"),
+                ("/media/clip.mp4", 3.0, "video"),
+            ]
+        )
+        names = [
+            storage.pick_next_photo(kinds=("image",))["name"] for _ in range(10)
+        ]
+        assert set(names) == {"a.jpg", "b.jpg"}
+        # Ten picks over two images means the cycle reset repeatedly.
+        assert names.count("a.jpg") == 5
+
+    def test_both_kinds_eligible_hands_out_both(self, storage: Storage) -> None:
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/clip.mp4", 2.0, "video")]
+        )
+        kinds = {storage.pick_next_photo()["kind"] for _ in range(4)}
+        assert kinds == {"image", "video"}
+
+    def test_turning_videos_on_does_not_replay_just_shown_images(
+        self, storage: Storage
+    ) -> None:
+        """Resetting only the eligible kinds keeps the images-only cycle
+        intact when videos come back: the untouched video row is picked
+        first, not an image that was shown moments ago."""
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/clip.mp4", 2.0, "video")]
+        )
+        storage.pick_next_photo(kinds=("image",))  # a.jpg shown, video untouched
+        assert storage.pick_next_photo()["name"] == "clip.mp4"
+
+    def test_empty_kinds_yields_nothing(self, storage: Storage) -> None:
+        storage.replace_photos([("/media/a.jpg", 1.0, "image")])
+        assert storage.pick_next_photo(kinds=()) is None
+
+    def test_rows_from_an_older_schema_count_as_images(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The additive migration backfills kind='image' — correct, because
+        before Etappe 33 only images were ever indexed."""
+        import sqlite3
+
+        monkeypatch.setenv("DATA_DIR", str(tmp_path / "legacy"))
+        db_path = default_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE photos (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " path TEXT NOT NULL UNIQUE, mtime REAL NOT NULL,"
+                " shown INTEGER NOT NULL DEFAULT 0)"
+            )
+            conn.execute("INSERT INTO photos (path, mtime) VALUES ('/media/old.jpg', 1.0)")
+        legacy = Storage(db_path)
+        picked = legacy.pick_next_photo(kinds=("image",))
+        assert picked is not None
+        assert picked["kind"] == "image"
+        # Idempotent: opening the same DB again must not fail on the ALTER.
+        assert Storage(db_path).count_photos() == 1
 
 
 class TestAdminApi:
@@ -744,7 +852,7 @@ class TestNextPhotoTakenField:
         _make_image(media_root / "Bilder" / "photo.jpg")
         client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Bilder")]})
         payload = client.get("/api/slideshow/next").json()
-        assert set(payload.keys()) == {"id", "name", "taken", "folders"}
+        assert set(payload.keys()) == {"id", "name", "kind", "taken", "folders"}
 
 
 class TestPhotoFolders:
@@ -785,3 +893,218 @@ class TestPhotoFolders:
         client.put("/api/admin/slideshow", json={"dirs": [str(media_root)]})
         payload = client.get("/api/slideshow/next").json()
         assert payload["folders"] == []
+
+
+class TestVideoDelivery:
+    """The slideshow_videos switch governs delivery only — never the index."""
+
+    def _album_with_both(self, client: TestClient, media_root: Path) -> Path:
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        _make_image(album / "clip.mp4")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        return album
+
+    def test_videos_are_indexed_even_while_switched_off(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        self._album_with_both(client, media_root)
+        payload = client.get("/api/admin/slideshow").json()
+        assert payload["videos"] == "off"  # conservative default
+        assert payload["photo_count"] == 2  # ...but both are in the index
+
+    def test_off_never_hands_out_a_video(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        self._album_with_both(client, media_root)
+        seen = [client.get("/api/slideshow/next").json() for _ in range(8)]
+        assert {item["name"] for item in seen} == {"a.jpg"}
+        assert {item["kind"] for item in seen} == {"image"}
+
+    def test_off_with_only_videos_indexed_is_404(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = media_root / "Filme"
+        _make_image(album / "clip.mp4")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 1
+        assert client.get("/api/slideshow/next").status_code == 404
+
+    def test_on_hands_out_both_kinds(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = self._album_with_both(client, media_root)
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)], "videos": "on"})
+        seen = {client.get("/api/slideshow/next").json()["kind"] for _ in range(6)}
+        assert seen == {"image", "video"}
+
+    def test_switching_videos_on_keeps_the_index(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = self._album_with_both(client, media_root)
+        payload = client.put(
+            "/api/admin/slideshow", json={"dirs": [str(album)], "videos": "on"}
+        ).json()
+        assert payload["videos"] == "on"
+        assert payload["photo_count"] == 2
+
+    def test_taken_at_from_a_video_filename(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = media_root / "Album"
+        _make_image(album / "VID_20190816_173005.mp4")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)], "videos": "on"})
+        payload = client.get("/api/slideshow/next").json()
+        assert payload["kind"] == "video"
+        assert payload["taken"] == {
+            "year": 2019,
+            "month": 8,
+            "day": 16,
+            "hour": 17,
+            "minute": 30,
+        }
+
+
+class TestVideoAdminApi:
+    def test_put_stores_the_video_switch(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        response = client.put("/api/admin/slideshow", json={"dirs": [], "videos": "on"})
+        assert response.status_code == 200
+        assert response.json()["videos"] == "on"
+        assert client.get("/api/admin/slideshow").json()["videos"] == "on"
+
+    def test_put_without_videos_leaves_it_untouched(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        client.put("/api/admin/slideshow", json={"dirs": [], "videos": "on"})
+        client.put("/api/admin/slideshow", json={"dirs": []})
+        assert client.get("/api/admin/slideshow").json()["videos"] == "on"
+
+    @pytest.mark.parametrize("value", ["yes", "ON", "1", "", "vielleicht"])
+    def test_put_rejects_an_invalid_video_value(
+        self, client: TestClient, media_root: Path, value: str
+    ) -> None:
+        response = client.put("/api/admin/slideshow", json={"dirs": [], "videos": value})
+        assert response.status_code == 400
+
+    def test_invalid_video_value_does_not_change_the_dirs(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        client.put("/api/admin/slideshow", json={"dirs": [], "videos": "kaputt"})
+        assert client.get("/api/admin/slideshow").json()["dirs"] == [str(album)]
+
+    def test_invalid_stored_value_falls_back_to_off(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # Defense in depth: a value smuggled in by another write path must
+        # not start handing out videos.
+        Storage(default_db_path()).set_setting("slideshow_videos", "ja")
+        assert client.get("/api/admin/slideshow").json()["videos"] == "off"
+
+
+class TestContentTypes:
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("a.jpg", "image/jpeg"),
+            ("a.jpeg", "image/jpeg"),
+            ("a.png", "image/png"),
+            ("a.webp", "image/webp"),
+            ("a.mp4", "video/mp4"),
+            ("a.m4v", "video/mp4"),
+            ("a.mov", "video/quicktime"),
+        ],
+    )
+    def test_content_type_per_extension(
+        self, client: TestClient, media_root: Path, name: str, expected: str
+    ) -> None:
+        album = media_root / "Album"
+        _make_image(album / name)
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)], "videos": "on"})
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        response = client.get(f"/api/slideshow/image/{photo_id}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == expected
+
+
+class TestRangeRequests:
+    """Byte-range support on the media endpoint.
+
+    Starlette's FileResponse implements this; the tests pin the behaviour so
+    a dependency bump cannot silently drop it. Without ranges a browser
+    seeking in a video would stall or be forced to download the whole file.
+    """
+
+    BODY = b"0123456789abcdef"
+
+    @pytest.fixture
+    def video_id(self, client: TestClient, media_root: Path) -> int:
+        album = media_root / "Album"
+        album.mkdir(parents=True, exist_ok=True)
+        (album / "clip.mp4").write_bytes(self.BODY)
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)], "videos": "on"})
+        return client.get("/api/slideshow/next").json()["id"]
+
+    def test_full_request_advertises_range_support(
+        self, client: TestClient, video_id: int
+    ) -> None:
+        response = client.get(f"/api/slideshow/image/{video_id}")
+        assert response.status_code == 200
+        assert response.headers["accept-ranges"] == "bytes"
+        assert response.content == self.BODY
+
+    def test_partial_request_returns_206_and_the_exact_bytes(
+        self, client: TestClient, video_id: int
+    ) -> None:
+        response = client.get(
+            f"/api/slideshow/image/{video_id}", headers={"Range": "bytes=4-7"}
+        )
+        assert response.status_code == 206
+        assert response.content == b"4567"
+        assert response.headers["content-range"] == f"bytes 4-7/{len(self.BODY)}"
+        assert response.headers["content-length"] == "4"
+
+    def test_open_ended_range_runs_to_the_end(
+        self, client: TestClient, video_id: int
+    ) -> None:
+        response = client.get(
+            f"/api/slideshow/image/{video_id}", headers={"Range": "bytes=10-"}
+        )
+        assert response.status_code == 206
+        assert response.content == self.BODY[10:]
+
+    def test_suffix_range_returns_the_tail(
+        self, client: TestClient, video_id: int
+    ) -> None:
+        response = client.get(
+            f"/api/slideshow/image/{video_id}", headers={"Range": "bytes=-4"}
+        )
+        assert response.status_code == 206
+        assert response.content == self.BODY[-4:]
+
+    def test_range_beyond_the_file_is_416(
+        self, client: TestClient, video_id: int
+    ) -> None:
+        response = client.get(
+            f"/api/slideshow/image/{video_id}", headers={"Range": "bytes=999-1200"}
+        )
+        assert response.status_code == 416
+        assert response.headers["content-range"] == f"bytes */{len(self.BODY)}"
+
+    def test_images_support_ranges_too(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = media_root / "Album"
+        album.mkdir(parents=True, exist_ok=True)
+        (album / "a.jpg").write_bytes(self.BODY)
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        response = client.get(
+            f"/api/slideshow/image/{photo_id}", headers={"Range": "bytes=0-3"}
+        )
+        assert response.status_code == 206
+        assert response.content == b"0123"
