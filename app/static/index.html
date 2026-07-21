@@ -29,30 +29,60 @@
     <h1 id="period-title" class="period-title">Familienkalender</h1>
     <div class="toolbar-right">
       <span id="status-badge" class="status-badge" hidden>Daten nicht aktuell</span>
+      <!-- Zeitraum INNERHALB des Kalenders — bewusst eine eigene Gruppe,
+           optisch getrennt vom Ansichts-Umschalter daneben (Etappe 36). -->
       <div class="view-switch">
-        <button id="btn-month" class="view-button active" type="button">Monat</button>
-        <button id="btn-week" class="view-button" type="button">Woche</button>
+        <button id="btn-month" class="view-button active" type="button"
+                aria-pressed="true">Monat</button>
+        <button id="btn-week" class="view-button" type="button"
+                aria-pressed="false">Woche</button>
       </div>
+      <span class="toolbar-divider" aria-hidden="true"></span>
       <div id="mode-slot" class="mode-slot">
+        <!-- Ansichts-Umschalter: Auswahl, deshalb Symbol UND Beschriftung,
+             der aktive Eintrag deutlich hervorgehoben. Die Symbole tragen
+             aria-hidden, damit der Name der Schaltfläche der deutsche Text
+             ist (und nicht das vorgelesene Emoji). Kein role="group" — der
+             Biome-Lint verlangt dafür ein <fieldset>, und die Gruppierung
+             ist hier rein optisch; jede Schaltfläche benennt sich selbst. -->
         <div class="mode-switch">
-          <button id="btn-mode-calendar" class="view-button active" type="button"
-                  aria-label="Kalender" title="Kalender">&#128197;</button>
-          <button id="btn-mode-power" class="view-button" type="button"
-                  aria-label="Strom" title="Strom">&#9889;</button>
-          <button id="btn-mode-weather" class="view-button" type="button"
-                  aria-label="Wetter" title="Wetter">&#127782;&#65039;</button>
+          <button id="btn-mode-calendar" class="mode-button active" type="button"
+                  aria-pressed="true" title="Kalender">
+            <span class="btn-icon" aria-hidden="true">&#128197;</span>
+            <span class="btn-label">Kalender</span>
+          </button>
+          <button id="btn-mode-power" class="mode-button" type="button"
+                  aria-pressed="false" title="Strom">
+            <span class="btn-icon" aria-hidden="true">&#9889;</span>
+            <span class="btn-label">Strom</span>
+          </button>
+          <button id="btn-mode-weather" class="mode-button" type="button"
+                  aria-pressed="false" title="Wetter">
+            <span class="btn-icon" aria-hidden="true">&#127782;&#65039;</span>
+            <span class="btn-label">Wetter</span>
+          </button>
         </div>
         <!-- Theme-Umschalter (pro Gerät, localStorage): zyklisch
-             Auto -> Hell -> Dunkel. Auto folgt dem System-/HA-Theme. -->
-        <button id="btn-theme" class="view-button" type="button"
-                aria-label="Farbschema umschalten" title="Farbschema: automatisch"></button>
+             Auto -> Hell -> Dunkel. Auto folgt dem System-/HA-Theme.
+             Dreistufig, deshalb reicht grau/farbig nicht — der Zustand
+             steht als Wort daneben (main.js füllt beide Spans). -->
+        <button id="btn-theme" class="icon-button" type="button"
+                aria-label="Farbschema umschalten" title="Farbschema: automatisch">
+          <span class="btn-icon" aria-hidden="true"></span>
+          <span class="btn-label"></span>
+        </button>
         <!-- Bildschirmschoner-Umschalter (pro Gerät, localStorage). Wenn
              aktiv, startet nach Leerlauf die Foto-Diashow. Symbol bewusst
              Bilderrahmen (nicht Kamera): die Kamera sah dem Kalender-Symbol
-             des Ansichts-Umschalters am Kiosk zum Verwechseln ähnlich. -->
-        <button id="btn-screensaver" class="view-button" type="button"
+             des Ansichts-Umschalters am Kiosk zum Verwechseln ähnlich.
+             Als reiner Schalter zeigt er seinen Zustand über die Farbe:
+             ausgegraut = aus, farbig = an (Etappe 36). -->
+        <button id="btn-screensaver" class="icon-button toggle-button" type="button"
                 aria-pressed="false" aria-label="Diashow als Bildschirmschoner"
-                title="Diashow als Bildschirmschoner">&#128444;&#65039;</button>
+                title="Diashow als Bildschirmschoner">
+          <span class="btn-icon" aria-hidden="true">&#128444;&#65039;</span>
+          <span class="btn-label">Diashow</span>
+        </button>
         <!-- Standardmäßig versteckt; main.js blendet das Zahnrad nur für
              HA-Admins ein (GET api/me). Der Server schützt /admin zusätzlich. -->
         <a class="nav-button admin-link" href="admin" aria-label="Verwaltung" hidden>&#9881;</a>

@@ -165,7 +165,13 @@ body {
 .toolbar-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  /* The labelled controls (Etappe 36) need more room than the bare icons
+     did — on a narrow panel the groups wrap onto a second line instead of
+     pushing the toolbar past the viewport edge. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .view-switch {
@@ -191,6 +197,17 @@ body {
   color: var(--accent-contrast);
 }
 
+/* Separates the two groups in the header (Etappe 36): Monat/Woche is a
+   period INSIDE the calendar, Kalender/Strom/Wetter is the top-level view.
+   Hidden together with the period switch outside calendar mode (see below),
+   so no stray line is left dangling. */
+.toolbar-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 40px;
+  background: var(--border);
+}
+
 .status-badge {
   padding: 6px 12px;
   border-radius: 999px;
@@ -208,39 +225,107 @@ body {
   gap: 8px;
 }
 
+/* Mode switch (Etappe 36): a segmented control on an inset track, so the
+   three options read as ONE choice — and clearly as something different
+   from the outlined Monat/Woche pair next to it. Each option carries its
+   symbol AND its German label; the active one is filled with the accent
+   colour, which is what makes the current view readable from two metres. */
 .mode-switch {
   display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
-.mode-switch .view-button {
+.mode-button,
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 48px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 17px;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mode-button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.mode-button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+/* Standalone controls next to the mode switch (theme, screensaver). */
+.icon-button {
+  min-height: 48px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.mode-button:active,
+.icon-button:active {
+  background: var(--today-bg);
+}
+
+/* Emojis render at their own size; the label sits next to them. */
+.btn-icon {
   font-size: 22px;
-  border-radius: 0;
+  line-height: 1;
 }
 
-/* The standalone icon buttons (theme, screensaver) carry a single emoji —
-   render it at the same size as the mode-switch icons so the symbols stay
-   clearly distinguishable on the kiosk (17px made them squint-alike). */
-#btn-theme,
-#btn-screensaver {
-  font-size: 22px;
+/* An on/off SWITCH shows its state through colour, not through a label:
+   greyed out = off, full colour = on (Roland's wording: "einmal ausgegraut
+   und einmal bei an bunt"). aria-pressed carries the same state for
+   assistive technology — the visual state alone would not. */
+.toggle-button .btn-icon {
+  filter: grayscale(1);
+  opacity: 0.55;
 }
 
-.mode-switch .view-button:first-child {
-  border-radius: var(--radius) 0 0 var(--radius);
+.toggle-button .btn-label {
+  color: var(--text-muted);
 }
 
-.mode-switch .view-button:last-child {
-  border-radius: 0 var(--radius) var(--radius) 0;
-  border-left: none;
+.toggle-button.active .btn-icon {
+  filter: none;
+  opacity: 1;
+}
+
+.toggle-button.active {
+  border-color: var(--accent);
+  background: var(--today-bg);
+}
+
+.toggle-button.active .btn-label {
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* Outside calendar mode (power, weather) the calendar-only toolbar
    controls disappear — they would page a calendar nobody is looking at. */
 body.mode-power .toolbar-nav,
 body.mode-power .view-switch,
+body.mode-power .toolbar-divider,
 body.mode-power .status-badge,
 body.mode-weather .toolbar-nav,
 body.mode-weather .view-switch,
+body.mode-weather .toolbar-divider,
 body.mode-weather .status-badge {
   display: none;
 }
@@ -1192,6 +1277,25 @@ body.mode-weather .status-badge {
     font-size: 19px;
     order: -1;
     flex-basis: 100%;
+  }
+
+  /* Narrow panel / phone: the labels no longer fit alongside everything
+     else, so they give way and the symbols carry the meaning again —
+     exactly the pre-Etappe-36 header. On the kiosk (1920px) the labels are
+     always there, which is where the "not self-explanatory" complaint came
+     from. The screensaver toggle keeps its grey/colour state either way. */
+  .toolbar-right {
+    gap: 8px;
+  }
+
+  .mode-button .btn-label,
+  .icon-button .btn-label {
+    display: none;
+  }
+
+  .mode-button,
+  .icon-button {
+    padding: 0 8px;
   }
 
   .chip {

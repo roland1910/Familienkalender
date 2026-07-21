@@ -66,10 +66,19 @@ function periodTitle() {
   return `KW ${isoWeekNumber(start)} · ${formatDayMonth(start)} – ${formatDayMonth(end)}`;
 }
 
+// Marks one option of a group as the selected one: visually via the CSS
+// class and, because colour alone is not an accessible state, via
+// aria-pressed.
+function setSelected(id, selected) {
+  const button = document.getElementById(id);
+  button.classList.toggle("active", selected);
+  button.setAttribute("aria-pressed", String(selected));
+}
+
 function render() {
   document.getElementById("period-title").textContent = periodTitle();
-  document.getElementById("btn-month").classList.toggle("active", state.view === "month");
-  document.getElementById("btn-week").classList.toggle("active", state.view === "week");
+  setSelected("btn-month", state.view === "month");
+  setSelected("btn-week", state.view === "week");
   if (!state.loaded) return; // keep the loading indicator until first data
   const container = document.getElementById("calendar");
   if (state.view === "month") {
@@ -210,7 +219,7 @@ function switchMode(mode) {
   persistViewState();
   for (const entry of MODES) {
     const active = entry.mode === mode;
-    document.getElementById(entry.button).classList.toggle("active", active);
+    setSelected(entry.button, active);
     document.getElementById(entry.section).hidden = !active;
     if (entry.bodyClass) document.body.classList.toggle(entry.bodyClass, active);
   }
@@ -384,6 +393,9 @@ function initScreensaver() {
 // paint; this only keeps the button label in sync and handles taps.
 
 const THEME_ICON = { auto: "\u{1F317}", light: "☀️", dark: "\u{1F319}" };
+// Three states, so grey/colour cannot express them — the current one is
+// spelled out next to the symbol (Etappe 36).
+const THEME_LABEL = { auto: "Auto", light: "Hell", dark: "Dunkel" };
 const THEME_TITLE = {
   auto: "Farbschema: automatisch",
   light: "Farbschema: hell",
@@ -398,7 +410,8 @@ function applyTheme(theme) {
     document.documentElement.dataset.theme = theme;
   }
   const button = document.getElementById("btn-theme");
-  button.textContent = THEME_ICON[theme];
+  button.querySelector(".btn-icon").textContent = THEME_ICON[theme];
+  button.querySelector(".btn-label").textContent = THEME_LABEL[theme];
   button.title = THEME_TITLE[theme];
   button.setAttribute("aria-label", THEME_TITLE[theme]);
 }
