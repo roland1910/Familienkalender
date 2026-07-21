@@ -88,6 +88,56 @@ export async function fetchPowerHistory(hours) {
   return response.json();
 }
 
+// -- weather view -----------------------------------------------------------
+
+// The backend answers with a German detail message (e.g. "Der Wetterdienst
+// ist nicht erreichbar."); surface it in the view's error state.
+async function germanDetail(response, fallback) {
+  try {
+    const payload = await response.json();
+    if (typeof payload.detail === "string") return payload.detail;
+  } catch {
+    // keep the generic message
+  }
+  return fallback;
+}
+
+export async function fetchWeatherForecast() {
+  const response = await fetch("api/weather/forecast");
+  if (!response.ok) {
+    throw new Error(
+      await germanDetail(response, `Vorhersage laden fehlgeschlagen: HTTP ${response.status}`),
+    );
+  }
+  return response.json();
+}
+
+export async function fetchRadarFrames() {
+  const response = await fetch("api/weather/radar/frames");
+  if (!response.ok) {
+    throw new Error(
+      await germanDetail(response, `Regenradar laden fehlgeschlagen: HTTP ${response.status}`),
+    );
+  }
+  const payload = await response.json();
+  return payload.frames;
+}
+
+// Relative tile URLs (ingress!). All four segments are numbers computed in
+// weather-map.js, never user input; they are encoded anyway so a future
+// caller cannot smuggle path segments in.
+export function baseTileUrl(z, x, y) {
+  return `api/weather/tile/base/${encodeURIComponent(z)}/${encodeURIComponent(x)}/${encodeURIComponent(y)}`;
+}
+
+export function radarTileUrl(frame, z, x, y) {
+  return `api/weather/tile/radar/${encodeURIComponent(frame)}/${baseTileSuffix(z, x, y)}`;
+}
+
+function baseTileSuffix(z, x, y) {
+  return `${encodeURIComponent(z)}/${encodeURIComponent(x)}/${encodeURIComponent(y)}`;
+}
+
 export async function fetchNextPhoto() {
   const response = await fetch("api/slideshow/next");
   if (!response.ok) {

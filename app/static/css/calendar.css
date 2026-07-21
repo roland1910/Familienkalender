@@ -234,10 +234,14 @@ body {
   border-left: none;
 }
 
-/* In power mode the calendar-only toolbar controls disappear. */
+/* Outside calendar mode (power, weather) the calendar-only toolbar
+   controls disappear — they would page a calendar nobody is looking at. */
 body.mode-power .toolbar-nav,
 body.mode-power .view-switch,
-body.mode-power .status-badge {
+body.mode-power .status-badge,
+body.mode-weather .toolbar-nav,
+body.mode-weather .view-switch,
+body.mode-weather .status-badge {
   display: none;
 }
 
@@ -823,6 +827,199 @@ body.mode-power .status-badge {
   font-size: 20px;
 }
 
+/* -- weather view (Wetter-Ansicht) ------------------------------------------ */
+
+.weather {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.weather-view {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.weather-radar,
+.weather-chart {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.weather-radar-head,
+.weather-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.weather-radar-title,
+.weather-chart-title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.weather-radar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.weather-radar-time {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  margin-right: 8px;
+  min-width: 96px;
+  text-align: right;
+}
+
+.weather-radar-btn,
+.weather-period-btn {
+  min-width: 56px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.weather-period-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* The radar map: a fixed tile grid (see weather-map.js) that scales with
+   the card width. Base map and radar frames are stacked layers of the same
+   grid, so a frame always lines up with the map underneath it. */
+.weather-radar-map {
+  --radar-cols: 5;
+  --radar-rows: 3;
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--radar-cols) / var(--radar-rows);
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.weather-radar-base,
+.weather-radar-frame {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--radar-cols), 1fr);
+  grid-template-rows: repeat(var(--radar-rows), 1fr);
+}
+
+/* Only the current frame is visible; the others stay loaded so stepping
+   through them never shows a blank tile (same idea as the slideshow
+   preload). The short fade keeps the animation from flickering. */
+.weather-radar-frame {
+  opacity: 0;
+  transition: opacity 120ms linear;
+  pointer-events: none;
+}
+
+.weather-radar-frame-active {
+  opacity: 1;
+}
+
+.weather-tile {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.weather-radar-hint {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  font-size: 20px;
+  color: var(--text-muted);
+  background: var(--bg);
+}
+
+.weather-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.weather-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.weather-legend-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.weather-legend-arrow {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.weather-chart-periods {
+  display: flex;
+  gap: 8px;
+}
+
+.weather-chart-body {
+  width: 100%;
+}
+
+.weather-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.weather-chart-empty {
+  margin: 0;
+  padding: 48px 0;
+  text-align: center;
+  font-size: 20px;
+  color: var(--text-muted);
+}
+
+/* Attribution required by MET Norway, RainViewer and OpenStreetMap. */
+.weather-attribution {
+  margin: 0 0 8px;
+  text-align: center;
+  font-size: 15px;
+  color: var(--text-muted);
+}
+
 /* -- week view -------------------------------------------------------------- */
 
 .week-view {
@@ -1033,6 +1230,22 @@ body.mode-power .status-badge {
     font-size: 18px;
     min-height: 48px;
     padding: 6px 12px;
+  }
+
+  /* Weather view on the narrow ingress panel: heading and controls stack. */
+  .weather-radar-head,
+  .weather-chart-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .weather-radar-time {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .weather-legend-item {
+    font-size: 15px;
   }
 }
 

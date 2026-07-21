@@ -34,6 +34,13 @@ test("roundtrip: month view with power mode", () => {
   assert.equal(restored.anchor.getTime(), new Date(2025, 11, 31).getTime());
 });
 
+test("roundtrip: month view with weather mode (Etappe 35)", () => {
+  const state = { view: "month", anchor: new Date(2026, 6, 21), mode: "weather" };
+  const restored = roundtrip(state);
+  assert.equal(restored.mode, "weather");
+  assert.equal(restored.anchor.getTime(), new Date(2026, 6, 21).getTime());
+});
+
 test("serialize: anchor is stored as a plain ISO date", () => {
   const raw = serializeViewState({
     view: "week",

@@ -33,6 +33,7 @@ import { isSlideshowRunning, startSlideshow, stopSlideshow } from "./slideshow-v
 import { state } from "./state.js";
 import { loadTheme, nextTheme, saveTheme } from "./theme-memory.js";
 import { loadViewState, resolveInitialView, saveViewState } from "./view-memory.js";
+import { startWeatherView, stopWeatherView } from "./weather-view.js";
 import { applyWeekAutoZoom, renderWeekView, weekRange } from "./week-view.js";
 
 const REFRESH_INTERVAL_MS = 60000;
@@ -57,6 +58,7 @@ function visibleRange() {
 
 function periodTitle() {
   if (state.mode === "power") return "Strom";
+  if (state.mode === "weather") return "Wetter";
   if (state.view === "month") {
     return `${MONTH_NAMES[state.anchor.getMonth()]} ${state.anchor.getFullYear()}`;
   }
@@ -75,9 +77,10 @@ function render() {
   } else {
     renderWeekView(container, state.anchor, state.events, today(), state.tags);
   }
-  // The legend belongs to the calendar views only, never to the power view.
+  // The legend belongs to the calendar views only — never to the power or
+  // weather view.
   const legend = document.getElementById("legend");
-  if (state.mode === "power") {
+  if (state.mode !== "calendar") {
     legend.hidden = true;
   } else {
     renderLegend(legend, state.sources);
@@ -191,24 +194,32 @@ function switchView(view) {
   refresh();
 }
 
+// The three top-level modes and the DOM they own: the toggle button, the
+// section shown, and the body class that hides the calendar-only toolbar
+// controls via CSS.
+const MODES = [
+  { mode: "calendar", button: "btn-mode-calendar", section: "calendar" },
+  { mode: "power", button: "btn-mode-power", section: "power", bodyClass: "mode-power" },
+  { mode: "weather", button: "btn-mode-weather", section: "weather", bodyClass: "mode-weather" },
+];
+
 function switchMode(mode) {
   if (state.mode === mode) return;
   closeDayPopover();
   state.mode = mode;
   persistViewState();
-  const isPower = mode === "power";
-  // The body class hides the calendar-only toolbar controls via CSS.
-  document.body.classList.toggle("mode-power", isPower);
-  document.getElementById("btn-mode-calendar").classList.toggle("active", !isPower);
-  document.getElementById("btn-mode-power").classList.toggle("active", isPower);
-  document.getElementById("calendar").hidden = isPower;
-  document.getElementById("power").hidden = !isPower;
-  if (isPower) {
-    startPowerView(document.getElementById("power"));
-  } else {
-    stopPowerView();
-    refresh();
+  for (const entry of MODES) {
+    const active = entry.mode === mode;
+    document.getElementById(entry.button).classList.toggle("active", active);
+    document.getElementById(entry.section).hidden = !active;
+    if (entry.bodyClass) document.body.classList.toggle(entry.bodyClass, active);
   }
+  // Each non-calendar view owns polling timers; only the active one runs.
+  if (mode === "power") startPowerView(document.getElementById("power"));
+  else stopPowerView();
+  if (mode === "weather") startWeatherView(document.getElementById("weather"));
+  else stopWeatherView();
+  if (mode === "calendar") refresh();
   render();
 }
 
@@ -248,14 +259,15 @@ function restoreViewState() {
   // view and mode are independent enums (see view-memory.js), so restoring
   // view/anchor above is a plain field assignment. mode instead goes
   // through switchMode, deliberately: it is the only place that knows how
-  // to toggle the power view's DOM/lifecycle (starting startPowerView,
-  // toggling body classes, hiding #calendar). This means switchMode also
+  // to toggle a non-calendar view's DOM/lifecycle (starting startPowerView
+  // / startWeatherView, toggling body classes, hiding #calendar). This
+  // means switchMode also
   // calls persistViewState() and render() again here, writing back and
   // re-rendering the very view/anchor/mode combination that was just
   // loaded — a redundant but idempotent re-persist/render (init() calls
   // render()/refresh() again right after restoreViewState() anyway), not a
   // real user-triggered transition.
-  if (saved.mode === "power") switchMode("power");
+  if (saved.mode !== "calendar") switchMode(saved.mode);
   return true;
 }
 
@@ -423,6 +435,9 @@ async function init() {
     .getElementById("btn-mode-calendar")
     .addEventListener("click", () => switchMode("calendar"));
   document.getElementById("btn-mode-power").addEventListener("click", () => switchMode("power"));
+  document
+    .getElementById("btn-mode-weather")
+    .addEventListener("click", () => switchMode("weather"));
   attachSwipe(document.getElementById("calendar"), {
     onSwipeLeft: () => navigate(1),
     onSwipeRight: () => navigate(-1),

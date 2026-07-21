@@ -1,7 +1,7 @@
 // Per-device persistence of the UI position in localStorage: the active
 // view (month/week), the displayed period (anchor day) and the mode
-// (calendar/power) survive a reload. Kiosk and browser each keep their
-// own state — localStorage is per device/browser by design.
+// (calendar/power/weather) survive a reload. Kiosk and browser each keep
+// their own state — localStorage is per device/browser by design.
 //
 // Robustness rule: localStorage is world-writable from the page origin,
 // so every stored value is treated as untrusted input. Anything that does
@@ -13,7 +13,7 @@ import { fromISODate, toISODate } from "./dates.js";
 export const STORAGE_KEY = "familienkalender.view-state.v1";
 
 const VIEWS = new Set(["month", "week"]);
-const MODES = new Set(["calendar", "power"]);
+const MODES = new Set(["calendar", "power", "weather"]);
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export function serializeViewState({ view, anchor, mode }) {
