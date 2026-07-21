@@ -26,6 +26,7 @@ from app.slideshow import router as slideshow_router
 from app.storage import get_storage
 from app.sync import DEFAULT_SYNC_INTERVAL_SECONDS, sync_all
 from app.tags import router as tags_router
+from app.weather import router as weather_router
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -281,6 +282,7 @@ app = FastAPI(title="Familienkalender", docs_url=None, redoc_url=None, lifespan=
 app.include_router(admin_router)
 app.include_router(tags_router)
 app.include_router(power_router)
+app.include_router(weather_router)
 app.include_router(slideshow_router)
 app.include_router(slideshow_admin_router)
 # Innermost (added first): needs the root_path that IngressPathMiddleware
