@@ -392,10 +392,10 @@ function initScreensaver() {
 // it. The head bootstrap already applied the stored theme before the first
 // paint; this only keeps the button label in sync and handles taps.
 
+// Three distinct symbols express the three states without a word (Etappe
+// 37): half-disc for auto, sun for light, moon for dark. aria-label/title
+// still spell the state out for assistive tech and tooltips.
 const THEME_ICON = { auto: "\u{1F317}", light: "☀️", dark: "\u{1F319}" };
-// Three states, so grey/colour cannot express them — the current one is
-// spelled out next to the symbol (Etappe 36).
-const THEME_LABEL = { auto: "Auto", light: "Hell", dark: "Dunkel" };
 const THEME_TITLE = {
   auto: "Farbschema: automatisch",
   light: "Farbschema: hell",
@@ -411,7 +411,6 @@ function applyTheme(theme) {
   }
   const button = document.getElementById("btn-theme");
   button.querySelector(".btn-icon").textContent = THEME_ICON[theme];
-  button.querySelector(".btn-label").textContent = THEME_LABEL[theme];
   button.title = THEME_TITLE[theme];
   button.setAttribute("aria-label", THEME_TITLE[theme]);
 }
