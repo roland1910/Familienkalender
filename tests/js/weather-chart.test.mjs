@@ -139,6 +139,45 @@ test("scaleX maps the range onto the plot area", () => {
   assert.equal(scaleX(NOW + 10 * HOUR, bounds, area), area.x + area.width);
 });
 
+test("scaleX places unevenly spaced points by real time, not by index", () => {
+  // MET switches from hourly to 6-hourly after ~63h, so the 96h window has
+  // uneven gaps. The x-axis must scale by timestamp: a point at 75% of the
+  // time span must sit at 75% of the width, regardless of how many points
+  // precede it (an index-based layout would misplace the sparse back half).
+  const area = plotArea();
+  const points = [
+    { t: NOW }, // hour 0
+    { t: NOW + 1 * HOUR }, // dense front
+    { t: NOW + 2 * HOUR },
+    { t: NOW + 8 * HOUR }, // sparse back (a 6h jump)
+    { t: NOW + 8 * HOUR }, // duplicate end -> minT..maxT = 8h
+  ];
+  const bounds = timeBounds(points);
+  // The 6h point sits at 8/8 = 100% (it is the max); index-based it would be
+  // at 3/4 = 75%. Assert it follows the timestamp.
+  assert.equal(scaleX(NOW + 8 * HOUR, bounds, area), area.x + area.width);
+  // A mid point at 2h of an 8h span sits at 25% of the width, not 2/4 = 50%.
+  assert.ok(
+    Math.abs(scaleX(NOW + 2 * HOUR, bounds, area) - (area.x + area.width * 0.25)) < 1e-6,
+  );
+});
+
+test("tempPath positions points by timestamp under uneven spacing", () => {
+  const area = plotArea();
+  // Three points: 0h, 1h, 5h — the last is a sparse-step sample.
+  const points = [
+    { t: NOW, temp_c: 10 },
+    { t: NOW + 1 * HOUR, temp_c: 12 },
+    { t: NOW + 5 * HOUR, temp_c: 14 },
+  ];
+  const bounds = timeBounds(points);
+  const path = tempPath(points, bounds, tempBounds(points), area);
+  const xs = [...path.matchAll(/[ML]([\d.]+)/g)].map((m) => Number(m[1]));
+  // Second point is at 1/5 of the span, not 1/2 (index-based) of the width.
+  assert.ok(Math.abs(xs[1] - (area.x + area.width * 0.2)) < 0.5, `${xs[1]}`);
+  assert.ok(Math.abs(xs[2] - (area.x + area.width)) < 0.5, `${xs[2]}`);
+});
+
 test("scaleTemp is inverted (max at the top)", () => {
   const area = plotArea();
   const bounds = { min: 0, max: 20 };

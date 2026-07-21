@@ -28,7 +28,7 @@ RADAR_FRAMES = [
 ]
 
 
-def _forecast(hours: int = 49) -> dict:
+def _forecast(hours: int = 100) -> dict:
     """A forecast starting at the current hour, one point per hour."""
     now = dt.datetime.now(dt.UTC).replace(minute=0, second=0, microsecond=0)
     start = int(now.timestamp() * 1000)
@@ -190,28 +190,57 @@ def test_forecast_chart_renders_temperature_precipitation_and_wind(
     assert svg.locator("g").count() > 0
 
 
-def test_period_button_switches_between_24h_and_48h(page: Page, server_url: str) -> None:
+def test_period_button_switches_between_24h_48h_and_96h(page: Page, server_url: str) -> None:
     mock_weather(page)
     open_weather_view(page, server_url)
 
     buttons = page.locator(".weather-period-btn")
-    expect(buttons).to_have_count(2)
+    expect(buttons).to_have_count(3)
     expect(buttons.nth(0)).to_have_text("24 h")
-    expect(buttons.nth(0)).to_have_class(re.compile("weather-period-active"))
+    expect(buttons.nth(1)).to_have_text("48 h")
+    expect(buttons.nth(2)).to_have_text("96 h")
+    # 96 h is the default (Etappe 37): active without any tap.
+    expect(buttons.nth(2)).to_have_class(re.compile("weather-period-active"))
+    expect(buttons.nth(0)).not_to_have_class(re.compile("weather-period-active"))
 
     weekday = re.compile(r"^(Mo|Di|Mi|Do|Fr|Sa|So) \d\d:\d\d$")
 
     def axis_labels() -> list[str]:
         return page.locator(".weather-chart-svg text").all_text_contents()
 
-    # The 24h window labels its time axis with a plain clock ...
+    # The wide default window prefixes the weekday so later days are clear.
+    assert any(weekday.match(label) for label in axis_labels())
+
+    buttons.nth(0).click()
+    expect(buttons.nth(0)).to_have_class(re.compile("weather-period-active"))
+    expect(buttons.nth(2)).not_to_have_class(re.compile("weather-period-active"))
+    # The 24h window labels its time axis with a plain clock instead.
     assert not any(weekday.match(label) for label in axis_labels())
 
-    buttons.nth(1).click()
-    expect(buttons.nth(1)).to_have_class(re.compile("weather-period-active"))
-    expect(buttons.nth(0)).not_to_have_class(re.compile("weather-period-active"))
-    # ... the 48h window prefixes the weekday so the second day is clear.
-    assert any(weekday.match(label) for label in axis_labels())
+
+def test_weather_view_fits_the_kiosk_without_scrolling(page: Page, server_url: str) -> None:
+    """On the 1920x1080 kiosk the whole weather view (radar + chart) fits the
+    screen; Roland must not have to scroll to see the forecast graph."""
+    mock_weather(page)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    open_weather_view(page, server_url)
+
+    # Both halves are present and the chart SVG is on screen.
+    expect(page.locator(".weather-radar-map")).to_be_visible()
+    expect(page.locator(".weather-chart-svg")).to_be_visible()
+
+    # The weather section does not overflow its own box (no scrollbar).
+    overflow = page.eval_on_selector(
+        "#weather",
+        "el => el.scrollHeight - el.clientHeight",
+    )
+    assert overflow <= 1, overflow
+
+    # The chart SVG's bottom edge sits inside the viewport height.
+    svg_bottom = page.eval_on_selector(
+        ".weather-chart-svg", "el => el.getBoundingClientRect().bottom"
+    )
+    assert svg_bottom <= 1080 + 1, svg_bottom
 
 
 def test_attribution_names_all_three_data_sources(page: Page, server_url: str) -> None:

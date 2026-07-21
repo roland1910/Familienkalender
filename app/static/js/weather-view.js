@@ -65,11 +65,30 @@ const FALLBACK_MAP_HEIGHT = 460;
 // Debounce before rebuilding the tile layers for a new window size.
 const RESIZE_DEBOUNCE_MS = 300;
 
+// Auto-fit (Etappe 37): on the kiosk the whole weather view must fit the
+// screen without scrolling — radar on top, forecast chart below. Above this
+// viewport width we measure the available height and split the leftover
+// (after the fixed chrome) between the radar map and the chart SVG. At or
+// below it (the narrow HA ingress panel / a phone) we leave the natural
+// clamp/aspect-ratio layout and allow scrolling instead.
+const AUTOFIT_MIN_WIDTH = 901;
+// Floors so neither half collapses to an unreadable sliver on a short kiosk.
+const RADAR_MIN_PX = 200;
+const CHART_MIN_PX = 180;
+// The radar gets a little more than half — the map carries more detail.
+const RADAR_SHARE = 0.54;
+
 const PERIODS = [
   { hours: 24, label: "24 h" },
   { hours: 48, label: "48 h" },
+  { hours: 96, label: "96 h" },
 ];
-const DEFAULT_HOURS = 24;
+// 96 h by default (Etappe 37): Roland stands right in front of the kiosk when
+// he opens the view and wants the wide outlook without tapping. 24 h and 48 h
+// stay as switch options. MET delivers hourly points to ~63 h and 6-hourly
+// after that; the chart scales its x-axis by real timestamp, so the uneven
+// spacing of the back half lands time-correctly (see weather-chart.js).
+const DEFAULT_HOURS = 96;
 
 // Chart series colors, resolved from the theme variables at draw time.
 const TEMP_COLOR_VAR = "--alert-border";
@@ -269,6 +288,10 @@ function renderChart(points) {
     return;
   }
   body.replaceChildren(chartSvg(visible, timeB, tempB));
+  // The freshly inserted SVG is one of the two flexible parts — re-fit so
+  // radar and chart share the kiosk height without scrolling. If the fit
+  // changed the radar map's height, its pixel-placed tiles need rebuilding.
+  if (applyWeatherAutoFit() && frames.length > 0) rebuildRadarLayers();
 }
 
 function svgEl(name, attrs = {}) {
@@ -490,6 +513,50 @@ function viewportSize() {
   };
 }
 
+// Size the radar map and the chart SVG so the whole view fits the visible
+// area without scrolling (kiosk only; see AUTOFIT_MIN_WIDTH). The two are the
+// only flexible parts: collapse them, measure the fixed chrome around them,
+// then hand the leftover height back split by RADAR_SHARE. Returns true when
+// the radar map height changed, so the caller can rebuild its pixel-placed
+// tiles. On the narrow panel the inline heights are cleared, restoring the
+// CSS clamp/aspect-ratio layout that is allowed to scroll.
+function applyWeatherAutoFit() {
+  if (activeContainer === null) return false;
+  const section = document.getElementById("weather");
+  const view = activeContainer.querySelector(".weather-view");
+  const map = activeContainer.querySelector(".weather-radar-map");
+  const svg = activeContainer.querySelector(".weather-chart-svg");
+  if (section === null || view === null || map === null) return false;
+
+  if (window.innerWidth < AUTOFIT_MIN_WIDTH) {
+    const changed = map.style.height !== "";
+    map.style.height = "";
+    if (svg !== null) svg.style.height = "";
+    return changed;
+  }
+
+  const previousMapHeight = map.style.height;
+  // Collapse the flexible parts so `view.offsetHeight` is just the chrome.
+  map.style.height = "0px";
+  if (svg !== null) svg.style.height = "0px";
+  const styles = getComputedStyle(section);
+  const padding = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+  const available = section.clientHeight - padding;
+  const leftover = available - view.offsetHeight;
+  if (leftover <= RADAR_MIN_PX + CHART_MIN_PX) {
+    // Too little room to fit both — keep them collapsed would look broken, so
+    // fall back to the floors (the view may then scroll, better than a sliver).
+    map.style.height = `${RADAR_MIN_PX}px`;
+    if (svg !== null) svg.style.height = `${CHART_MIN_PX}px`;
+    return map.style.height !== previousMapHeight;
+  }
+  const radarHeight = Math.max(RADAR_MIN_PX, Math.round(leftover * RADAR_SHARE));
+  const chartHeight = Math.max(CHART_MIN_PX, leftover - radarHeight);
+  map.style.height = `${radarHeight}px`;
+  if (svg !== null) svg.style.height = `${chartHeight}px`;
+  return map.style.height !== previousMapHeight;
+}
+
 function radarFrameLayer(frame, tiles) {
   const layer = el("div", "weather-radar-frame");
   layer.append(
@@ -511,6 +578,9 @@ function rebuildRadarLayers() {
   const frameHost = activeContainer.querySelector(".weather-radar-frames");
   if (base === null || frameHost === null) return;
 
+  // Size the radar map to its kiosk share first, so the tiles below are laid
+  // out against the final height (idempotent — a no-op when already fitted).
+  applyWeatherAutoFit();
   const { width, height } = viewportSize();
   // The base map is fetched one zoom deeper at normal tile size so it
   // stays sharp under the double-sized radar tiles (see weather-map.js).
@@ -630,6 +700,11 @@ let resizeTimer;
 function onWindowResized() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (activeContainer !== null && frames.length > 0) rebuildRadarLayers();
+    if (activeContainer === null) return;
+    // Re-fit first (the available height changed); rebuilding the radar tiles
+    // picks up the new map height. Without frames there is nothing to rebuild,
+    // but the chart SVG still needs re-fitting.
+    const changed = applyWeatherAutoFit();
+    if (frames.length > 0 && changed) rebuildRadarLayers();
   }, RESIZE_DEBOUNCE_MS);
 }

@@ -141,16 +141,19 @@ class TestForecastEndpoint:
         assert all(isinstance(p["t"], int) for p in points)
         assert [p["t"] for p in points] == sorted(p["t"] for p in points)
 
-    def test_covers_at_least_48_hours(
+    def test_passes_through_the_full_timeseries(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        times = _hours_ahead(72)
+        # The frontend slices 24h/48h/96h client-side, so the backend must
+        # hand through the whole series MET returns rather than truncate it
+        # at 48h (Etappe 37: the 96h default needs points past 48h).
+        times = _hours_ahead(150)
         use_met(monkeypatch, MockMet(_forecast_body([_entry(t) for t in times])))
         points = client.get("/api/weather/forecast").json()["points"]
         span_hours = (points[-1]["t"] - points[0]["t"]) / 3_600_000
-        assert span_hours >= 47.0
-        # ... and never far beyond the promised window (48h + the current hour).
-        assert span_hours <= 49.0
+        assert span_hours >= 96.0
+        # All mocked hours come through (nothing dropped by the window).
+        assert len(points) == 150
 
     def test_missing_fields_become_null_instead_of_failing(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch

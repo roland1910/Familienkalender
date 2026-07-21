@@ -62,8 +62,11 @@ ERROR_CACHE_TTL_SECONDS = 60.0
 MAX_FORECAST_RESPONSE_BYTES = 4 * 1024 * 1024
 
 # How far ahead the forecast is delivered. The frontend switches between
-# 24h and 48h purely client-side, so one cached payload serves both.
-FORECAST_HOURS = 48
+# 24h, 48h and 96h purely client-side (Etappe 37), so one cached payload
+# serves them all — we hand through MET's full timeseries (it runs ~9 days:
+# hourly for ~63h, then 6-hourly). 240h is a ceiling above the whole series,
+# so parse_forecast keeps everything MET returns rather than truncating it.
+FORECAST_HOURS = 240
 # Entries older than this (relative to now) are dropped; one hour of slack
 # keeps the *current* hour's entry when we are in the middle of it.
 FORECAST_PAST_SLACK_SECONDS = 3600
@@ -319,7 +322,7 @@ def _payload_or_raise(cached: dict | str) -> dict:
 
 @router.get("/forecast")
 async def get_forecast() -> dict:
-    """Hourly forecast for Munich, ~48 hours ahead (served from cache)."""
+    """Forecast for Munich, MET's full timeseries (~9 days, served from cache)."""
     try:
         return await _fetch_forecast()
     except WeatherUnavailableError as exc:
