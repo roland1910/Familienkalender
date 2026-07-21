@@ -1073,33 +1073,27 @@ body.mode-power .status-badge {
   opacity: 1;
 }
 
-.slideshow-caption {
-  position: absolute;
-  z-index: 1; /* above the photo layers */
-  left: 0;
-  right: 0;
-  bottom: 0;
-  margin: 0;
-  padding: 12px 20px;
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 18px;
-  text-align: right;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
-  pointer-events: none;
-}
-
-/* Metadata badges in the letterbox area: taken-at date top right, folder
-   trail top left. Deliberately fixed colors — the slideshow is always
-   black, independent of the light/dark theme. Hidden entirely (the
+/* The three overlays (folder trail, taken-at date, filename) run VERTICALLY
+   along the screen edges (Etappe 34) so they take as little of the photo as
+   possible. Rotation is done with `writing-mode`, never a bare
+   `transform: rotate()`: only then do line breaking, `text-overflow` and the
+   box sizing follow the rotated text, so the badge is exactly as long as its
+   content and the ellipsis lands where the text is cut.
+   Because the text now runs along the vertical axis, `max-height` is the
+   length limit (and `overflow`/`text-overflow` clip along it), and the
+   padding is swapped: the larger value is now top/bottom (along the text),
+   the smaller one left/right (across it).
+   Deliberately fixed colors — the slideshow is always black, independent of
+   the light/dark theme. The metadata badges are hidden entirely (the
    `hidden` attribute) when there is nothing to show. */
+.slideshow-caption,
 .slideshow-taken,
 .slideshow-folders {
   position: absolute;
   z-index: 1; /* above the photo layers */
-  top: 16px;
+  writing-mode: vertical-rl;
   margin: 0;
-  padding: 6px 14px;
-  max-width: 45%;
+  padding: 14px 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1110,10 +1104,38 @@ body.mode-power .status-badge {
   pointer-events: none;
 }
 
-.slideshow-taken {
-  right: 16px;
+/* Folder trail: left edge, readable BOTTOM-TO-TOP, ending at the top of the
+   screen. `writing-mode: vertical-rl` alone reads top-to-bottom; the extra
+   half turn flips it. `sideways-lr` would express this directly but WebKit —
+   and the kiosk browser is WebKitGTK — does not support it, so the 180°
+   rotation is the robust way. Rotating a box by 180° around its own centre
+   maps it onto itself, so the anchoring stays intact: the box hangs from
+   `top`, grows downwards as the path gets longer, and the end of the text
+   stays in the top corner. */
+.slideshow-folders {
+  top: 16px;
+  left: 16px;
+  transform: rotate(180deg);
+  max-height: calc(100% - 32px);
 }
 
-.slideshow-folders {
-  left: 16px;
+/* Taken-at date: right edge, readable top-to-bottom, starting in the top
+   corner. */
+.slideshow-taken {
+  top: 16px;
+  right: 16px;
+  max-height: calc(50% - 24px);
+}
+
+/* Filename: right edge as well, below the date, readable top-to-bottom and
+   ending in the bottom corner — the vertical equivalent of the previous
+   bottom-right, right-aligned caption. Anchored at `bottom`, so it grows
+   upwards; `max-height` keeps it clear of the date badge above.
+   (Roland's "rechtsbündig" is ambiguous once the text is rotated; the
+   reading direction of the neighbouring date badge won, so both right-edge
+   overlays read the same way.) */
+.slideshow-caption {
+  bottom: 16px;
+  right: 16px;
+  max-height: calc(50% - 24px);
 }

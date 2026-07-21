@@ -79,7 +79,8 @@ def test_toggle_enables_screensaver_and_idle_starts_slideshow(
     assert visible_layer.evaluate("node => node.tagName") == "IMG"
     assert "api/slideshow/image/1" in visible_layer.get_attribute("src")
     expect(page.locator(".slideshow-caption")).to_have_text("urlaub.jpg")
-    # Metadata badges: taken-at date top right, folder trail top left.
+    # Metadata badges: taken-at date and folder trail (vertical, on the
+    # screen edges — the exact placement is pinned further down).
     expect(page.locator(".slideshow-taken")).to_have_text("16.08.2019 17:30")
     # The chevron separator is deliberate display text.
     expect(page.locator(".slideshow-folders")).to_have_text(
@@ -140,6 +141,71 @@ def test_photo_layers_are_images_honouring_exif_orientation(
         expect(badge).to_be_visible()
         badge_z = int(badge.evaluate("node => getComputedStyle(node).zIndex"))
         assert badge_z > layer_z, f"{selector} liegt nicht über den Foto-Ebenen"
+
+
+def test_overlay_texts_run_vertically_along_the_screen_edges(
+    page: Page, server_url: str
+) -> None:
+    """Etappe 34: the three overlays are rotated by 90° and sit on the screen
+    edges — folder trail on the left reading bottom-to-top and ending at the
+    top, taken-at date on the right starting in the top corner, filename on
+    the right ending in the bottom corner. Rotation is done with
+    `writing-mode` (not a bare transform) so wrapping/ellipsis still work;
+    the bottom-to-top direction needs the extra 180° turn because WebKit —
+    which the kiosk runs — does not support `sideways-lr`."""
+    _inject_fast_timings(page)
+    _mock_slideshow(
+        page,
+        taken={"year": 2019, "month": 8, "day": 16, "hour": 17, "minute": 30},
+        folders=["Photos", "2019", "Urlaub"],
+    )
+    goto_calendar(page, server_url)
+    page.locator("#btn-screensaver").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+
+    viewport = page.viewport_size
+    assert viewport is not None
+    width, height = viewport["width"], viewport["height"]
+    margin = 80  # generous: the exact inset is a styling detail
+
+    def box_and_style(selector: str) -> tuple[dict, dict]:
+        locator = page.locator(selector)
+        expect(locator).to_be_visible()
+        box = locator.bounding_box()
+        assert box is not None, selector
+        style = locator.evaluate(
+            "node => { const s = getComputedStyle(node);"
+            " return {writingMode: s.writingMode, transform: s.transform,"
+            " events: s.pointerEvents}; }"
+        )
+        return box, style
+
+    for selector in (".slideshow-folders", ".slideshow-taken", ".slideshow-caption"):
+        box, style = box_and_style(selector)
+        assert style["writingMode"] == "vertical-rl", (selector, style)
+        # Rotated text: the box is taller than it is wide.
+        assert box["height"] > box["width"], (selector, box)
+        assert style["events"] == "none", (selector, style)
+
+    folders, folders_style = box_and_style(".slideshow-folders")
+    # Left edge, anchored at the top; the extra half turn makes it readable
+    # bottom-to-top (matrix(-1, 0, 0, -1, 0, 0) == rotate(180deg)).
+    assert folders["x"] < margin, folders
+    assert folders["y"] < margin, folders
+    assert "matrix(-1, 0, 0, -1" in folders_style["transform"], folders_style
+
+    taken, _ = box_and_style(".slideshow-taken")
+    # Right edge, starting in the top corner.
+    assert taken["x"] + taken["width"] > width - margin, taken
+    assert taken["y"] < margin, taken
+
+    caption, _ = box_and_style(".slideshow-caption")
+    # Right edge, ending in the bottom corner.
+    assert caption["x"] + caption["width"] > width - margin, caption
+    assert caption["y"] + caption["height"] > height - margin, caption
+
+    # The two right-edge overlays never overlap vertically.
+    assert taken["y"] + taken["height"] < caption["y"], (taken, caption)
 
 
 def test_screensaver_off_by_default_no_slideshow(page: Page, server_url: str) -> None:

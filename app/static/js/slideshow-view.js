@@ -143,8 +143,9 @@ function buildOverlay() {
   const layerA = buildImageLayer();
   const layerB = buildImageLayer();
   const caption = el("p", "slideshow-caption");
-  // Taken-at date (top right) and folder trail (top left) of the visible
-  // item — purely decorative metadata, hidden from assistive tech.
+  // Taken-at date and folder trail of the visible item — purely decorative
+  // metadata, hidden from assistive tech. Like the caption they run
+  // vertically along the screen edges (see the CSS for the exact layout).
   const takenAt = el("p", "slideshow-taken");
   takenAt.setAttribute("aria-hidden", "true");
   const folderTrail = el("p", "slideshow-folders");
