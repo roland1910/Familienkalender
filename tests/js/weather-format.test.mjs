@@ -39,6 +39,14 @@ test("formatPrecip uses the German decimal comma", () => {
   assert.equal(formatPrecip(null), "");
 });
 
+test("formatPrecip keeps quarter steps exact and drops trailing zeros", () => {
+  // A 1 mm axis has gridlines at 0.25/0.5/0.75 — "0,3 mm" would be wrong.
+  assert.equal(formatPrecip(0.25), "0,25 mm");
+  assert.equal(formatPrecip(0.75), "0,75 mm");
+  assert.equal(formatPrecip(1), "1 mm");
+  assert.equal(formatPrecip(2), "2 mm");
+});
+
 test("formatWind rounds to whole m/s", () => {
   assert.equal(formatWind(3.4), "3");
   assert.equal(formatWind(0.4), "0");

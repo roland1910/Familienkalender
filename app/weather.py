@@ -352,13 +352,19 @@ RAINVIEWER_INDEX_URL = "https://api.rainviewer.com/public/weather-maps.json"
 RAINVIEWER_TILE_HOST = "https://tilecache.rainviewer.com"
 OSM_TILE_HOST = "https://tile.openstreetmap.org"
 
-# Zoom levels the frontend offers (wide → close), and its default.
-ALLOWED_ZOOMS = (8, 9, 10)
-DEFAULT_ZOOM = 9
+# Zoom levels the frontend can display, and the radar's default.
+#
+# RainViewer's free radar tiles only exist up to zoom 7 (deeper zooms
+# return a "Zoom Level Not Supported" placeholder), so the radar uses 5-7
+# and draws its tiles at double size. The base map is fetched one level
+# deeper (6-8) at normal size so it stays crisp over the same ground —
+# hence one allowlist spanning both, see app/static/js/weather-map.js.
+ALLOWED_ZOOMS = (5, 6, 7, 8)
+DEFAULT_ZOOM = 7
 # Half-width of the accepted tile window around Munich's own tile. The
-# frontend shows 5x3 tiles (radius 2 horizontally, 1 vertically); 3 leaves
-# a little headroom without opening up the whole planet.
-MAX_TILE_RADIUS = 3
+# viewport is centred on Munich and needs at most ~4 tiles in each
+# direction at the base map's tile size; beyond that is not displayable.
+MAX_TILE_RADIUS = 4
 
 RADAR_FRAMES_CACHE_TTL_SECONDS = 300.0
 # Frames arrive every ~10 minutes; ten of them are the last ~100 minutes.

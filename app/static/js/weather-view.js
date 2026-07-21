@@ -36,7 +36,14 @@ import {
   formatTemp,
   formatWind,
 } from "./weather-format.js";
-import { DEFAULT_ZOOM, GRID_COLS, GRID_ROWS, stepZoom, tileGrid } from "./weather-map.js";
+import {
+  BASE_TILE_PX,
+  baseZoomFor,
+  DEFAULT_ZOOM,
+  RADAR_TILE_PX,
+  stepZoom,
+  viewportTiles,
+} from "./weather-map.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -52,6 +59,11 @@ const FRAME_INTERVAL_MS = globalThis.WEATHER_FRAME_MS ?? 500;
 const LAST_FRAME_HOLD_TICKS = 3;
 // Give up waiting for the tile preload rather than never animating.
 const PRELOAD_TIMEOUT_MS = 8000;
+// Viewport size assumed while the map element is not laid out yet.
+const FALLBACK_MAP_WIDTH = 1200;
+const FALLBACK_MAP_HEIGHT = 460;
+// Debounce before rebuilding the tile layers for a new window size.
+const RESIZE_DEBOUNCE_MS = 300;
 
 const PERIODS = [
   { hours: 24, label: "24 h" },
@@ -99,6 +111,9 @@ export function startWeatherView(container) {
   loadRadar();
   forecastTimer = setInterval(loadForecast, FORECAST_REFRESH_MS);
   radarTimer = setInterval(loadRadar, RADAR_REFRESH_MS);
+  // The tile layers are laid out in pixels, so a new window size needs a
+  // rebuild (the kiosk never resizes, the ingress panel does).
+  window.addEventListener("resize", onWindowResized);
 }
 
 /** Stop polling and animating (e.g. when switching back to the calendar). */
@@ -109,6 +124,8 @@ export function stopWeatherView() {
   forecastTimer = null;
   radarTimer = null;
   animationTimer = null;
+  window.removeEventListener("resize", onWindowResized);
+  clearTimeout(resizeTimer);
   activeContainer = null;
   frames = [];
   frameIndex = 0;
@@ -152,8 +169,6 @@ function radarCard() {
   card.append(head);
 
   const map = el("div", "weather-radar-map");
-  map.style.setProperty("--radar-cols", String(GRID_COLS));
-  map.style.setProperty("--radar-rows", String(GRID_ROWS));
   map.append(el("div", "weather-radar-base"), el("div", "weather-radar-frames"));
   const hint = el("p", "weather-radar-hint", "Regenradar wird geladen …");
   map.append(hint);
@@ -448,28 +463,44 @@ function hideRadarHint() {
   if (hint !== null) hint.hidden = true;
 }
 
-function tileImage(url, alt) {
+// One absolutely positioned tile image at its place in the viewport.
+function tileImage(url, tile) {
   const image = document.createElement("img");
   image.className = "weather-tile";
   image.src = url;
-  image.alt = alt;
+  image.alt = "";
   image.decoding = "async";
+  image.style.left = `${tile.left}px`;
+  image.style.top = `${tile.top}px`;
+  image.style.width = `${tile.size}px`;
+  image.style.height = `${tile.size}px`;
   return image;
 }
 
-/** One <img> per visible tile of the current zoom, in grid order. */
-function tileImages(urlFor) {
-  return tileGrid(zoomLevel).map((tile) => tileImage(urlFor(tile), ""));
+// Size of the radar viewport in CSS pixels. Falls back to a sensible
+// default while the element has not been laid out yet (measuring a
+// display:none section returns 0).
+function viewportSize() {
+  const map = activeContainer?.querySelector(".weather-radar-map");
+  const width = map?.clientWidth || 0;
+  const height = map?.clientHeight || 0;
+  return {
+    width: width > 0 ? width : FALLBACK_MAP_WIDTH,
+    height: height > 0 ? height : FALLBACK_MAP_HEIGHT,
+  };
 }
 
-function radarFrameLayer(frame) {
+function radarFrameLayer(frame, tiles) {
   const layer = el("div", "weather-radar-frame");
-  layer.append(...tileImages((tile) => radarTileUrl(frame.id, tile.zoom, tile.x, tile.y)));
+  layer.append(
+    ...tiles.map((tile) => tileImage(radarTileUrl(frame.id, tile.zoom, tile.x, tile.y), tile)),
+  );
   return layer;
 }
 
-// Build the base map and one layer per radar frame for the current zoom,
-// then start animating once the images have loaded (no flicker).
+// Build the base map and one layer per radar frame for the current zoom
+// and viewport size, then start animating once the images have loaded
+// (no flicker). Also called after a resize, hence the full rebuild.
 function rebuildRadarLayers() {
   if (activeContainer === null) return;
   stopAnimation();
@@ -479,9 +510,17 @@ function rebuildRadarLayers() {
   const base = activeContainer.querySelector(".weather-radar-base");
   const frameHost = activeContainer.querySelector(".weather-radar-frames");
   if (base === null || frameHost === null) return;
-  base.replaceChildren(...tileImages((tile) => baseTileUrl(tile.zoom, tile.x, tile.y)));
 
-  const layers = frames.map(radarFrameLayer);
+  const { width, height } = viewportSize();
+  // The base map is fetched one zoom deeper at normal tile size so it
+  // stays sharp under the double-sized radar tiles (see weather-map.js).
+  const baseTiles = viewportTiles(baseZoomFor(zoomLevel), BASE_TILE_PX, width, height);
+  const radarTiles = viewportTiles(zoomLevel, RADAR_TILE_PX, width, height);
+  base.replaceChildren(
+    ...baseTiles.map((tile) => tileImage(baseTileUrl(tile.zoom, tile.x, tile.y), tile)),
+  );
+
+  const layers = frames.map((frame) => radarFrameLayer(frame, radarTiles));
   frameHost.replaceChildren(...layers);
   frameIndex = Math.min(frameIndex, layers.length - 1);
   showFrame(frameIndex);
@@ -583,4 +622,14 @@ function changeZoom(delta) {
   if (next === zoomLevel) return;
   zoomLevel = next;
   if (frames.length > 0) rebuildRadarLayers();
+}
+
+// Debounced: a resize drag would otherwise rebuild (and re-request) the
+// whole tile set on every intermediate size.
+let resizeTimer;
+function onWindowResized() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (activeContainer !== null && frames.length > 0) rebuildRadarLayers();
+  }, RESIZE_DEBOUNCE_MS);
 }

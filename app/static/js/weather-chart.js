@@ -16,7 +16,7 @@ export const CHART_WIDTH = 1000;
 export const CHART_HEIGHT = 340;
 // Generous bottom padding: x labels, then the wind arrow row, then the
 // wind speed numbers. Right padding holds the precipitation axis.
-export const CHART_PADDING = { top: 20, right: 60, bottom: 88, left: 56 };
+export const CHART_PADDING = { top: 20, right: 82, bottom: 88, left: 56 };
 
 // Vertical offsets below the plot area for the three label rows.
 export const X_LABEL_OFFSET = 22;
@@ -59,10 +59,16 @@ export function timeBounds(points) {
   return { minT, maxT };
 }
 
+// The temperature axis always has this many intervals, and its step is
+// picked from these candidates so every gridline lands on a round number
+// — readable across the room, unlike 10/14/18/21/25.
+export const TEMP_INTERVALS = 4;
+const TEMP_STEPS = [1, 2, 5, 10, 20];
+
 /**
- * Temperature axis bounds, snapped outwards to whole 5 °C steps so the
- * gridlines land on readable numbers. Null when no hour carries a
- * temperature (the caller then draws no line).
+ * Temperature axis bounds as ``{min, max, step}``: TEMP_INTERVALS steps of
+ * a round size, covering every temperature in the series. Null when no
+ * hour carries a temperature (the caller then draws no line).
  */
 export function tempBounds(points) {
   let min = Number.POSITIVE_INFINITY;
@@ -73,10 +79,17 @@ export function tempBounds(points) {
     if (point.temp_c > max) max = point.temp_c;
   }
   if (min === Number.POSITIVE_INFINITY) return null;
-  const low = Math.floor(min / 5) * 5;
-  let high = Math.ceil(max / 5) * 5;
-  if (high <= low) high = low + 5;
-  return { min: low, max: high };
+  const needed = (max - min) / TEMP_INTERVALS;
+  let step =
+    TEMP_STEPS.find((candidate) => candidate >= needed) ?? TEMP_STEPS[TEMP_STEPS.length - 1];
+  let low = Math.floor(min / step) * step;
+  // Rounding the low end down can leave the fixed number of intervals
+  // short of the peak; widen the step until the whole series fits.
+  while (low + step * TEMP_INTERVALS < max) {
+    step *= 2;
+    low = Math.floor(min / step) * step;
+  }
+  return { min: low, max: low + step * TEMP_INTERVALS, step };
 }
 
 /**
@@ -159,7 +172,7 @@ export function xTicks(bounds, area, count = 6) {
 }
 
 /** Evenly spaced temperature gridlines from min to max (inclusive). */
-export function tempTicks(bounds, area, count = 4) {
+export function tempTicks(bounds, area, count = TEMP_INTERVALS) {
   const ticks = [];
   for (let index = 0; index <= count; index += 1) {
     const value = bounds.min + ((bounds.max - bounds.min) * index) / count;

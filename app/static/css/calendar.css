@@ -906,15 +906,17 @@ body.mode-weather .status-badge {
   color: var(--accent-contrast);
 }
 
-/* The radar map: a fixed tile grid (see weather-map.js) that scales with
-   the card width. Base map and radar frames are stacked layers of the same
-   grid, so a frame always lines up with the map underneath it. */
+/* The radar map: a viewport centred on Munich, cropping stacked layers of
+   pixel-positioned tiles (see weather-map.js — whole-tile grids would put
+   Munich up to half a tile off centre). Base map and radar frames cover
+   the same ground, so a frame always lines up with the map underneath.
+   The height is fixed (and the tiles positioned in px against it), not
+   derived from an aspect ratio, so the band stays a readable strip on the
+   1920x1080 kiosk and shrinks sensibly on the narrow ingress panel. */
 .weather-radar-map {
-  --radar-cols: 5;
-  --radar-rows: 3;
   position: relative;
   width: 100%;
-  aspect-ratio: var(--radar-cols) / var(--radar-rows);
+  height: clamp(260px, 46vh, 520px);
   overflow: hidden;
   border-radius: var(--radius);
   background: var(--bg);
@@ -924,9 +926,6 @@ body.mode-weather .status-badge {
 .weather-radar-frame {
   position: absolute;
   inset: 0;
-  display: grid;
-  grid-template-columns: repeat(var(--radar-cols), 1fr);
-  grid-template-rows: repeat(var(--radar-rows), 1fr);
 }
 
 /* Only the current frame is visible; the others stay loaded so stepping
@@ -942,11 +941,12 @@ body.mode-weather .status-badge {
   opacity: 1;
 }
 
+/* Position and size come from weather-view.js (inline px from the
+   viewport math); only the painting rules live here. */
 .weather-tile {
+  position: absolute;
   display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  max-width: none;
 }
 
 .weather-radar-hint {
@@ -961,6 +961,13 @@ body.mode-weather .status-badge {
   font-size: 20px;
   color: var(--text-muted);
   background: var(--bg);
+}
+
+/* The [hidden] attribute only sets display:none in the UA stylesheet, which
+   the rule above would win against — the loading hint then stayed on top of
+   the finished map forever. Spell the hidden state out explicitly. */
+.weather-radar-hint[hidden] {
+  display: none;
 }
 
 .weather-chart-legend {

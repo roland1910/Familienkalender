@@ -26,11 +26,15 @@ export function formatTemp(value) {
   return `${Math.round(value)}°`;
 }
 
-/** Precipitation axis label, e.g. 1.5 → "1,5 mm" (German decimal comma). */
+/**
+ * Precipitation axis label, e.g. 1.5 → "1,5 mm" (German decimal comma).
+ * Up to two decimals: with a 1 mm axis the gridlines land on quarters,
+ * and rounding 0.25 to "0,3 mm" would misstate the line it belongs to.
+ * Trailing zeros are dropped, so a whole number stays "1 mm".
+ */
 export function formatPrecip(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "";
-  const rounded = Math.round(value * 10) / 10;
-  return `${rounded.toLocaleString("de-DE", { maximumFractionDigits: 1 })} mm`;
+  return `${value.toLocaleString("de-DE", { maximumFractionDigits: 2 })} mm`;
 }
 
 /** Wind speed label, e.g. 3.4 → "3". Whole m/s is plenty at kiosk distance. */

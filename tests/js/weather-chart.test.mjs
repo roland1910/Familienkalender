@@ -72,18 +72,53 @@ test("timeBounds returns null for an empty series", () => {
   assert.equal(timeBounds([]), null);
 });
 
-test("tempBounds snaps outwards to whole 5 degree steps", () => {
-  const points = [{ temp_c: 12.4 }, { temp_c: 23.1 }];
-  assert.deepEqual(tempBounds(points), { min: 10, max: 25 });
+test("tempBounds snaps to round steps that cover the series", () => {
+  const bounds = tempBounds([{ temp_c: 12.4 }, { temp_c: 23.1 }]);
+  assert.deepEqual(bounds, { min: 10, max: 30, step: 5 });
 });
 
 test("tempBounds handles negative temperatures", () => {
-  assert.deepEqual(tempBounds([{ temp_c: -3.2 }, { temp_c: 1 }]), { min: -5, max: 5 });
+  assert.deepEqual(tempBounds([{ temp_c: -3.2 }, { temp_c: 1 }]), { min: -4, max: 4, step: 2 });
 });
 
 test("tempBounds never collapses to a zero-height axis", () => {
   const bounds = tempBounds([{ temp_c: 15 }, { temp_c: 15 }]);
   assert.ok(bounds.max > bounds.min);
+});
+
+test("tempBounds always covers every temperature in the series", () => {
+  const samples = [
+    [-18.3, -17.9],
+    [-5, 38],
+    [0.1, 0.2],
+    [19.6, 20.4],
+    [-30, 45],
+  ];
+  for (const [low, high] of samples) {
+    const bounds = tempBounds([{ temp_c: low }, { temp_c: high }]);
+    assert.ok(bounds.min <= low, `min ${bounds.min} above ${low}`);
+    assert.ok(bounds.max >= high, `max ${bounds.max} below ${high}`);
+  }
+});
+
+test("tempBounds gridlines all land on whole multiples of the step", () => {
+  const area = plotArea();
+  for (const [low, high] of [
+    [12.4, 23.1],
+    [-3.2, 1],
+    [-5, 38],
+  ]) {
+    const bounds = tempBounds([{ temp_c: low }, { temp_c: high }]);
+    for (const tick of tempTicks(bounds, area)) {
+      // Math.abs: a negative multiple yields -0, which strict-equals fails on.
+      assert.equal(
+        Math.abs(tick.value % bounds.step),
+        0,
+        `${tick.value} is not a multiple of ${bounds.step}`,
+      );
+      assert.equal(tick.value, Math.round(tick.value), "tick value is not whole");
+    }
+  }
 });
 
 test("tempBounds is null when no hour has a temperature", () => {

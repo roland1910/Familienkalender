@@ -91,15 +91,20 @@ def test_radar_shows_base_map_and_frame_layers(page: Page, server_url: str) -> N
     open_weather_view(page, server_url)
 
     expect(page.locator(".weather-radar-title")).to_have_text("Regenradar München")
-    # The base map is a full tile grid (5x3 = 15 tiles, see weather-map.js).
-    expect(page.locator(".weather-radar-base .weather-tile")).to_have_count(15)
-    # One layer per radar frame, each with its own tile grid.
+    # The base map fills the viewport with tiles (count depends on the
+    # measured size, so just assert it is a plausible grid).
+    base_tiles = page.locator(".weather-radar-base .weather-tile")
+    expect(base_tiles.first).to_be_attached()
+    assert base_tiles.count() >= 4
+    # One layer per radar frame, each with its own tiles.
     expect(page.locator(".weather-radar-frame")).to_have_count(len(RADAR_FRAMES))
-    expect(page.locator(".weather-radar-frame").first.locator(".weather-tile")).to_have_count(15)
+    assert page.locator(".weather-radar-frame").first.locator(".weather-tile").count() >= 1
     # Exactly one frame is visible at a time.
     expect(page.locator(".weather-radar-frame-active")).to_have_count(1)
     # The timestamp of the shown frame is labelled.
     expect(page.locator(".weather-radar-time")).to_contain_text("Uhr")
+    # The loading hint is gone once the map is up (it would otherwise cover it).
+    expect(page.locator(".weather-radar-hint")).to_be_hidden()
 
 
 def test_radar_animation_advances_and_can_be_paused(page: Page, server_url: str) -> None:
@@ -143,22 +148,26 @@ def test_zoom_buttons_reload_the_tile_grid(page: Page, server_url: str) -> None:
     mock_weather(page)
     open_weather_view(page, server_url)
 
-    def first_tile_src() -> str:
-        return page.locator(".weather-radar-base .weather-tile").first.get_attribute("src")
+    base_first = page.locator(".weather-radar-base .weather-tile").first
+    radar_first = page.locator(".weather-radar-frame .weather-tile").first
+    # Default: radar at zoom 7 (RainViewer's maximum), base one deeper.
+    expect(radar_first).to_have_attribute("src", re.compile(r"/tile/radar/\d+/7/"))
+    expect(base_first).to_have_attribute("src", re.compile(r"/tile/base/8/"))
 
-    before = first_tile_src()
-    assert "/tile/base/9/" in before  # default zoom
+    # Already at the closest level: "+" must not push past RainViewer's max.
     page.locator(".weather-zoom-in").click()
-    expect(page.locator(".weather-radar-base .weather-tile").first).to_have_attribute(
-        "src", re.compile(r"/tile/base/10/")
-    )
+    expect(radar_first).to_have_attribute("src", re.compile(r"/tile/radar/\d+/7/"))
+
     page.locator(".weather-zoom-out").click()
+    expect(radar_first).to_have_attribute("src", re.compile(r"/tile/radar/\d+/6/"))
+    expect(base_first).to_have_attribute("src", re.compile(r"/tile/base/7/"))
     page.locator(".weather-zoom-out").click()
-    expect(page.locator(".weather-radar-base .weather-tile").first).to_have_attribute(
-        "src", re.compile(r"/tile/base/8/")
-    )
-    # The grid is still complete after zooming.
-    expect(page.locator(".weather-radar-base .weather-tile")).to_have_count(15)
+    expect(radar_first).to_have_attribute("src", re.compile(r"/tile/radar/\d+/5/"))
+    # ... and not below the widest level either.
+    page.locator(".weather-zoom-out").click()
+    expect(radar_first).to_have_attribute("src", re.compile(r"/tile/radar/\d+/5/"))
+    # The map is still fully tiled after zooming.
+    assert page.locator(".weather-radar-base .weather-tile").count() >= 4
 
 
 def test_forecast_chart_renders_temperature_precipitation_and_wind(

@@ -267,10 +267,12 @@ class TestTileCoordinateValidation:
         return mock
 
     def test_allowed_zooms_are_exactly_the_ones_the_frontend_uses(self) -> None:
-        assert weather.ALLOWED_ZOOMS == (8, 9, 10)
+        # Radar 5-7 (RainViewer's maximum) plus the base map one level
+        # deeper — see app/static/js/weather-map.js.
+        assert weather.ALLOWED_ZOOMS == (5, 6, 7, 8)
         assert weather.DEFAULT_ZOOM in weather.ALLOWED_ZOOMS
 
-    @pytest.mark.parametrize("zoom", [0, 1, 7, 11, 19, 25])
+    @pytest.mark.parametrize("zoom", [0, 1, 4, 9, 10, 19, 25])
     def test_zoom_outside_the_allowlist_is_rejected(
         self, client: TestClient, zoom: int
     ) -> None:
@@ -299,14 +301,14 @@ class TestTileCoordinateValidation:
         "coords",
         [
             ("abc", "1", "2"),
-            ("9", "x", "2"),
-            ("9", "1", "y"),
-            ("9", "1e3", "2"),
-            ("9", "0x10", "2"),
-            ("9", "1.5", "2"),
-            ("9", " 272", "177"),
-            ("9", "+272", "177"),
-            ("9", "", "177"),
+            ("7", "x", "2"),
+            ("7", "1", "y"),
+            ("7", "1e3", "2"),
+            ("7", "0x10", "2"),
+            ("7", "1.5", "2"),
+            ("7", " 68", "44"),
+            ("7", "+68", "44"),
+            ("7", "", "44"),
         ],
     )
     def test_non_integer_coordinates_are_rejected(
@@ -405,9 +407,10 @@ class TestRadarTileProxy:
 class TestTileMath:
     def test_munich_tile_matches_the_slippy_map_formula(self) -> None:
         # Reference values from the standard OSM slippy-map tilenames.
+        assert weather.munich_tile(5) == (17, 11)
+        assert weather.munich_tile(6) == (34, 22)
+        assert weather.munich_tile(7) == (68, 44)
         assert weather.munich_tile(8) == (136, 88)
-        assert weather.munich_tile(9) == (272, 177)
-        assert weather.munich_tile(10) == (544, 355)
 
     def test_tile_window_is_centred_on_munich(self) -> None:
         x, y = weather.munich_tile(weather.DEFAULT_ZOOM)
