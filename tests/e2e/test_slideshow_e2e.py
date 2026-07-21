@@ -93,6 +93,33 @@ def test_toggle_enables_screensaver_and_idle_starts_slideshow(
     expect(page.locator("#calendar .month-view")).to_be_visible()
 
 
+def test_slideshow_overlay_covers_the_whole_header(page: Page, server_url: str) -> None:
+    """During the slideshow no header control may show through or be clickable
+    over the photo (Etappe 37: Roland saw a calendar button over the images).
+    The full-screen overlay must sit above every toolbar element."""
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    goto_calendar(page, server_url)
+    page.locator("#btn-screensaver").click()
+    overlay = page.locator(".slideshow-overlay")
+    expect(overlay).to_be_visible(timeout=5000)
+
+    # At each header control's centre, the top-most element must belong to the
+    # slideshow overlay — never the toolbar button underneath it.
+    for selector in ["#btn-mode-calendar", "#btn-mode-power", "#btn-screensaver", "#btn-today"]:
+        covered = page.eval_on_selector(
+            selector,
+            """el => {
+                const r = el.getBoundingClientRect();
+                const hit = document.elementFromPoint(
+                    r.left + r.width / 2, r.top + r.height / 2);
+                return hit !== null && hit.closest('.slideshow-overlay') !== null;
+            }""",
+        )
+        assert covered, selector
+
+
 def test_slideshow_hides_badges_without_metadata(page: Page, server_url: str) -> None:
     # taken=null and no folders: both badges stay hidden — "wenn du nichts
     # auslesen kannst soll einfach nichts da stehen".
