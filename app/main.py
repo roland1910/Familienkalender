@@ -57,9 +57,12 @@ CACHE_CONTROL_REVALIDATE = "no-cache"
 # and dynamic; "no-store" (no revalidation dance) is the right policy.
 CACHE_CONTROL_API = "no-store"
 
-# The slideshow image endpoint deliberately keeps its own short-lived
-# caching (private, max-age=60) — photos are large and immutable.
-API_CACHE_EXEMPT_PREFIX = "/api/slideshow/image/"
+# Endpoints that deliberately keep their own caching policy instead of
+# no-store, because they serve large, effectively immutable binaries:
+# the slideshow images (private, max-age=60) and the proxied weather map
+# tiles (see app.weather — the kiosk re-requests the same tiles
+# constantly, and OSM/RainViewer ask for modest request rates).
+API_CACHE_EXEMPT_PREFIXES = ("/api/slideshow/image/", "/api/weather/tile/")
 
 
 class RevalidatingStaticFiles(StaticFiles):
@@ -79,8 +82,8 @@ class ApiCacheControlMiddleware:
     stripping the ASGI root_path — behind HA ingress the path carries the
     /api/hassio_ingress/<token> prefix (re-added by IngressPathMiddleware),
     so this middleware must run inside it (added earlier = innermost).
-    The slideshow image endpoint (API_CACHE_EXEMPT_PREFIX) keeps its own
-    policy and is skipped entirely; everything else — including error
+    The endpoints under API_CACHE_EXEMPT_PREFIXES keep their own policy
+    and are skipped entirely; everything else — including error
     responses, which would be just as sticky in a cache — gets no-store,
     overriding any header set further in.
     """
@@ -96,7 +99,7 @@ class ApiCacheControlMiddleware:
         root_path = scope.get("root_path", "")
         if root_path and path.startswith(root_path):
             path = path[len(root_path):]
-        if not path.startswith("/api/") or path.startswith(API_CACHE_EXEMPT_PREFIX):
+        if not path.startswith("/api/") or path.startswith(API_CACHE_EXEMPT_PREFIXES):
             await self.app(scope, receive, send)
             return
 
