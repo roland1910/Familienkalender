@@ -110,28 +110,84 @@ body {
   overflow: hidden;
 }
 
-/* -- toolbar ------------------------------------------------------------ */
+/* -- app shell: content left, control bar right ------------------------- */
 
-.toolbar {
+/* Etappe 39: the control bar moved from the top edge to the RIGHT edge and
+   runs vertically ("die Leiste mit den Buttons … könnte generell am rechten
+   Rand vertikal angebracht werden damit würden wir nochmals etwas platz
+   gewinnen auch im Kalender und bei der Stromansicht"). The bar is ~68px
+   wide, the header row it replaces was ~69px tall — on a 1920x1080 kiosk
+   that trades width the grid has plenty of for height it does not.
+   Below the narrow breakpoint the whole shell flips back to the previous
+   horizontal arrangement (a 74px column on a 390px phone would eat a fifth
+   of the screen). */
+.app {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Title line above the content. Deliberately NOT inside the vertical bar:
+   a 68px column cannot show "KW 30 · 20.07. – 26.07." legibly, and rotating
+   the title would make the one piece of text people actually read the
+   hardest to read. Left-aligned and slim, it costs far less height than the
+   button row it replaces. */
+.content-head {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
+  gap: 12px;
+  padding: 4px 12px 2px;
+  min-width: 0;
+}
+
+.period-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* -- toolbar (vertical, right edge) ------------------------------------- */
+
+.toolbar {
+  flex: none;
+  /* Just wide enough for a 48px touch target plus the word "Woche". */
+  width: 74px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 7px;
   background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
 }
 
 .toolbar-nav {
   display: flex;
+  flex-direction: column;
   gap: 8px;
+  width: 100%;
 }
 
 .nav-button,
 .view-button {
+  width: 100%;
   min-width: 48px;
   min-height: 48px;
-  padding: 0 18px;
+  padding: 0 4px;
   font-size: 22px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -148,34 +204,21 @@ body {
 
 .nav-button-today,
 .view-button {
-  font-size: 17px;
+  font-size: 15px;
 }
 
-.period-title {
-  flex: 1;
-  margin: 0;
-  font-size: 26px;
-  font-weight: 600;
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.toolbar-right {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px 12px;
-  /* The labelled controls (Etappe 36) need more room than the bare icons
-     did — on a narrow panel the groups wrap onto a second line instead of
-     pushing the toolbar past the viewport edge. */
-  flex-wrap: wrap;
-  min-width: 0;
+/* The chevrons mean "previous"/"next" — pointing left/right in a horizontal
+   bar, up/down in the vertical one. Rotating the glyph (not the button)
+   keeps the 48px touch target square and untouched. */
+.nav-glyph {
+  display: inline-block;
+  transform: rotate(90deg);
 }
 
 .view-switch {
   display: flex;
+  flex-direction: column;
+  width: 100%;
 }
 
 .view-switch .view-button {
@@ -183,12 +226,12 @@ body {
 }
 
 .view-switch .view-button:first-child {
-  border-radius: var(--radius) 0 0 var(--radius);
+  border-radius: var(--radius) var(--radius) 0 0;
 }
 
 .view-switch .view-button:last-child {
-  border-radius: 0 var(--radius) var(--radius) 0;
-  border-left: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  border-top: none;
 }
 
 .view-button.active {
@@ -197,19 +240,21 @@ body {
   color: var(--accent-contrast);
 }
 
-/* Separates the two groups in the header (Etappe 36): Monat/Woche is a
-   period INSIDE the calendar, Kalender/Strom/Wetter is the top-level view.
-   Hidden together with the period switch outside calendar mode (see below),
-   so no stray line is left dangling. */
+/* Group separators in the bar (Etappe 36, turned horizontal in Etappe 39):
+   navigation, period (Monat/Woche), views (Kalender/Strom/Wetter) and the
+   switches are different kinds of control and read as separate blocks
+   instead of one undifferentiated column of icons.
+   The `-calendar` variant belongs to the calendar-only groups and is hidden
+   with them outside calendar mode, so no stray line is left dangling. */
 .toolbar-divider {
-  width: 1px;
-  align-self: stretch;
-  min-height: 40px;
+  width: 34px;
+  height: 1px;
+  flex: none;
   background: var(--border);
 }
 
 .status-badge {
-  padding: 6px 12px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: var(--warn-bg);
   color: var(--warn-text);
@@ -217,10 +262,15 @@ body {
   white-space: nowrap;
 }
 
-/* Mode toggle (calendar/power view) and the admin gear. */
+/* Mode toggle (calendar/power/weather view), the switches and the admin
+   gear. Takes the remaining height so the gear can sit at the very bottom
+   (margin-top: auto), well away from the frequently used controls. */
 .mode-slot {
   min-width: 0;
+  width: 100%;
+  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 8px;
 }
@@ -235,7 +285,9 @@ body {
    gap groups the three mode buttons. */
 .mode-switch {
   display: flex;
+  flex-direction: column;
   gap: 8px;
+  width: 100%;
 }
 
 .mode-button,
@@ -243,9 +295,10 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   min-height: 48px;
   min-width: 48px;
-  padding: 0 14px;
+  padding: 0 4px;
   font-family: inherit;
   font-size: 22px;
   white-space: nowrap;
@@ -315,11 +368,11 @@ body {
    controls disappear — they would page a calendar nobody is looking at. */
 body.mode-power .toolbar-nav,
 body.mode-power .view-switch,
-body.mode-power .toolbar-divider,
+body.mode-power .toolbar-divider-calendar,
 body.mode-power .status-badge,
 body.mode-weather .toolbar-nav,
 body.mode-weather .view-switch,
-body.mode-weather .toolbar-divider,
+body.mode-weather .toolbar-divider-calendar,
 body.mode-weather .status-badge {
   display: none;
 }
@@ -329,7 +382,10 @@ body.mode-weather .status-badge {
   align-items: center;
   justify-content: center;
   text-decoration: none;
-  padding: 0 12px;
+  padding: 0 4px;
+  /* Bottom of the bar: the gear is the rarest control and must not sit
+     between the everyday ones. */
+  margin-top: auto;
 }
 
 /* display:inline-flex would override the UA rule of the hidden attribute —
@@ -1275,21 +1331,79 @@ body.mode-weather .status-badge {
 /* -- narrow layout (HA ingress side panel) ---------------------------------- */
 
 @media (max-width: 900px) {
+  /* Narrow panel / phone: a 74px column at the right edge would eat a fifth
+     of the width, so the shell flips back to the horizontal bar on top that
+     every width used before Etappe 39. Everything below just undoes the
+     vertical arrangement. */
+  .app {
+    flex-direction: column;
+  }
+
   .toolbar {
+    order: -1;
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
     gap: 8px;
     padding: 8px;
+    border-left: none;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+
+  .toolbar-nav,
+  .view-switch,
+  .mode-switch,
+  .mode-slot {
+    flex-direction: row;
+    width: auto;
+  }
+
+  .mode-slot {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+  }
+
+  .nav-button,
+  .view-button,
+  .mode-button,
+  .icon-button {
+    width: auto;
+  }
+
+  .nav-glyph {
+    transform: none;
+  }
+
+  .toolbar-divider {
+    width: 1px;
+    height: auto;
+    align-self: stretch;
+    min-height: 40px;
+  }
+
+  .view-switch .view-button:first-child {
+    border-radius: var(--radius) 0 0 var(--radius);
+  }
+
+  .view-switch .view-button:last-child {
+    border-radius: 0 var(--radius) var(--radius) 0;
+    border-top: 1px solid var(--border);
+    border-left: none;
+  }
+
+  .admin-link {
+    margin-top: 0;
+  }
+
+  .content-head {
+    padding: 4px 10px 2px;
   }
 
   .period-title {
-    font-size: 19px;
-    order: -1;
-    flex-basis: 100%;
-  }
-
-  /* Narrow panel / phone: tighter spacing. The buttons are icon-only on
-     every width now (Etappe 37), so nothing has to collapse here. */
-  .toolbar-right {
-    gap: 8px;
+    font-size: 18px;
   }
 
   .mode-button,

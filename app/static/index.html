@@ -20,24 +20,54 @@
   </script>
 </head>
 <body>
-  <header class="toolbar">
-    <div class="toolbar-nav">
-      <button id="btn-prev" class="nav-button" type="button" aria-label="Zurück">&#8249;</button>
-      <button id="btn-today" class="nav-button nav-button-today" type="button">Heute</button>
-      <button id="btn-next" class="nav-button" type="button" aria-label="Vor">&#8250;</button>
+  <!-- Etappe 39: die Bedienleiste steht senkrecht am RECHTEN Bildschirmrand
+       (Rolands Wunsch: "die Leiste … könnte generell am rechten Rand vertikal
+       angebracht werden damit würden wir nochmals etwas platz gewinnen").
+       Deshalb liegt der Inhalt links (.content) und die Leiste rechts
+       daneben; auf schmalen Schirmen kippt das Ganze per Media-Query wieder
+       in die alte waagerechte Anordnung oben. -->
+  <div class="app">
+    <div class="content">
+      <!-- Der Titel sitzt kompakt oben links im Inhalt (nicht in der Leiste):
+           eine senkrechte Leiste kann "KW 30 · 20.07. – 26.07." nicht lesbar
+           aufnehmen, und eine schlanke Titelzeile kostet deutlich weniger
+           Höhe als die frühere Button-Zeile. -->
+      <div class="content-head">
+        <h1 id="period-title" class="period-title">Familienkalender</h1>
+        <span id="status-badge" class="status-badge" hidden>Daten nicht aktuell</span>
+      </div>
+      <main id="calendar" class="calendar">
+        <p id="loading" class="loading">Lädt&hellip;</p>
+      </main>
+      <section id="legend" class="legend" aria-label="Kalender-Legende" hidden></section>
+      <section id="power" class="power" hidden aria-label="Strom">
+        <p class="loading">Lädt&hellip;</p>
+      </section>
+      <section id="weather" class="weather" hidden aria-label="Wetter">
+        <p class="loading">Lädt&hellip;</p>
+      </section>
     </div>
-    <h1 id="period-title" class="period-title">Familienkalender</h1>
-    <div class="toolbar-right">
-      <span id="status-badge" class="status-badge" hidden>Daten nicht aktuell</span>
-      <!-- Zeitraum INNERHALB des Kalenders — bewusst eine eigene Gruppe,
-           optisch getrennt vom Ansichts-Umschalter daneben (Etappe 36). -->
+    <header class="toolbar">
+      <!-- Gruppe 1: Blättern (nur im Kalender-Modus sichtbar). Die Chevrons
+           werden in der senkrechten Leiste per CSS um 90° gedreht, damit
+           "zurück" nach oben und "vor" nach unten zeigt. -->
+      <div class="toolbar-nav">
+        <button id="btn-prev" class="nav-button" type="button" aria-label="Zurück"><span
+          class="nav-glyph">&#8249;</span></button>
+        <button id="btn-today" class="nav-button nav-button-today" type="button">Heute</button>
+        <button id="btn-next" class="nav-button" type="button" aria-label="Vor"><span
+          class="nav-glyph">&#8250;</span></button>
+      </div>
+      <span class="toolbar-divider toolbar-divider-calendar" aria-hidden="true"></span>
+      <!-- Gruppe 2: Zeitraum INNERHALB des Kalenders — bewusst eine eigene
+           Gruppe, optisch getrennt vom Ansichts-Umschalter darunter. -->
       <div class="view-switch">
         <button id="btn-month" class="view-button active" type="button"
                 aria-pressed="true">Monat</button>
         <button id="btn-week" class="view-button" type="button"
                 aria-pressed="false">Woche</button>
       </div>
-      <span class="toolbar-divider" aria-hidden="true"></span>
+      <span class="toolbar-divider toolbar-divider-calendar" aria-hidden="true"></span>
       <div id="mode-slot" class="mode-slot">
         <!-- Ansichts-Umschalter (Etappe 37): NUR Symbole, kein Text — Roland
              findet die Icons (Kalender/Strom/Wetter) erkennbar und will die
@@ -64,6 +94,7 @@
             <span class="btn-icon" data-icon="cloud" aria-hidden="true"></span>
           </button>
         </div>
+        <span class="toolbar-divider" aria-hidden="true"></span>
         <!-- Theme-Umschalter (pro Gerät, localStorage): zyklisch
              Auto -> Hell -> Dunkel. Auto folgt dem System-/HA-Theme.
              Dreistufig, aber ohne Text (Etappe 37): drei UNTERSCHIEDLICHE
@@ -90,18 +121,8 @@
         <a class="nav-button admin-link" href="admin" aria-label="Verwaltung" title="Verwaltung"
            hidden><span class="btn-icon" data-icon="gear" aria-hidden="true"></span></a>
       </div>
-    </div>
-  </header>
-  <main id="calendar" class="calendar">
-    <p id="loading" class="loading">Lädt&hellip;</p>
-  </main>
-  <section id="legend" class="legend" aria-label="Kalender-Legende" hidden></section>
-  <section id="power" class="power" hidden aria-label="Strom">
-    <p class="loading">Lädt&hellip;</p>
-  </section>
-  <section id="weather" class="weather" hidden aria-label="Wetter">
-    <p class="loading">Lädt&hellip;</p>
-  </section>
+    </header>
+  </div>
   <div id="day-popover" class="popover-backdrop" hidden></div>
   <script type="module" src="static/js/main.js"></script>
 </body>
