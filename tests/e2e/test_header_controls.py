@@ -206,11 +206,22 @@ def test_narrow_screens_fall_back_to_a_horizontal_bar(page: Page, server_url: st
     assert bar["width"] > 300, bar
     assert bar["height"] < 400, bar
     assert bar["y"] < 10, bar
-    # No horizontal overflow of the document.
+    # No horizontal overflow of the document...
     overflow = page.evaluate(
         "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
     )
     assert overflow <= 1, overflow
+    # ... and no control sticks out sideways either (body has overflow:hidden,
+    # which would hide an overhang from the scrollWidth check above).
+    edges = page.evaluate(
+        """() => [...document.querySelectorAll('.toolbar button, .toolbar a')].map((el) => {
+            const box = el.getBoundingClientRect();
+            return [el.id || el.className, box.left, box.right];
+        })"""
+    )
+    for name, left, right in edges:
+        assert left >= -1, (name, left)
+        assert right <= 391, (name, right)
 
 
 def test_every_control_uses_an_svg_icon_never_an_emoji(page: Page, server_url: str) -> None:
