@@ -163,6 +163,38 @@ def test_control_bar_holds_every_control_stacked(page: Page, server_url: str) ->
         assert after["y"] >= before["y"] + before["height"] - 1, (previous, current)
 
 
+def test_type_scale_is_steerable_from_a_few_css_variables(page: Page, server_url: str) -> None:
+    """Etappe 39: "die Schrift könnte insgesamt etwas filigraner und kleiner
+    sein". Every size goes through the --fs-* scale, so future tuning is one
+    edit — and nothing is heavier than semibold any more."""
+    goto_calendar(page, server_url)
+
+    scale = page.evaluate(
+        """() => {
+            const styles = getComputedStyle(document.documentElement);
+            return ["--fs-xs", "--fs-sm", "--fs-md", "--fs-lg", "--fs-xl", "--fs-2xl"]
+                .map((name) => styles.getPropertyValue(name).trim());
+        }"""
+    )
+    assert scale == ["12px", "13px", "15px", "17px", "20px", "24px"], scale
+
+    title = "#period-title"
+    before = page.eval_on_selector(title, "el => getComputedStyle(el).fontSize")
+    assert before == "20px", before
+    # Retuning the variable retunes the rendered text — no hard-coded size.
+    page.evaluate('() => document.documentElement.style.setProperty("--fs-xl", "40px")')
+    after = page.eval_on_selector(title, "el => getComputedStyle(el).fontSize")
+    assert after == "40px", after
+    page.evaluate('() => document.documentElement.style.removeProperty("--fs-xl")')
+
+    # Nothing in the calendar is bolder than semibold.
+    weights = page.eval_on_selector_all(
+        ".content *, .toolbar *",
+        "els => [...new Set(els.map((el) => getComputedStyle(el).fontWeight))]",
+    )
+    assert all(int(weight) <= 600 for weight in weights), weights
+
+
 def test_narrow_screens_fall_back_to_a_horizontal_bar(page: Page, server_url: str) -> None:
     """On Marina's phone a right-hand column would eat a fifth of the width —
     there the bar goes back on top, and nothing overflows sideways."""

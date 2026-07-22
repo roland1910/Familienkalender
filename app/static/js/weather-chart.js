@@ -22,19 +22,22 @@ export const CHART_HEIGHT = 340;
 // Top padding holds the day header band (weekday + date per day, Etappe 38).
 // Generous bottom padding: hour labels, then the wind arrow row, then the
 // wind speed numbers. Right padding holds the precipitation axis.
-export const CHART_PADDING = { top: 34, right: 82, bottom: 88, left: 56 };
+// Etappe 39: one step tighter all round, matching the smaller, lighter type
+// of the rest of the UI (see the --fs-* scale in calendar.css). Since the
+// viewBox is now in real pixels these are CSS pixels, not stretched units.
+export const CHART_PADDING = { top: 26, right: 64, bottom: 74, left: 46 };
 
 // Baseline of the day labels inside the top band.
-export const DAY_LABEL_Y = 22;
+export const DAY_LABEL_Y = 17;
 // Vertical offsets below the plot area for the three label rows.
-export const X_LABEL_OFFSET = 22;
-export const WIND_ARROW_OFFSET = 50;
-export const WIND_LABEL_OFFSET = 78;
-export const WIND_ARROW_SIZE = 13;
+export const X_LABEL_OFFSET = 18;
+export const WIND_ARROW_OFFSET = 42;
+export const WIND_LABEL_OFFSET = 66;
+export const WIND_ARROW_SIZE = 11;
 
 // A day narrower than this many pixels gets no label (the leading and
 // trailing partial days of a window are often just a sliver).
-export const MIN_DAY_LABEL_PX = 46;
+export const MIN_DAY_LABEL_PX = 40;
 // Precipitation bars only use the lower part of the plot, so a wet day does
 // not bury the temperature line (the same split Yr uses).
 export const PRECIP_HEIGHT_SHARE = 0.55;

@@ -20,11 +20,25 @@ export function formatHourTick(ms) {
 
 /** Label of a day column above the chart, e.g. "Mi 22.07.". */
 export function formatDayLabel(ms) {
+  const parts = formatDayParts(ms);
+  return parts === null ? "" : `${parts.weekday} ${parts.date}`;
+}
+
+/**
+ * The same label split into its two halves: `{weekday, date}`, e.g.
+ * `{weekday: "Mi", date: "22.07."}`.
+ *
+ * Etappe 39 — Roland: "besonders die Wochetage mit Datum sehen komisch aus".
+ * The chart draws the weekday semibold and the date behind it in a lighter
+ * tone, so the eye gets the day at a glance and the date only when it looks
+ * for it. Null for an unreadable timestamp (the caller then draws nothing).
+ */
+export function formatDayParts(ms) {
   const moment = new Date(ms);
-  if (Number.isNaN(moment.getTime())) return "";
+  if (Number.isNaN(moment.getTime())) return null;
   const day = pad2(moment.getDate());
   const month = pad2(moment.getMonth() + 1);
-  return `${WEEKDAYS[moment.getDay()]} ${day}.${month}.`;
+  return { weekday: WEEKDAYS[moment.getDay()], date: `${day}.${month}.` };
 }
 
 /** Temperature axis label, e.g. 12.5 → "13°". */

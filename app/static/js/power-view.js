@@ -19,6 +19,10 @@ import {
 } from "./power-chart.js";
 import { balanceTile, formatChartTime, formatLastUpdated, formatWatts } from "./power-format.js";
 
+// Axis label size in the chart's user units (Etappe 39: one step down,
+// matching the --fs-* scale in calendar.css).
+const CHART_TEXT_PX = 13;
+
 const REFRESH_INTERVAL_MS = 15000;
 const HISTORY_REFRESH_INTERVAL_MS = 60000;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -251,7 +255,7 @@ function chartSvg(history) {
       y: tick.y + 4,
       "text-anchor": "end",
       fill: textColor,
-      "font-size": 14,
+      "font-size": CHART_TEXT_PX,
     });
     label.textContent = formatWatts(tick.value);
     svg.append(label);
@@ -264,7 +268,7 @@ function chartSvg(history) {
       y: area.y + area.height + 20,
       "text-anchor": "middle",
       fill: textColor,
-      "font-size": 14,
+      "font-size": CHART_TEXT_PX,
     });
     label.textContent = formatChartTime(tick.t, selectedHours);
     svg.append(label);

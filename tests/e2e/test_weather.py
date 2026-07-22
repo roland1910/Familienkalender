@@ -314,6 +314,31 @@ def test_chart_separates_the_days_and_labels_them(page: Page, server_url: str) -
     assert svg.locator("rect.weather-night").count() >= 3
 
 
+def test_day_header_sets_the_weekday_apart_from_the_date(page: Page, server_url: str) -> None:
+    """Roland: "besonders die Wochetage mit Datum sehen komisch aus". The
+    weekday is semibold, the date behind it lighter — and the whole label is
+    a step smaller than it used to be."""
+    mock_weather(page)
+    open_weather_view(page, server_url)
+
+    label = page.locator(".weather-chart-svg .weather-day-label").first
+    expect(label).to_have_count(1)
+    spans = label.locator("tspan")
+    expect(spans).to_have_count(2)
+    assert re.fullmatch(r"(Mo|Di|Mi|Do|Fr|Sa|So)", spans.nth(0).text_content() or ""), (
+        spans.nth(0).text_content()
+    )
+    assert re.fullmatch(r" \d\d\.\d\d\.", spans.nth(1).text_content() or ""), (
+        spans.nth(1).text_content()
+    )
+    assert spans.nth(0).get_attribute("font-weight") == "600"
+    # The date is toned down, the weekday is not.
+    assert spans.nth(1).get_attribute("fill-opacity") is not None
+    assert spans.nth(0).get_attribute("fill-opacity") is None
+    size = float(label.get_attribute("font-size") or "0")
+    assert 12 <= size <= 15, size
+
+
 def test_precipitation_bars_are_clearly_visible_when_it_rains(
     page: Page, server_url: str
 ) -> None:

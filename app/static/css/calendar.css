@@ -37,6 +37,22 @@
   --alert-bg: #fef2f2;
   --alert-text: #b91c1c;
   --radius: 8px;
+
+  /* Type scale (Etappe 39). Roland on the kiosk photo: "die Schrift könnte
+     insgesamt etwas filigraner und kleiner sein". Every size in this file
+     goes through one of these six steps, so the whole surface can be
+     retuned here instead of in sixty places. The values are ONE step below
+     what Etappe 38 used; the floor is what stays readable from ~2 m in
+     front of the 15.6" display, so nothing goes below 12px.
+     Deliberately not theme variables — sizes do not depend on light/dark. */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  /* "Filigraner": the heaviest weight in the UI is semibold, never bold. */
+  --fw-strong: 600;
 }
 
 /* Dark palette. Kept in a mixin-like list re-used by both activation paths
@@ -152,8 +168,9 @@ body {
 
 .period-title {
   margin: 0;
-  font-size: 20px;
-  font-weight: 600;
+  /* The one heading of the whole screen — kept a step above the rest. */
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-strong);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -188,7 +205,7 @@ body {
   min-width: 48px;
   min-height: 48px;
   padding: 0 4px;
-  font-size: 22px;
+  font-size: var(--fs-xl);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -204,7 +221,7 @@ body {
 
 .nav-button-today,
 .view-button {
-  font-size: 15px;
+  font-size: var(--fs-sm);
 }
 
 /* The chevrons mean "previous"/"next" — pointing left/right in a horizontal
@@ -258,7 +275,7 @@ body {
   border-radius: 999px;
   background: var(--warn-bg);
   color: var(--warn-text);
-  font-size: 14px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -300,7 +317,7 @@ body {
   min-width: 48px;
   padding: 0 4px;
   font-family: inherit;
-  font-size: 22px;
+  font-size: var(--fs-xl);
   white-space: nowrap;
   cursor: pointer;
   touch-action: manipulation;
@@ -407,7 +424,7 @@ body.mode-weather .status-badge {
   margin: 40px auto;
   text-align: center;
   color: var(--text-muted);
-  font-size: 20px;
+  font-size: var(--fs-lg);
 }
 
 /* -- source legend -------------------------------------------------------- */
@@ -419,7 +436,7 @@ body.mode-weather .status-badge {
   align-items: center;
   gap: 4px 20px;
   padding: 2px 16px 8px;
-  font-size: 15px;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 
@@ -459,9 +476,9 @@ body.mode-weather .status-badge {
 
 .weekday {
   text-align: center;
-  font-weight: 600;
+  font-weight: var(--fw-strong);
   color: var(--text-muted);
-  font-size: 16px;
+  font-size: var(--fs-md);
 }
 
 .month-grid {
@@ -509,8 +526,8 @@ body.mode-weather .status-badge {
   background: none;
   color: inherit;
   font-family: inherit;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-strong);
   text-align: left;
   padding: 0 2px 2px;
   border-radius: 6px;
@@ -524,7 +541,7 @@ body.mode-weather .status-badge {
 
 /* Day tags (emoji), top right next to the day number / in the week header. */
 .day-tags {
-  font-size: 16px;
+  font-size: var(--fs-md);
   line-height: 1.4;
   letter-spacing: 1px;
   white-space: nowrap;
@@ -548,7 +565,7 @@ body.mode-weather .status-badge {
   color: var(--chip-fg);
   border-radius: 4px;
   padding: 1px 6px;
-  font-size: 14px;
+  font-size: var(--fs-xs);
   line-height: 1.45;
   white-space: nowrap;
   overflow: hidden;
@@ -556,7 +573,7 @@ body.mode-weather .status-badge {
 
 .chip-time {
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
+  font-weight: var(--fw-strong);
   flex: none;
 }
 
@@ -570,8 +587,8 @@ body.mode-weather .status-badge {
   border: none;
   background: none;
   color: var(--accent);
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-strong);
   padding: 2px 6px;
   min-height: 28px;
   cursor: pointer;
@@ -614,7 +631,7 @@ body.mode-weather .status-badge {
 
 .popover-title {
   margin: 0;
-  font-size: 22px;
+  font-size: var(--fs-xl);
 }
 
 .popover-close {
@@ -622,7 +639,7 @@ body.mode-weather .status-badge {
   min-height: 48px;
   border: none;
   background: none;
-  font-size: 28px;
+  font-size: var(--fs-2xl);
   cursor: pointer;
   color: var(--text-muted);
   touch-action: manipulation;
@@ -657,7 +674,7 @@ body.mode-weather .status-badge {
   width: 110px;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: var(--fs-sm);
 }
 
 .popover-text {
@@ -666,13 +683,13 @@ body.mode-weather .status-badge {
 }
 
 .popover-event-title {
-  font-size: 17px;
+  font-size: var(--fs-md);
   overflow-wrap: anywhere;
 }
 
 .popover-location {
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--fs-xs);
   overflow-wrap: anywhere;
 }
 
@@ -686,8 +703,8 @@ body.mode-weather .status-badge {
 
 .popover-tags-title {
   margin: 0 0 8px;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-strong);
   color: var(--text-muted);
 }
 
@@ -700,7 +717,7 @@ body.mode-weather .status-badge {
 .tag-button {
   min-width: 48px;
   min-height: 48px;
-  font-size: 24px;
+  font-size: var(--fs-xl);
   line-height: 1;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -721,13 +738,13 @@ body.mode-weather .status-badge {
 
 .tag-hint {
   margin: 8px 0 0;
-  font-size: 13px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
 .tag-error {
   margin: 8px 0 0;
-  font-size: 13px;
+  font-size: var(--fs-xs);
   color: var(--warn-text);
 }
 
@@ -767,13 +784,13 @@ body.mode-weather .status-badge {
 }
 
 .power-summary-label {
-  font-size: 20px;
+  font-size: var(--fs-lg);
   color: var(--text-muted);
 }
 
 .power-summary-value {
-  font-size: 30px;
-  font-weight: 700;
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-strong);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -790,7 +807,7 @@ body.mode-weather .status-badge {
 /* Dezenter Gesamt-Zeitstempel am Ende der Zeile. */
 .power-summary-time {
   margin-left: auto;
-  font-size: 15px;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -816,7 +833,7 @@ body.mode-weather .status-badge {
 
 .power-chart-title {
   margin: 0;
-  font-size: 22px;
+  font-size: var(--fs-xl);
 }
 
 .power-chart-legend {
@@ -828,7 +845,7 @@ body.mode-weather .status-badge {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 18px;
+  font-size: var(--fs-md);
   color: var(--text-muted);
 }
 
@@ -848,8 +865,8 @@ body.mode-weather .status-badge {
   min-width: 56px;
   min-height: 44px;
   padding: 0 16px;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-strong);
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -877,13 +894,13 @@ body.mode-weather .status-badge {
   margin: 0;
   padding: 48px 0;
   text-align: center;
-  font-size: 20px;
+  font-size: var(--fs-lg);
   color: var(--text-muted);
 }
 
 .power-devices-title {
   margin: 8px 0 0;
-  font-size: 22px;
+  font-size: var(--fs-xl);
 }
 
 .power-devices {
@@ -902,7 +919,7 @@ body.mode-weather .status-badge {
   gap: 16px;
   min-height: 56px;
   padding: 8px 20px;
-  font-size: 24px;
+  font-size: var(--fs-xl);
 }
 
 .power-device + .power-device {
@@ -918,12 +935,12 @@ body.mode-weather .status-badge {
 
 .power-device-watts {
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
+  font-weight: var(--fw-strong);
 }
 
 .power-device-time {
   margin-top: 2px;
-  font-size: 15px;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -936,7 +953,7 @@ body.mode-weather .status-badge {
 
 .power-unavailable-note {
   display: block;
-  font-size: 14px;
+  font-size: var(--fs-xs);
   font-weight: 400;
   color: var(--warn-text);
 }
@@ -953,13 +970,13 @@ body.mode-weather .status-badge {
 
 .power-error-title {
   margin: 0;
-  font-size: 26px;
-  font-weight: 700;
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-strong);
 }
 
 .power-error-message {
   margin: 12px 0 0;
-  font-size: 20px;
+  font-size: var(--fs-lg);
 }
 
 /* -- weather view (Wetter-Ansicht) ------------------------------------------ */
@@ -1016,7 +1033,7 @@ body.mode-weather .status-badge {
 .weather-radar-title,
 .weather-chart-title {
   margin: 0;
-  font-size: 22px;
+  font-size: var(--fs-xl);
 }
 
 .weather-radar-controls {
@@ -1026,8 +1043,8 @@ body.mode-weather .status-badge {
 }
 
 .weather-radar-time {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-strong);
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   margin-right: 8px;
@@ -1040,8 +1057,8 @@ body.mode-weather .status-badge {
   min-width: 56px;
   min-height: 44px;
   padding: 0 16px;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-strong);
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1122,7 +1139,7 @@ body.mode-weather .status-badge {
   justify-content: center;
   text-align: center;
   padding: 24px;
-  font-size: 20px;
+  font-size: var(--fs-lg);
   color: var(--text-muted);
   background: var(--bg);
 }
@@ -1144,7 +1161,7 @@ body.mode-weather .status-badge {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 18px;
+  font-size: var(--fs-md);
   color: var(--text-muted);
 }
 
@@ -1156,7 +1173,7 @@ body.mode-weather .status-badge {
 }
 
 .weather-legend-arrow {
-  font-size: 18px;
+  font-size: var(--fs-md);
   line-height: 1;
 }
 
@@ -1196,7 +1213,7 @@ body.mode-weather .status-badge {
   margin: 0;
   padding: 48px 0;
   text-align: center;
-  font-size: 20px;
+  font-size: var(--fs-lg);
   color: var(--text-muted);
 }
 
@@ -1204,7 +1221,7 @@ body.mode-weather .status-badge {
 .weather-attribution {
   margin: 0 0 8px;
   text-align: center;
-  font-size: 15px;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 
@@ -1236,7 +1253,7 @@ body.mode-weather .status-badge {
   min-height: 48px;
   padding: 4px 0;
   font-family: inherit;
-  font-size: 16px;
+  font-size: var(--fs-md);
   color: inherit;
   border: none;
   background: none;
@@ -1251,7 +1268,7 @@ body.mode-weather .status-badge {
 }
 
 .week-day-name {
-  font-weight: 600;
+  font-weight: var(--fw-strong);
 }
 
 .week-allday {
@@ -1283,7 +1300,7 @@ body.mode-weather .status-badge {
   color: var(--chip-fg);
   border-radius: 4px;
   padding: 2px 8px;
-  font-size: 14px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1312,7 +1329,7 @@ body.mode-weather .status-badge {
   position: absolute;
   right: 8px;
   transform: translateY(-50%);
-  font-size: 13px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1354,7 +1371,7 @@ body.mode-weather .status-badge {
   color: var(--chip-fg);
   border-radius: 4px;
   padding: 2px 6px;
-  font-size: 13px;
+  font-size: var(--fs-xs);
   overflow: hidden;
   border: 1px solid var(--chip-border);
   /* Very short events stay readable regardless of the auto-zoom level. */
@@ -1436,7 +1453,7 @@ body.mode-weather .status-badge {
   }
 
   .period-title {
-    font-size: 18px;
+    font-size: var(--fs-md);
   }
 
   .mode-button,
@@ -1445,7 +1462,7 @@ body.mode-weather .status-badge {
   }
 
   .chip {
-    font-size: 12px;
+    font-size: var(--fs-xs);
   }
 
   .chip-time {
@@ -1454,11 +1471,11 @@ body.mode-weather .status-badge {
 
   .day-number,
   .weekday {
-    font-size: 13px;
+    font-size: var(--fs-xs);
   }
 
   .legend {
-    font-size: 13px;
+    font-size: var(--fs-xs);
     gap: 2px 14px;
     padding: 2px 10px 6px;
   }
@@ -1470,7 +1487,7 @@ body.mode-weather .status-badge {
   }
 
   .power-summary-value {
-    font-size: 24px;
+    font-size: var(--fs-xl);
   }
 
   .power-summary-time {
@@ -1484,7 +1501,7 @@ body.mode-weather .status-badge {
   }
 
   .power-device {
-    font-size: 18px;
+    font-size: var(--fs-md);
     min-height: 48px;
     padding: 6px 12px;
   }
@@ -1522,7 +1539,7 @@ body.mode-weather .status-badge {
   }
 
   .weather-legend-item {
-    font-size: 15px;
+    font-size: var(--fs-sm);
   }
 }
 

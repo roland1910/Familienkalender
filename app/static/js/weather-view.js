@@ -42,7 +42,7 @@ import {
   X_LABEL_OFFSET,
 } from "./weather-chart.js";
 import {
-  formatDayLabel,
+  formatDayParts,
   formatFrameTime,
   formatHourTick,
   formatPrecip,
@@ -357,11 +357,17 @@ function cssColor(cssVar, fallback) {
   return value || fallback;
 }
 
+// Chart type sizes in CSS pixels (the viewBox is the host's pixel size).
+// One step below Etappe 38, mirroring the --fs-* scale in calendar.css.
+const AXIS_TEXT_PX = 12;
+const DAY_LABEL_PX = 14;
+const WIND_TEXT_PX = 13;
+
 function svgText(
   x,
   y,
   text,
-  { anchor = "middle", fill, size = 14, weight = null, className = null } = {},
+  { anchor = "middle", fill, size = AXIS_TEXT_PX, weight = null, className = null } = {},
 ) {
   const node = svgEl("text", {
     x,
@@ -426,7 +432,7 @@ function chartSvg(points, timeB, tempB, maxMm, size, hours) {
       }),
     );
     svg.append(
-      svgText(area.x - 10, tick.y + 5, formatTemp(tick.value), {
+      svgText(area.x - 10, tick.y + 4, formatTemp(tick.value), {
         anchor: "end",
         fill: tempColor,
       }),
@@ -435,7 +441,7 @@ function chartSvg(points, timeB, tempB, maxMm, size, hours) {
   for (const tick of precipTicks(maxMm, area, 2)) {
     if (tick.value <= 0) continue; // the baseline is obvious
     svg.append(
-      svgText(area.x + area.width + 10, tick.y + 5, formatPrecip(tick.value), {
+      svgText(area.x + area.width + 10, tick.y + 4, formatPrecip(tick.value), {
         anchor: "start",
         fill: precipColor,
       }),
@@ -461,14 +467,8 @@ function chartSvg(points, timeB, tempB, maxMm, size, hours) {
   // hold the text (the partial first/last day) is left blank.
   for (const segment of daySegments(timeB)) {
     if (x(segment.end) - x(segment.start) < MIN_DAY_LABEL_PX) continue;
-    svg.append(
-      svgText(x(segment.mid), DAY_LABEL_Y, formatDayLabel(segment.dayStart), {
-        className: "weather-day-label",
-        fill: textColor,
-        size: 17,
-        weight: 600,
-      }),
-    );
+    const label = dayLabel(x(segment.mid), DAY_LABEL_Y, segment.dayStart, textColor);
+    if (label !== null) svg.append(label);
   }
 
   // Precipitation bars sit behind the temperature line.
@@ -532,9 +532,34 @@ function chartSvg(points, timeB, tempB, maxMm, size, hours) {
   for (const sample of windSamples(points, windSampleCount(hours))) {
     const at = x(sample.t);
     svg.append(windArrow(at, arrowY, windArrowRotation(sample.wind_dir_deg), textColor));
-    svg.append(svgText(at, labelY, formatWind(sample.wind_ms), { fill: textColor, size: 16 }));
+    svg.append(
+      svgText(at, labelY, formatWind(sample.wind_ms), { fill: textColor, size: WIND_TEXT_PX }),
+    );
   }
   return svg;
+}
+
+// Day header above the chart: weekday semibold, date behind it in a lighter
+// tone (Etappe 39 — the uniform bold "Mi 22.07." read as one clumsy block:
+// "besonders die Wochetage mit Datum sehen komisch aus"). Two tspans in ONE
+// text node, so `text-anchor: middle` still centres the whole label.
+function dayLabel(x, y, dayStart, color) {
+  const parts = formatDayParts(dayStart);
+  if (parts === null) return null;
+  const node = svgEl("text", {
+    class: "weather-day-label",
+    x,
+    y,
+    "text-anchor": "middle",
+    fill: color,
+    "font-size": DAY_LABEL_PX,
+  });
+  const weekday = svgEl("tspan", { "font-weight": 600 });
+  weekday.textContent = parts.weekday;
+  const date = svgEl("tspan", { "fill-opacity": 0.7 });
+  date.textContent = ` ${parts.date}`;
+  node.append(weekday, date);
+  return node;
 }
 
 // A simple arrow glyph pointing up at rotation 0, rotated into the wind

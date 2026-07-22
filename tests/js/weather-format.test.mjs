@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import {
   formatDayLabel,
+  formatDayParts,
   formatFrameTime,
   formatHourTick,
   formatPrecip,
@@ -63,4 +64,17 @@ test("formatWind rounds to whole m/s", () => {
 test("formatFrameTime labels a radar frame with its clock time", () => {
   assert.equal(formatFrameTime(AFTERNOON), "14:20 Uhr");
   assert.equal(formatFrameTime(Number.NaN), "");
+});
+
+test("formatDayParts splits the label so the chart can style the two halves", () => {
+  // Etappe 39: the weekday is drawn semibold, the date behind it lighter.
+  assert.deepEqual(formatDayParts(AFTERNOON), { weekday: "Mi", date: "22.07." });
+  assert.deepEqual(formatDayParts(new Date(2026, 0, 4, 3, 0).getTime()), {
+    weekday: "So",
+    date: "04.01.",
+  });
+});
+
+test("formatDayParts returns null for invalid input", () => {
+  assert.equal(formatDayParts(Number.NaN), null);
 });
