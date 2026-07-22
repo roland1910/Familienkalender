@@ -183,12 +183,77 @@ def test_forecast_chart_renders_temperature_precipitation_and_wind(
     expect(chart).to_contain_text("Niederschlag")
     expect(chart).to_contain_text("Wind")
 
-    svg = chart.locator(".weather-chart-svg")
+    svg = chart.locator(".weather-chart-svg").first
     expect(svg).to_be_visible()
     # One temperature polyline, precipitation bars and wind arrow groups.
     expect(svg.locator("path.weather-temp-line")).to_have_count(1)
     assert svg.locator("rect").count() > 0
     assert svg.locator("g").count() > 0
+
+
+def test_weather_view_splits_vertically_map_left_forecast_right(
+    page: Page, server_url: str
+) -> None:
+    """Etappe 39: "können wir den Screen nicht horizontal für die zwei
+    ansichten teilen sondern vertikal, dann wäre die Karte quadratisch und
+    könnten wir in der rechten hälfte den wetter vorkast auf zwei zeilen
+    teilen dann wäre dieser auch quadratisch"."""
+    mock_weather(page)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    open_weather_view(page, server_url)
+
+    radar = page.locator(".weather-radar").bounding_box()
+    chart = page.locator(".weather-chart").bounding_box()
+    assert radar is not None and chart is not None
+    # Side by side, radar on the left, forecast on the right — not stacked.
+    assert radar["x"] + radar["width"] <= chart["x"] + 1, (radar, chart)
+    assert abs(radar["y"] - chart["y"]) < 2, (radar, chart)
+
+    # The map is (near enough) square, so it shows a lot more north-south
+    # around Munich than the old wide strip.
+    map_box = page.locator(".weather-radar-map").bounding_box()
+    assert map_box is not None
+    assert abs(map_box["width"] - map_box["height"]) <= 2, map_box
+
+    # The forecast is drawn on TWO rows, both the same size, stacked.
+    rows = page.locator(".weather-chart-row")
+    expect(rows).to_have_count(2)
+    first = rows.nth(0).bounding_box()
+    second = rows.nth(1).bounding_box()
+    assert first is not None and second is not None
+    assert second["y"] >= first["y"] + first["height"] - 1, (first, second)
+    assert abs(first["height"] - second["height"]) <= 2, (first, second)
+    # Each row carries its own chart.
+    expect(page.locator(".weather-chart-svg")).to_have_count(2)
+
+
+def test_both_forecast_rows_share_one_temperature_scale(page: Page, server_url: str) -> None:
+    """Two rows on different scales would make the lower half look colder
+    than it is — the axis labels must be identical."""
+    mock_weather(page)
+    open_weather_view(page, server_url)
+
+    def temp_labels(index: int) -> list[str]:
+        return page.locator(".weather-chart-svg").nth(index).locator("text").evaluate_all(
+            "els => els.map((el) => el.textContent).filter((t) => t.endsWith('°'))"
+        )
+
+    assert temp_labels(0) == temp_labels(1), (temp_labels(0), temp_labels(1))
+    assert len(temp_labels(0)) >= 3
+
+
+def test_short_window_uses_a_single_row(page: Page, server_url: str) -> None:
+    """24 h on two rows of twelve hours each would be a lot of chrome for
+    very little curve — one row is enough there."""
+    mock_weather(page)
+    open_weather_view(page, server_url)
+    expect(page.locator(".weather-chart-row")).to_have_count(2)
+
+    page.locator(".weather-period-btn").nth(0).click()  # 24 h
+    expect(page.locator(".weather-chart-row")).to_have_count(1)
+
+    page.locator(".weather-period-btn").nth(1).click()  # 48 h
+    expect(page.locator(".weather-chart-row")).to_have_count(2)
 
 
 def test_period_button_switches_between_24h_48h_and_96h(page: Page, server_url: str) -> None:
@@ -239,10 +304,11 @@ def test_chart_separates_the_days_and_labels_them(page: Page, server_url: str) -
     assert all(weekday_date.match(label) for label in labels), labels
 
     # The x axis ticks are round clock times, not the crooked raw point
-    # times ("Do 03:12") the chart used to print.
+    # times ("Do 03:12") the chart used to print. Each of the two rows spans
+    # 48 h, so the step is six hours (see tickStepHours).
     hours = svg.locator(".weather-hour-label").all_text_contents()
     assert hours, "no hour ticks"
-    assert all(re.fullmatch(r"(00|12):00", label) for label in hours), hours
+    assert all(re.fullmatch(r"(00|06|12|18):00", label) for label in hours), hours
 
     # Nights are shaded, which is what makes the day rhythm readable.
     assert svg.locator("rect.weather-night").count() >= 3
@@ -299,9 +365,9 @@ def test_weather_view_fits_the_kiosk_without_scrolling(page: Page, server_url: s
     page.set_viewport_size({"width": 1920, "height": 1080})
     open_weather_view(page, server_url)
 
-    # Both halves are present and the chart SVG is on screen.
+    # Both halves are present and the chart SVGs are on screen.
     expect(page.locator(".weather-radar-map")).to_be_visible()
-    expect(page.locator(".weather-chart-svg")).to_be_visible()
+    expect(page.locator(".weather-chart-svg").first).to_be_visible()
 
     # The weather section does not overflow its own box (no scrollbar).
     overflow = page.eval_on_selector(
@@ -310,9 +376,10 @@ def test_weather_view_fits_the_kiosk_without_scrolling(page: Page, server_url: s
     )
     assert overflow <= 1, overflow
 
-    # The chart SVG's bottom edge sits inside the viewport height.
-    svg_bottom = page.eval_on_selector(
-        ".weather-chart-svg", "el => el.getBoundingClientRect().bottom"
+    # The last chart row's bottom edge sits inside the viewport height.
+    svg_bottom = page.eval_on_selector_all(
+        ".weather-chart-svg",
+        "els => Math.max(...els.map((el) => el.getBoundingClientRect().bottom))",
     )
     assert svg_bottom <= 1080 + 1, svg_bottom
 
@@ -362,7 +429,7 @@ def test_radar_error_shows_a_german_hint(page: Page, server_url: str) -> None:
     expect(hint).to_be_visible()
     expect(hint).to_have_text("Der Regenradar-Dienst ist nicht erreichbar.")
     # The chart still renders.
-    expect(page.locator(".weather-chart-svg")).to_be_visible()
+    expect(page.locator(".weather-chart-svg").first).to_be_visible()
 
 
 def test_empty_forecast_shows_a_hint_instead_of_crashing(page: Page, server_url: str) -> None:

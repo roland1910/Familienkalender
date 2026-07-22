@@ -971,23 +971,37 @@ body.mode-weather .status-badge {
   padding: 16px;
 }
 
+/* Etappe 39: the view is split VERTICALLY (Roland: "können wir den Screen
+   nicht horizontal für die zwei ansichten teilen sondern vertikal, dann wäre
+   die Karte quadratisch und könnten wir in der rechten hälfte den wetter
+   vorkast auf zwei zeilen teilen dann wäre dieser auch quadratisch"). No
+   max-width any more — the two halves need the whole kiosk width. */
 .weather-view {
-  max-width: 1400px;
-  margin: 0 auto;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
+}
+
+.weather-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
 }
 
 .weather-radar,
 .weather-chart {
+  flex: 1 1 50%;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 20px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .weather-radar-head,
@@ -1058,13 +1072,15 @@ body.mode-weather .status-badge {
    pixel-positioned tiles (see weather-map.js — whole-tile grids would put
    Munich up to half a tile off centre). Base map and radar frames cover
    the same ground, so a frame always lines up with the map underneath.
-   The height is fixed (and the tiles positioned in px against it), not
-   derived from an aspect ratio, so the band stays a readable strip on the
-   1920x1080 kiosk and shrinks sensibly on the narrow ingress panel. */
+   Etappe 39: the map is SQUARE instead of a wide strip — in the left half of
+   a vertically split screen a square shows much more north-south around
+   Munich for the same width. The aspect ratio is the fallback (narrow panel);
+   on the kiosk applyWeatherAutoFit sets an explicit pixel height, which wins
+   and keeps the map square as far as the column height allows. */
 .weather-radar-map {
   position: relative;
   width: 100%;
-  height: clamp(260px, 46vh, 520px);
+  aspect-ratio: 1 / 1;
   overflow: hidden;
   border-radius: var(--radius);
   background: var(--bg);
@@ -1151,12 +1167,29 @@ body.mode-weather .status-badge {
 
 .weather-chart-body {
   width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+/* One or two stacked forecast rows (see rowCount in weather-chart.js). Each
+   row gets an explicit pixel height from applyWeatherAutoFit on the kiosk;
+   the clamp is the fallback for the narrow panel, where the view scrolls. */
+.weather-chart-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.weather-chart-row {
+  flex: 1 1 0;
+  min-height: 120px;
 }
 
 .weather-chart-svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
 }
 
 .weather-chart-empty {
@@ -1456,7 +1489,27 @@ body.mode-weather .status-badge {
     padding: 6px 12px;
   }
 
-  /* Weather view on the narrow ingress panel: heading and controls stack. */
+  /* Weather view on the narrow ingress panel: a side-by-side split makes no
+     sense here, so radar and forecast go back to sitting under each other. */
+  .weather-split {
+    flex-direction: column;
+  }
+
+  .weather-view {
+    height: auto;
+  }
+
+  /* Without a fixed column height the rows cannot share one — they get an
+     explicit, scrollable height instead. */
+  .weather-chart-rows {
+    height: auto;
+  }
+
+  .weather-chart-row {
+    flex: 0 0 auto;
+    height: clamp(180px, 30vh, 300px);
+  }
+
   .weather-radar-head,
   .weather-chart-head {
     flex-direction: column;

@@ -11,7 +11,12 @@
 
 import { niceCeiling } from "./power-chart.js";
 
-// SVG user-space coordinate system; the <svg> scales it via viewBox.
+// Fallback chart size, used when the host element cannot be measured yet
+// (hidden section, first paint). Since Etappe 39 the caller normally passes
+// the host's REAL pixel size as the viewBox, so one SVG user unit is one CSS
+// pixel: with `preserveAspectRatio: none` a mismatching viewBox stretched the
+// labels non-uniformly, which is a good part of why the day header "sah
+// komisch aus".
 export const CHART_WIDTH = 1000;
 export const CHART_HEIGHT = 340;
 // Top padding holds the day header band (weekday + date per day, Etappe 38).
@@ -48,6 +53,43 @@ export function plotArea(width = CHART_WIDTH, height = CHART_HEIGHT, padding = C
     width: width - padding.left - padding.right,
     height: height - padding.top - padding.bottom,
   };
+}
+
+/**
+ * How many stacked rows the forecast is drawn on (Etappe 39). The weather
+ * view is split vertically now — radar left, forecast right — so a single
+ * long row would be a thin strip in a tall half. Two rows make the block
+ * roughly square: 48 h becomes one day per row, 96 h two days per row.
+ * 24 h stays on ONE row: two rows of twelve hours each would be a lot of
+ * chrome for very little curve.
+ */
+export function rowCount(hours) {
+  return hours <= 24 ? 1 : 2;
+}
+
+/**
+ * Split a window into `rows` stacked slices of EQUAL time span, each with
+ * its own bounds: `[{points, bounds}, …]`.
+ *
+ * Equal spans matter — both rows then share one x scale, so a curve in the
+ * lower row is directly comparable to the upper one. The point sitting
+ * exactly on a boundary belongs to both slices, so the temperature line
+ * reaches the edge of the upper row and continues from the edge of the
+ * lower one instead of stopping short.
+ */
+export function splitRows(points, bounds, rows) {
+  if (rows <= 1) return [{ points, bounds }];
+  const span = (bounds.maxT - bounds.minT) / rows;
+  const slices = [];
+  for (let index = 0; index < rows; index += 1) {
+    const minT = bounds.minT + span * index;
+    const maxT = index === rows - 1 ? bounds.maxT : bounds.minT + span * (index + 1);
+    slices.push({
+      points: points.filter((point) => point.t >= minT && point.t <= maxT),
+      bounds: { minT, maxT },
+    });
+  }
+  return slices;
 }
 
 /**
@@ -203,6 +245,10 @@ export function precipBars(points, timeB, maxMm, area, share = PRECIP_HEIGHT_SHA
   const bars = [];
   points.forEach((point, index) => {
     if (typeof point.precip_mm !== "number" || point.precip_mm <= 0) return;
+    // A point sitting exactly on the right edge covers an hour outside the
+    // window; its bar would be a zero-width stub (and, with the two-row
+    // split, a duplicate of the first bar of the row below).
+    if (point.t >= timeB.maxT) return;
     const spanHours =
       typeof point.precip_hours === "number" && point.precip_hours > 0 ? point.precip_hours : 1;
     const next = points[index + 1];

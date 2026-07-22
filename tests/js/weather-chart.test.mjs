@@ -19,9 +19,11 @@ import {
   precipBars,
   precipMax,
   precipTicks,
+  rowCount,
   scaleTemp,
   scaleX,
   sliceHours,
+  splitRows,
   tempAreaPath,
   tempBounds,
   tempPath,
@@ -455,4 +457,77 @@ test("windSamples passes short series through untouched", () => {
 test("windSamples ignores hours without wind data", () => {
   const points = series(4, (index) => (index < 2 ? { wind_ms: null } : {}));
   assert.equal(windSamples(points, 8).length, 2);
+});
+
+// -- two-row split (Etappe 39) ----------------------------------------------
+
+test("rowCount: only the short window stays on one row", () => {
+  assert.equal(rowCount(24), 1);
+  assert.equal(rowCount(48), 2);
+  assert.equal(rowCount(96), 2);
+});
+
+test("splitRows: one row hands the window back unchanged", () => {
+  const points = series(10);
+  const bounds = timeBounds(points);
+  const rows = splitRows(points, bounds, 1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].points, points);
+  assert.deepEqual(rows[0].bounds, bounds);
+});
+
+test("splitRows: both rows span exactly the same amount of time", () => {
+  const points = series(97);
+  const bounds = timeBounds(points);
+  const [first, second] = splitRows(points, bounds, 2);
+  assert.equal(first.bounds.minT, bounds.minT);
+  assert.equal(second.bounds.maxT, bounds.maxT);
+  assert.equal(first.bounds.maxT, second.bounds.minT);
+  // Equal spans mean one shared x scale — the rows stay comparable.
+  assert.equal(
+    first.bounds.maxT - first.bounds.minT,
+    second.bounds.maxT - second.bounds.minT,
+  );
+});
+
+test("splitRows: every point lands in a row, the seam point in both", () => {
+  const points = series(97);
+  const bounds = timeBounds(points);
+  const [first, second] = splitRows(points, bounds, 2);
+  // 97 hourly points: the 49th sits exactly on the seam and belongs to both,
+  // so the temperature line reaches the edge of each row.
+  assert.equal(first.points.length + second.points.length, points.length + 1);
+  assert.equal(first.points.at(-1).t, second.points[0].t);
+  assert.equal(first.points.at(-1).t, first.bounds.maxT);
+});
+
+test("splitRows: uneven point spacing does not unbalance the rows", () => {
+  // MET switches to six-hourly points after ~63h; the split is by TIME, so
+  // the sparse back half still gets its own row instead of being squeezed.
+  const dense = series(48);
+  const sparse = Array.from({ length: 8 }, (_, index) => ({
+    t: NOW + (48 + index * 6) * HOUR,
+    temp_c: 20,
+    precip_mm: 0,
+    wind_ms: 3,
+    wind_dir_deg: 180,
+  }));
+  const points = [...dense, ...sparse];
+  const bounds = timeBounds(points);
+  const [first, second] = splitRows(points, bounds, 2);
+  assert.ok(first.points.length > second.points.length);
+  assert.equal(
+    first.bounds.maxT - first.bounds.minT,
+    second.bounds.maxT - second.bounds.minT,
+  );
+});
+
+test("precipBars: a point sitting on the right edge draws no stub bar", () => {
+  const points = series(3, () => ({ precip_mm: 1 }));
+  const bounds = timeBounds(points);
+  const area = plotArea();
+  const bars = precipBars(points, bounds, 1, area);
+  // Three points, but the last one starts where the window ends — its bar
+  // would be a zero-width stub (and a duplicate of the row below's first).
+  assert.equal(bars.length, 2);
 });

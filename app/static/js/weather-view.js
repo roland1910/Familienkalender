@@ -23,8 +23,10 @@ import {
   precipBars,
   precipMax,
   precipTicks,
+  rowCount,
   scaleX,
   sliceHours,
+  splitRows,
   tempAreaPath,
   tempBounds,
   tempPath,
@@ -76,18 +78,17 @@ const FALLBACK_MAP_HEIGHT = 460;
 // Debounce before rebuilding the tile layers for a new window size.
 const RESIZE_DEBOUNCE_MS = 300;
 
-// Auto-fit (Etappe 37): on the kiosk the whole weather view must fit the
-// screen without scrolling — radar on top, forecast chart below. Above this
-// viewport width we measure the available height and split the leftover
-// (after the fixed chrome) between the radar map and the chart SVG. At or
-// below it (the narrow HA ingress panel / a phone) we leave the natural
-// clamp/aspect-ratio layout and allow scrolling instead.
+// Auto-fit (Etappe 37, reworked for the vertical split in Etappe 39): on the
+// kiosk the whole weather view must fit the screen without scrolling. The
+// view is now split SIDE BY SIDE — radar left, forecast right — so both
+// halves get the same height and each sizes its own flexible part: the radar
+// map to a SQUARE (Roland: "dann wäre die Karte quadratisch"), the forecast
+// to as many equal rows as `rowCount` asks for. Above this viewport width we
+// measure and set inline heights; at or below it (the narrow HA ingress
+// panel / a phone) the two halves stack and the CSS clamp layout may scroll.
 const AUTOFIT_MIN_WIDTH = 901;
-// Floors so neither half collapses to an unreadable sliver on a short kiosk.
+// Floor so the map never collapses to an unreadable sliver on a short kiosk.
 const RADAR_MIN_PX = 200;
-const CHART_MIN_PX = 180;
-// The radar gets a little more than half — the map carries more detail.
-const RADAR_SHARE = 0.54;
 
 const PERIODS = [
   { hours: 24, label: "24 h" },
@@ -168,7 +169,12 @@ export function stopWeatherView() {
 
 function buildSkeleton() {
   const view = el("div", "weather-view");
-  view.append(radarCard(), chartCard(), el("p", "weather-attribution", ATTRIBUTION));
+  // Etappe 39: the two cards sit next to each other ("können wir den Screen
+  // nicht horizontal für die zwei ansichten teilen sondern vertikal"). The
+  // attribution stays a full-width line below both.
+  const split = el("div", "weather-split");
+  split.append(radarCard(), chartCard());
+  view.append(split, el("p", "weather-attribution", ATTRIBUTION));
   return view;
 }
 
@@ -308,11 +314,32 @@ function renderChart(points) {
     renderChartMessage("Keine Vorhersagedaten");
     return;
   }
-  body.replaceChildren(chartSvg(visible, timeB, tempB));
-  // The freshly inserted SVG is one of the two flexible parts — re-fit so
-  // radar and chart share the kiosk height without scrolling. If the fit
-  // changed the radar map's height, its pixel-placed tiles need rebuilding.
-  if (applyWeatherAutoFit() && frames.length > 0) rebuildRadarLayers();
+  // Temperature axis and precipitation ceiling are computed over the WHOLE
+  // window and handed to every row: two rows on different scales would make
+  // the lower half look colder or wetter than it is.
+  const maxMm = precipMax(visible);
+  const rows = splitRows(visible, timeB, rowCount(selectedHours));
+  const rowHours = selectedHours / rows.length;
+
+  // Two passes: first the empty row hosts, so the auto-fit can measure the
+  // card's chrome and hand each row its height; then the SVGs, drawn into a
+  // viewBox that matches those pixels exactly (no stretched labels).
+  const hosts = rows.map(() => el("div", "weather-chart-row"));
+  const container = el("div", "weather-chart-rows");
+  container.append(...hosts);
+  body.replaceChildren(container);
+  const mapChanged = applyWeatherAutoFit();
+  rows.forEach((row, index) => {
+    const host = hosts[index];
+    const width = host.clientWidth || CHART_WIDTH;
+    const height = host.clientHeight || CHART_HEIGHT;
+    host.replaceChildren(
+      chartSvg(row.points, row.bounds, tempB, maxMm, { width, height }, rowHours),
+    );
+  });
+  // If the fit changed the radar map's height, its pixel-placed tiles need
+  // rebuilding.
+  if (mapChanged && frames.length > 0) rebuildRadarLayers();
 }
 
 function svgEl(name, attrs = {}) {
@@ -352,11 +379,13 @@ function svgText(
 // Layers, drawn back to front (Etappe 38 — the chart follows Yr's reading
 // order): night shading, horizontal gridlines, the day separators, the
 // precipitation bars, the temperature area and line, then all labels.
-function chartSvg(points, timeB, tempB) {
-  const area = plotArea();
+function chartSvg(points, timeB, tempB, maxMm, size, hours) {
+  const area = plotArea(size.width, size.height);
   const svg = svgEl("svg", {
     class: "weather-chart-svg",
-    viewBox: `0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`,
+    // One user unit = one CSS pixel (the caller measured the host), so the
+    // labels are drawn at their true size instead of being stretched.
+    viewBox: `0 0 ${size.width} ${size.height}`,
     preserveAspectRatio: "none",
     role: "img",
   });
@@ -364,7 +393,6 @@ function chartSvg(points, timeB, tempB) {
   const textColor = cssColor("--text-muted", "#888");
   const tempColor = cssColor(TEMP_COLOR_VAR, "#dc2626");
   const precipColor = cssColor(PRECIP_COLOR_VAR, "#2563eb");
-  const maxMm = precipMax(points);
   const x = (t) => scaleX(t, timeB, area);
 
   // Night shading (22:00-06:00): a faint block behind everything else, so
@@ -488,7 +516,8 @@ function chartSvg(points, timeB, tempB) {
   }
 
   // Time axis: round clock times only (00/06/12/18 …, see tickStepHours).
-  for (const tick of hourTicks(timeB, tickStepHours(selectedHours))) {
+  // `hours` is the span of THIS row, not of the whole window.
+  for (const tick of hourTicks(timeB, tickStepHours(hours))) {
     svg.append(
       svgText(x(tick), area.y + area.height + X_LABEL_OFFSET, formatHourTick(tick), {
         className: "weather-hour-label",
@@ -500,7 +529,7 @@ function chartSvg(points, timeB, tempB) {
   // Wind row: an arrow pointing where the wind blows to, plus its speed.
   const arrowY = area.y + area.height + WIND_ARROW_OFFSET;
   const labelY = area.y + area.height + WIND_LABEL_OFFSET;
-  for (const sample of windSamples(points, windSampleCount(selectedHours))) {
+  for (const sample of windSamples(points, windSampleCount(hours))) {
     const at = x(sample.t);
     svg.append(windArrow(at, arrowY, windArrowRotation(sample.wind_dir_deg), textColor));
     svg.append(svgText(at, labelY, formatWind(sample.wind_ms), { fill: textColor, size: 16 }));
@@ -598,47 +627,39 @@ function viewportSize() {
   };
 }
 
-// Size the radar map and the chart SVG so the whole view fits the visible
-// area without scrolling (kiosk only; see AUTOFIT_MIN_WIDTH). The two are the
-// only flexible parts: collapse them, measure the fixed chrome around them,
-// then hand the leftover height back split by RADAR_SHARE. Returns true when
-// the radar map height changed, so the caller can rebuild its pixel-placed
-// tiles. On the narrow panel the inline heights are cleared, restoring the
-// CSS clamp/aspect-ratio layout that is allowed to scroll.
+// Make the radar map SQUARE inside the height its column offers (kiosk only;
+// see AUTOFIT_MIN_WIDTH). The forecast rows need no JS: they are flex children
+// that share the right column's height by themselves. The map cannot be, both
+// because its tiles are positioned in pixels against a known size and because
+// "square" is a relation between its own width and height, not a share of a
+// container.
+//
+// The card is stretched to the full split height (align-items: stretch), so
+// its offsetHeight says nothing about its chrome — the space left for the map
+// is measured from the card's inner height minus padding, head and gap.
+// Returns true when the map height changed, so the caller can rebuild the
+// pixel-placed tiles. On the narrow panel the inline height is cleared and
+// the CSS aspect-ratio takes over.
 function applyWeatherAutoFit() {
   if (activeContainer === null) return false;
-  const section = document.getElementById("weather");
-  const view = activeContainer.querySelector(".weather-view");
   const map = activeContainer.querySelector(".weather-radar-map");
-  const svg = activeContainer.querySelector(".weather-chart-svg");
-  if (section === null || view === null || map === null) return false;
-
-  if (window.innerWidth < AUTOFIT_MIN_WIDTH) {
-    const changed = map.style.height !== "";
-    map.style.height = "";
-    if (svg !== null) svg.style.height = "";
-    return changed;
-  }
+  const card = activeContainer.querySelector(".weather-radar");
+  const head = activeContainer.querySelector(".weather-radar-head");
+  if (map === null || card === null) return false;
 
   const previousMapHeight = map.style.height;
-  // Collapse the flexible parts so `view.offsetHeight` is just the chrome.
-  map.style.height = "0px";
-  if (svg !== null) svg.style.height = "0px";
-  const styles = getComputedStyle(section);
-  const padding = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
-  const available = section.clientHeight - padding;
-  const leftover = available - view.offsetHeight;
-  if (leftover <= RADAR_MIN_PX + CHART_MIN_PX) {
-    // Too little room to fit both — keep them collapsed would look broken, so
-    // fall back to the floors (the view may then scroll, better than a sliver).
-    map.style.height = `${RADAR_MIN_PX}px`;
-    if (svg !== null) svg.style.height = `${CHART_MIN_PX}px`;
-    return map.style.height !== previousMapHeight;
+  if (window.innerWidth < AUTOFIT_MIN_WIDTH) {
+    map.style.height = "";
+    return previousMapHeight !== "";
   }
-  const radarHeight = Math.max(RADAR_MIN_PX, Math.round(leftover * RADAR_SHARE));
-  const chartHeight = Math.max(CHART_MIN_PX, leftover - radarHeight);
-  map.style.height = `${radarHeight}px`;
-  if (svg !== null) svg.style.height = `${chartHeight}px`;
+
+  const styles = getComputedStyle(card);
+  const padding = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+  const gap = parseFloat(styles.rowGap) || 0;
+  const headHeight = head === null ? 0 : head.offsetHeight;
+  const room = card.clientHeight - padding - headHeight - gap;
+  const height = Math.max(RADAR_MIN_PX, Math.min(map.clientWidth || RADAR_MIN_PX, room));
+  map.style.height = `${height}px`;
   return map.style.height !== previousMapHeight;
 }
 
@@ -787,9 +808,12 @@ function onWindowResized() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (activeContainer === null) return;
-    // Re-fit first (the available height changed); rebuilding the radar tiles
-    // picks up the new map height. Without frames there is nothing to rebuild,
-    // but the chart SVG still needs re-fitting.
+    // The chart's viewBox is its pixel size, so a resize means a redraw —
+    // renderChart re-fits and rebuilds the radar tiles if the map changed.
+    if (lastForecast !== null) {
+      renderChart(lastForecast);
+      return;
+    }
     const changed = applyWeatherAutoFit();
     if (frames.length > 0 && changed) rebuildRadarLayers();
   }, RESIZE_DEBOUNCE_MS);
