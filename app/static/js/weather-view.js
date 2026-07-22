@@ -13,26 +13,36 @@ import { setIcon } from "./icons.js";
 import {
   CHART_HEIGHT,
   CHART_WIDTH,
+  DAY_LABEL_Y,
+  dayBoundaries,
+  daySegments,
+  hourTicks,
+  MIN_DAY_LABEL_PX,
+  nightBands,
   plotArea,
   precipBars,
   precipMax,
   precipTicks,
+  scaleX,
   sliceHours,
+  tempAreaPath,
   tempBounds,
   tempPath,
   tempTicks,
+  tickStepHours,
   timeBounds,
   WIND_ARROW_OFFSET,
   WIND_ARROW_SIZE,
   WIND_LABEL_OFFSET,
   windArrowRotation,
+  windSampleCount,
   windSamples,
   X_LABEL_OFFSET,
-  xTicks,
 } from "./weather-chart.js";
 import {
-  formatAxisTime,
+  formatDayLabel,
   formatFrameTime,
+  formatHourTick,
   formatPrecip,
   formatTemp,
   formatWind,
@@ -320,7 +330,12 @@ function cssColor(cssVar, fallback) {
   return value || fallback;
 }
 
-function svgText(x, y, text, { anchor = "middle", fill, size = 14, rotate = null } = {}) {
+function svgText(
+  x,
+  y,
+  text,
+  { anchor = "middle", fill, size = 14, weight = null, className = null } = {},
+) {
   const node = svgEl("text", {
     x,
     y,
@@ -328,11 +343,15 @@ function svgText(x, y, text, { anchor = "middle", fill, size = 14, rotate = null
     fill,
     "font-size": size,
   });
-  if (rotate !== null) node.setAttribute("transform", `rotate(${rotate} ${x} ${y})`);
+  if (weight !== null) node.setAttribute("font-weight", weight);
+  if (className !== null) node.setAttribute("class", className);
   node.textContent = text;
   return node;
 }
 
+// Layers, drawn back to front (Etappe 38 — the chart follows Yr's reading
+// order): night shading, horizontal gridlines, the day separators, the
+// precipitation bars, the temperature area and line, then all labels.
 function chartSvg(points, timeB, tempB) {
   const area = plotArea();
   const svg = svgEl("svg", {
@@ -346,12 +365,28 @@ function chartSvg(points, timeB, tempB) {
   const tempColor = cssColor(TEMP_COLOR_VAR, "#dc2626");
   const precipColor = cssColor(PRECIP_COLOR_VAR, "#2563eb");
   const maxMm = precipMax(points);
+  const x = (t) => scaleX(t, timeB, area);
 
-  // Gridlines with the temperature scale on the left and the matching
-  // precipitation scale on the right (both use the same four steps).
-  const tempRows = tempTicks(tempB, area, 4);
-  const precipRows = precipTicks(maxMm, area, 4);
-  tempRows.forEach((tick, index) => {
+  // Night shading (22:00-06:00): a faint block behind everything else, so
+  // day and night are distinguishable without reading a single number.
+  for (const band of nightBands(timeB)) {
+    const from = x(band.start);
+    svg.append(
+      svgEl("rect", {
+        class: "weather-night",
+        x: from,
+        y: area.y,
+        width: Math.max(0, x(band.end) - from),
+        height: area.height,
+        fill: axisColor,
+        "fill-opacity": 0.35,
+      }),
+    );
+  }
+
+  // Horizontal gridlines carry the temperature scale on the left; the
+  // precipitation scale is labelled on the right inside the bar band.
+  for (const tick of tempTicks(tempB, area, 4)) {
     svg.append(
       svgEl("line", {
         x1: area.x,
@@ -368,28 +403,71 @@ function chartSvg(points, timeB, tempB) {
         fill: tempColor,
       }),
     );
-    const precipRow = precipRows[index];
-    if (precipRow !== undefined) {
-      svg.append(
-        svgText(area.x + area.width + 10, precipRow.y + 5, formatPrecip(precipRow.value), {
-          anchor: "start",
-          fill: precipColor,
-        }),
-      );
-    }
-  });
+  }
+  for (const tick of precipTicks(maxMm, area, 2)) {
+    if (tick.value <= 0) continue; // the baseline is obvious
+    svg.append(
+      svgText(area.x + area.width + 10, tick.y + 5, formatPrecip(tick.value), {
+        anchor: "start",
+        fill: precipColor,
+      }),
+    );
+  }
+
+  // Day separators at local midnight, reaching up into the label band.
+  for (const boundary of dayBoundaries(timeB)) {
+    svg.append(
+      svgEl("line", {
+        class: "weather-day-line",
+        x1: x(boundary),
+        y1: DAY_LABEL_Y - 16,
+        x2: x(boundary),
+        y2: area.y + area.height,
+        stroke: axisColor,
+        "stroke-width": 2,
+      }),
+    );
+  }
+
+  // One label per day, centred over its section — a slice too narrow to
+  // hold the text (the partial first/last day) is left blank.
+  for (const segment of daySegments(timeB)) {
+    if (x(segment.end) - x(segment.start) < MIN_DAY_LABEL_PX) continue;
+    svg.append(
+      svgText(x(segment.mid), DAY_LABEL_Y, formatDayLabel(segment.dayStart), {
+        className: "weather-day-label",
+        fill: textColor,
+        size: 17,
+        weight: 600,
+      }),
+    );
+  }
 
   // Precipitation bars sit behind the temperature line.
   for (const bar of precipBars(points, timeB, maxMm, area)) {
     svg.append(
       svgEl("rect", {
+        class: "weather-precip-bar",
         x: bar.x,
         y: bar.y,
         width: bar.width,
         height: bar.height,
         fill: precipColor,
-        "fill-opacity": 0.55,
-        rx: 2,
+        "fill-opacity": 0.75,
+        rx: 1.5,
+      }),
+    );
+  }
+
+  const areaPath = tempAreaPath(points, timeB, tempB, area);
+  if (areaPath !== "") {
+    svg.append(
+      svgEl("path", {
+        class: "weather-temp-area",
+        d: areaPath,
+        fill: tempColor,
+        "fill-opacity": 0.1,
+        stroke: "none",
       }),
     );
   }
@@ -409,27 +487,23 @@ function chartSvg(points, timeB, tempB) {
     );
   }
 
-  // Time axis.
-  for (const tick of xTicks(timeB, area, 6)) {
+  // Time axis: round clock times only (00/06/12/18 …, see tickStepHours).
+  for (const tick of hourTicks(timeB, tickStepHours(selectedHours))) {
     svg.append(
-      svgText(
-        tick.x,
-        area.y + area.height + X_LABEL_OFFSET,
-        formatAxisTime(tick.t, selectedHours),
-        {
-          fill: textColor,
-        },
-      ),
+      svgText(x(tick), area.y + area.height + X_LABEL_OFFSET, formatHourTick(tick), {
+        className: "weather-hour-label",
+        fill: textColor,
+      }),
     );
   }
 
   // Wind row: an arrow pointing where the wind blows to, plus its speed.
   const arrowY = area.y + area.height + WIND_ARROW_OFFSET;
   const labelY = area.y + area.height + WIND_LABEL_OFFSET;
-  for (const sample of windSamples(points, 8)) {
-    const x = area.x + ((sample.t - timeB.minT) / (timeB.maxT - timeB.minT)) * area.width;
-    svg.append(windArrow(x, arrowY, windArrowRotation(sample.wind_dir_deg), textColor));
-    svg.append(svgText(x, labelY, formatWind(sample.wind_ms), { fill: textColor, size: 16 }));
+  for (const sample of windSamples(points, windSampleCount(selectedHours))) {
+    const at = x(sample.t);
+    svg.append(windArrow(at, arrowY, windArrowRotation(sample.wind_dir_deg), textColor));
+    svg.append(svgText(at, labelY, formatWind(sample.wind_ms), { fill: textColor, size: 16 }));
   }
   return svg;
 }

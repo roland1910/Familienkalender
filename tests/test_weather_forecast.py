@@ -24,6 +24,7 @@ def _entry(
     wind: float | None = 3.0,
     wind_dir: float | None = 180.0,
     precip: float | None = 0.0,
+    precip_6h: float | None = None,
 ) -> dict:
     """One MET Norway timeseries entry (fields omitted when None)."""
     instant: dict = {}
@@ -36,6 +37,8 @@ def _entry(
     data: dict = {"instant": {"details": instant}}
     if precip is not None:
         data["next_1_hours"] = {"details": {"precipitation_amount": precip}}
+    if precip_6h is not None:
+        data["next_6_hours"] = {"details": {"precipitation_amount": precip_6h}}
     return {"time": time_iso, "data": data}
 
 
@@ -154,6 +157,37 @@ class TestForecastEndpoint:
         assert span_hours >= 96.0
         # All mocked hours come through (nothing dropped by the window).
         assert len(points) == 150
+
+    def test_precipitation_falls_back_to_the_six_hour_block(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Past ~63 h MET drops next_1_hours and only reports six-hour sums.
+        Without the fallback the 96 h chart showed no rain in its back third.
+        ``precip_hours`` tells the chart how wide to draw the bar."""
+        times = _hours_ahead(2)
+        mock = MockMet(
+            _forecast_body(
+                [
+                    # Hourly data available: it wins, even next to a 6h block.
+                    _entry(times[0], precip=0.2, precip_6h=3.0),
+                    # Sparse part of the series: only the six-hour sum is left.
+                    _entry(times[1], precip=None, precip_6h=2.5),
+                ]
+            )
+        )
+        use_met(monkeypatch, mock)
+        points = client.get("/api/weather/forecast").json()["points"]
+        assert [p["precip_mm"] for p in points] == [0.2, 2.5]
+        assert [p["precip_hours"] for p in points] == [1, 6]
+
+    def test_missing_precipitation_stays_null_with_a_one_hour_span(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        times = _hours_ahead(1)
+        use_met(monkeypatch, MockMet(_forecast_body([_entry(times[0], precip=None)])))
+        point = client.get("/api/weather/forecast").json()["points"][0]
+        assert point["precip_mm"] is None
+        assert point["precip_hours"] == 1
 
     def test_missing_fields_become_null_instead_of_failing(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch

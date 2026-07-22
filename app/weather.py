@@ -142,12 +142,19 @@ def _details(block: object) -> dict:
 
 
 def parse_forecast(data: object, *, now: dt.datetime, hours: int = FORECAST_HOURS) -> list[dict]:
-    """MET's timeseries → ``[{t, temp_c, precip_mm, wind_ms, wind_dir_deg}, ...]``.
+    """MET's timeseries → ``[{t, temp_c, precip_mm, precip_hours, wind_ms,
+    wind_dir_deg}, ...]``.
 
     ``t`` is epoch milliseconds (UTC). Individual missing or non-numeric
     values become ``None`` rather than dropping the whole hour — the chart
     simply skips them. Entries without a parseable ``time`` are skipped;
     a completely unusable body raises ``WeatherUnavailableError``.
+
+    Precipitation comes from ``next_1_hours`` while MET provides it (~63 h),
+    and falls back to the ``next_6_hours`` block after that — otherwise the
+    96 h chart would show no rain at all in its back third. ``precip_hours``
+    says which period the amount covers (1 or 6), so the chart can draw the
+    bar across exactly that span.
     """
     if not isinstance(data, dict):
         raise WeatherUnavailableError("Der Wetterdienst liefert eine unerwartete Antwort.")
@@ -168,11 +175,19 @@ def parse_forecast(data: object, *, now: dt.datetime, hours: int = FORECAST_HOUR
         block = entry.get("data")
         instant = _details(block.get("instant") if isinstance(block, dict) else None)
         next_hour = _details(block.get("next_1_hours") if isinstance(block, dict) else None)
+        precip = _number(next_hour.get("precipitation_amount"))
+        precip_hours = 1
+        if precip is None:
+            next_six = _details(block.get("next_6_hours") if isinstance(block, dict) else None)
+            precip = _number(next_six.get("precipitation_amount"))
+            if precip is not None:
+                precip_hours = 6
         points.append(
             {
                 "t": int(moment.timestamp() * 1000),
                 "temp_c": _number(instant.get("air_temperature")),
-                "precip_mm": _number(next_hour.get("precipitation_amount")),
+                "precip_mm": precip,
+                "precip_hours": precip_hours,
                 "wind_ms": _number(instant.get("wind_speed")),
                 "wind_dir_deg": _number(instant.get("wind_from_direction")),
             }

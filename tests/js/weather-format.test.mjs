@@ -4,8 +4,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  formatAxisTime,
+  formatDayLabel,
   formatFrameTime,
+  formatHourTick,
   formatPrecip,
   formatTemp,
   formatWind,
@@ -14,16 +15,22 @@ import {
 // Local-time constructor so the assertions hold in any timezone.
 const AFTERNOON = new Date(2026, 6, 22, 14, 20).getTime(); // Wednesday
 
-test("formatAxisTime shows the clock in the 24h window", () => {
-  assert.equal(formatAxisTime(AFTERNOON, 24), "14:20");
+test("formatHourTick shows the clock of a round hour", () => {
+  assert.equal(formatHourTick(new Date(2026, 6, 22, 6, 0).getTime()), "06:00");
+  assert.equal(formatHourTick(new Date(2026, 6, 22, 0, 0).getTime()), "00:00");
 });
 
-test("formatAxisTime prefixes the weekday in the 48h window", () => {
-  assert.equal(formatAxisTime(AFTERNOON, 48), "Mi 14:20");
+test("formatHourTick returns an empty string for invalid input", () => {
+  assert.equal(formatHourTick(Number.NaN), "");
 });
 
-test("formatAxisTime returns an empty string for invalid input", () => {
-  assert.equal(formatAxisTime(Number.NaN, 24), "");
+test("formatDayLabel names the weekday and the date", () => {
+  assert.equal(formatDayLabel(AFTERNOON), "Mi 22.07.");
+  assert.equal(formatDayLabel(new Date(2026, 0, 4, 3, 0).getTime()), "So 04.01.");
+});
+
+test("formatDayLabel returns an empty string for invalid input", () => {
+  assert.equal(formatDayLabel(Number.NaN), "");
 });
 
 test("formatTemp rounds to whole degrees", () => {

@@ -39,6 +39,7 @@ def _forecast(hours: int = 100) -> dict:
                 "temp_c": 15 + (index % 12),
                 # Rain in a couple of hours so bars are actually drawn.
                 "precip_mm": 1.4 if index % 7 == 3 else 0.0,
+                "precip_hours": 1,
                 "wind_ms": 2.0 + (index % 5),
                 "wind_dir_deg": (index * 30) % 360,
             }
@@ -203,19 +204,92 @@ def test_period_button_switches_between_24h_48h_and_96h(page: Page, server_url: 
     expect(buttons.nth(2)).to_have_class(re.compile("weather-period-active"))
     expect(buttons.nth(0)).not_to_have_class(re.compile("weather-period-active"))
 
-    weekday = re.compile(r"^(Mo|Di|Mi|Do|Fr|Sa|So) \d\d:\d\d$")
+    def day_labels() -> list[str]:
+        return page.locator(".weather-chart-svg .weather-day-label").all_text_contents()
 
-    def axis_labels() -> list[str]:
-        return page.locator(".weather-chart-svg text").all_text_contents()
-
-    # The wide default window prefixes the weekday so later days are clear.
-    assert any(weekday.match(label) for label in axis_labels())
+    # The wide default window is split into named days.
+    assert len(day_labels()) >= 4, day_labels()
 
     buttons.nth(0).click()
     expect(buttons.nth(0)).to_have_class(re.compile("weather-period-active"))
     expect(buttons.nth(2)).not_to_have_class(re.compile("weather-period-active"))
-    # The 24h window labels its time axis with a plain clock instead.
-    assert not any(weekday.match(label) for label in axis_labels())
+    # A single day window shows at most today and tomorrow.
+    assert len(day_labels()) <= 2, day_labels()
+
+
+def test_chart_separates_the_days_and_labels_them(page: Page, server_url: str) -> None:
+    """Roland's Etappe-38 feedback: "in der grafik des wetterforcasts fehlen
+    mir vertikale linien die die tage abgrenzen"."""
+    mock_weather(page)
+    open_weather_view(page, server_url)
+    svg = page.locator(".weather-chart-svg")
+
+    # One separator per local midnight in the 96h window (3 or 4, depending
+    # on the time of day the test runs), each a full-height vertical line.
+    lines = svg.locator("line.weather-day-line")
+    assert lines.count() >= 3, lines.count()
+    for index in range(lines.count()):
+        line = lines.nth(index)
+        assert line.get_attribute("x1") == line.get_attribute("x2")
+
+    # Each day carries a German weekday + date label above the chart.
+    labels = svg.locator(".weather-day-label").all_text_contents()
+    assert len(labels) >= 4, labels
+    weekday_date = re.compile(r"^(Mo|Di|Mi|Do|Fr|Sa|So) \d\d\.\d\d\.$")
+    assert all(weekday_date.match(label) for label in labels), labels
+
+    # The x axis ticks are round clock times, not the crooked raw point
+    # times ("Do 03:12") the chart used to print.
+    hours = svg.locator(".weather-hour-label").all_text_contents()
+    assert hours, "no hour ticks"
+    assert all(re.fullmatch(r"(00|12):00", label) for label in hours), hours
+
+    # Nights are shaded, which is what makes the day rhythm readable.
+    assert svg.locator("rect.weather-night").count() >= 3
+
+
+def test_precipitation_bars_are_clearly_visible_when_it_rains(
+    page: Page, server_url: str
+) -> None:
+    """A wet forecast must actually show bars — including a small amount,
+    which used to disappear into a hairline."""
+    now = dt.datetime.now(dt.UTC).replace(minute=0, second=0, microsecond=0)
+    start = int(now.timestamp() * 1000)
+    points = []
+    for index in range(100):
+        # Steady drizzle, a downpour, and one very small amount.
+        if index % 6 == 0:
+            precip = 4.0
+        elif index % 6 == 3:
+            precip = 0.1
+        else:
+            precip = 0.6
+        points.append(
+            {
+                "t": start + index * HOUR_MS,
+                "temp_c": 14 + (index % 8),
+                "precip_mm": precip,
+                "precip_hours": 1,
+                "wind_ms": 3.0,
+                "wind_dir_deg": 200,
+            }
+        )
+    mock_weather(page, forecast={"points": points})
+    open_weather_view(page, server_url)
+
+    bars = page.locator(".weather-chart-svg rect.weather-precip-bar")
+    assert bars.count() > 50, bars.count()
+    heights = [
+        float(bars.nth(index).get_attribute("height")) for index in range(min(bars.count(), 20))
+    ]
+    # Every bar is drawn at least a few user units high, and the downpour is
+    # clearly taller than the drizzle.
+    assert min(heights) >= 3, heights
+    assert max(heights) > min(heights) * 2, heights
+    # The bars stay inside the lower part of the plot: the temperature line
+    # must remain readable above even the wettest hour.
+    tops = [float(bars.nth(index).get_attribute("y")) for index in range(min(bars.count(), 20))]
+    assert min(tops) > 100, tops
 
 
 def test_weather_view_fits_the_kiosk_without_scrolling(page: Page, server_url: str) -> None:

@@ -8,16 +8,23 @@ function pad2(number) {
 const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
 /**
- * X-axis tick label for a forecast timestamp (epoch ms), local time.
- * A 24h window shows just "HH:MM"; the 48h window prefixes the weekday
- * so the second day is distinguishable ("Mi 14:00").
+ * X-axis tick label for a round local hour, e.g. "06:00" (Etappe 38). The
+ * day a tick belongs to is written above the chart by `formatDayLabel`, so
+ * the tick itself only carries the clock — no more crooked "Do 03:12".
  */
-export function formatAxisTime(ms, hours) {
+export function formatHourTick(ms) {
   const moment = new Date(ms);
   if (Number.isNaN(moment.getTime())) return "";
-  const time = `${pad2(moment.getHours())}:${pad2(moment.getMinutes())}`;
-  if (hours <= 24) return time;
-  return `${WEEKDAYS[moment.getDay()]} ${time}`;
+  return `${pad2(moment.getHours())}:${pad2(moment.getMinutes())}`;
+}
+
+/** Label of a day column above the chart, e.g. "Mi 22.07.". */
+export function formatDayLabel(ms) {
+  const moment = new Date(ms);
+  if (Number.isNaN(moment.getTime())) return "";
+  const day = pad2(moment.getDate());
+  const month = pad2(moment.getMonth() + 1);
+  return `${WEEKDAYS[moment.getDay()]} ${day}.${month}.`;
 }
 
 /** Temperature axis label, e.g. 12.5 → "13°". */

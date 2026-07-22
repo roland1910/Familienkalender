@@ -9,20 +9,28 @@ import {
   CHART_HEIGHT,
   CHART_PADDING,
   CHART_WIDTH,
+  dayBoundaries,
+  daySegments,
+  hourTicks,
+  MIN_BAR_PX,
+  nightBands,
   plotArea,
+  PRECIP_HEIGHT_SHARE,
   precipBars,
   precipMax,
   precipTicks,
   scaleTemp,
   scaleX,
   sliceHours,
+  tempAreaPath,
   tempBounds,
   tempPath,
   tempTicks,
+  tickStepHours,
   timeBounds,
   windArrowRotation,
+  windSampleCount,
   windSamples,
-  xTicks,
 } from "../../app/static/js/weather-chart.js";
 
 const HOUR = 3600000;
@@ -216,13 +224,61 @@ test("precipBars only covers hours with actual precipitation", () => {
   assert.equal(bars[0].mm, 1.5);
 });
 
-test("precipBars grow downward from the value to the baseline", () => {
+test("precipBars fill the band at the axis ceiling, growing up from the baseline", () => {
   const area = plotArea();
   const points = series(2, (index) => ({ precip_mm: index === 0 ? 2 : 0 }));
   const [bar] = precipBars(points, timeBounds(points), 2, area);
-  assert.equal(Math.round(bar.height), area.height);
-  assert.equal(Math.round(bar.y), area.y);
+  // Only the lower part of the plot belongs to the bars, so the temperature
+  // line stays readable above even the wettest hour.
+  const band = area.height * PRECIP_HEIGHT_SHARE;
+  assert.equal(Math.round(bar.height), Math.round(band));
+  assert.equal(Math.round(bar.y), Math.round(area.y + area.height - band));
   assert.ok(bar.width > 0);
+});
+
+test("precipBars keep a very small amount visible", () => {
+  const area = plotArea();
+  // 0.05 mm on a 1 mm axis is a hairline — it must still be drawn.
+  const points = series(2, (index) => ({ precip_mm: index === 0 ? 0.05 : 0 }));
+  const [bar] = precipBars(points, timeBounds(points), precipMax(points), area);
+  assert.ok(bar.height >= MIN_BAR_PX, `${bar.height}`);
+  assert.ok(bar.width >= MIN_BAR_PX, `${bar.width}`);
+});
+
+test("precipBars scale proportionally between the floor and the band", () => {
+  const area = plotArea();
+  const band = area.height * PRECIP_HEIGHT_SHARE;
+  const points = series(2, (index) => ({ precip_mm: index === 0 ? 2.5 : 0 }));
+  const [bar] = precipBars(points, timeBounds(points), 5, area);
+  assert.ok(Math.abs(bar.height - band / 2) < 0.5, `${bar.height}`);
+});
+
+test("precipBars never overlap the following point", () => {
+  const area = plotArea();
+  // Hourly points that each carry a six-hour sum (MET reports both): the
+  // bars must stop at the next point instead of smearing into one block.
+  const points = series(4, () => ({ precip_mm: 1, precip_hours: 6 }));
+  const bars = precipBars(points, timeBounds(points), 1, area);
+  for (let index = 0; index < bars.length - 1; index += 1) {
+    assert.ok(bars[index].x + bars[index].width <= bars[index + 1].x + 0.01, `${index}`);
+  }
+});
+
+test("precipBars start at their hour and span the period they cover", () => {
+  const area = plotArea();
+  // Six-hourly point (the sparse back half of the 96h window): the bar has
+  // to cover six hours, not the one hour a dense point covers.
+  const points = [
+    { t: NOW, precip_mm: 1, precip_hours: 1 },
+    { t: NOW + 6 * HOUR, precip_mm: 1, precip_hours: 6 },
+    { t: NOW + 12 * HOUR, precip_mm: 0 },
+  ];
+  const bounds = timeBounds(points);
+  const [hourly, sixHourly] = precipBars(points, bounds, 1, area);
+  assert.equal(Math.round(hourly.x), Math.round(area.x));
+  const hourPx = area.width / 12;
+  assert.ok(Math.abs(hourly.width - (hourPx - 1)) < 0.5, `${hourly.width}`);
+  assert.ok(Math.abs(sixHourly.width - (6 * hourPx - 1)) < 0.5, `${sixHourly.width}`);
 });
 
 test("precipBars skips null precipitation", () => {
@@ -231,14 +287,28 @@ test("precipBars skips null precipitation", () => {
   assert.deepEqual(precipBars(points, timeBounds(points), 1, area), []);
 });
 
-test("xTicks are evenly spaced and span the range", () => {
+test("tempAreaPath closes the temperature curve down to the baseline", () => {
   const area = plotArea();
-  const bounds = { minT: NOW, maxT: NOW + 24 * HOUR };
-  const ticks = xTicks(bounds, area, 5);
-  assert.equal(ticks.length, 5);
-  assert.equal(ticks[0].t, bounds.minT);
-  assert.equal(ticks[4].t, bounds.maxT);
-  assert.equal(Math.round(ticks[4].x), Math.round(area.x + area.width));
+  const points = series(3);
+  const path = tempAreaPath(points, timeBounds(points), tempBounds(points), area);
+  const baseline = area.y + area.height;
+  // Starts on the baseline, walks the curve, returns to the baseline.
+  assert.match(path, new RegExp(`^M[\\d.]+ ${baseline} L`));
+  assert.match(path, new RegExp(`L[\\d.]+ ${baseline} Z$`));
+});
+
+test("tempAreaPath makes one shape per uninterrupted run of hours", () => {
+  const area = plotArea();
+  const points = series(5, (index) => (index === 2 ? { temp_c: null } : {}));
+  const path = tempAreaPath(points, timeBounds(points), tempBounds(points), area);
+  // The gap must not be filled over: two separate closed shapes.
+  assert.equal((path.match(/Z/g) || []).length, 2, path);
+});
+
+test("tempAreaPath is empty without temperatures", () => {
+  const area = plotArea();
+  const points = series(3, () => ({ temp_c: null }));
+  assert.equal(tempAreaPath(points, timeBounds(points), { min: 0, max: 5 }, area), "");
 });
 
 test("tempTicks include both ends of the axis", () => {
@@ -249,12 +319,102 @@ test("tempTicks include both ends of the axis", () => {
   assert.equal(ticks[4].value, 30);
 });
 
-test("precipTicks run from zero to the ceiling", () => {
+test("precipTicks run from zero to the ceiling inside the bar band", () => {
   const area = plotArea();
-  const ticks = precipTicks(5, area, 5);
+  const ticks = precipTicks(5, area, 2);
   assert.equal(ticks[0].value, 0);
-  assert.equal(ticks[5].value, 5);
+  assert.equal(ticks[2].value, 5);
   assert.equal(Math.round(ticks[0].y), Math.round(area.y + area.height));
+  // The ceiling label sits at the top of the bar band, not of the plot.
+  const band = area.height * PRECIP_HEIGHT_SHARE;
+  assert.equal(Math.round(ticks[2].y), Math.round(area.y + area.height - band));
+});
+
+// --- day grid, hour ticks and night shading (Etappe 38) --------------------
+//
+// These work in LOCAL time (Europe/Berlin on the kiosk), so the tests build
+// their timestamps with the local Date constructor as well.
+
+const DAY_START = new Date(2026, 6, 21, 0, 0, 0).getTime(); // Tue 21.07.2026
+const localTime = (day, hour) => new Date(2026, 6, day, hour, 0, 0).getTime();
+
+test("dayBoundaries marks every local midnight inside the range", () => {
+  const bounds = { minT: localTime(21, 14), maxT: localTime(24, 9) };
+  assert.deepEqual(dayBoundaries(bounds), [localTime(22, 0), localTime(23, 0), localTime(24, 0)]);
+});
+
+test("dayBoundaries is empty within a single day", () => {
+  assert.deepEqual(dayBoundaries({ minT: localTime(21, 6), maxT: localTime(21, 20) }), []);
+});
+
+test("dayBoundaries ignores a midnight exactly at the range edges", () => {
+  // The window starting at midnight needs no separator at its own start.
+  const bounds = { minT: DAY_START, maxT: localTime(22, 0) };
+  assert.deepEqual(dayBoundaries(bounds), []);
+});
+
+test("daySegments cover the range day by day and are clipped to it", () => {
+  const bounds = { minT: localTime(21, 14), maxT: localTime(23, 9) };
+  const segments = daySegments(bounds);
+  assert.deepEqual(
+    segments.map((segment) => segment.dayStart),
+    [DAY_START, localTime(22, 0), localTime(23, 0)],
+  );
+  // First and last day are partial, the middle one is whole.
+  assert.equal(segments[0].start, bounds.minT);
+  assert.equal(segments[0].end, localTime(22, 0));
+  assert.equal(segments[2].end, bounds.maxT);
+  assert.equal(segments[1].mid, localTime(22, 12));
+});
+
+test("daySegments works when the window is inside one day", () => {
+  const bounds = { minT: localTime(21, 8), maxT: localTime(21, 20) };
+  const segments = daySegments(bounds);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].mid, localTime(21, 14));
+});
+
+test("tickStepHours thins the axis out as the window grows", () => {
+  assert.equal(tickStepHours(24), 3);
+  assert.equal(tickStepHours(48), 6);
+  assert.equal(tickStepHours(96), 12);
+});
+
+test("hourTicks land on round local hours, never on raw point times", () => {
+  const bounds = { minT: localTime(21, 13) + 12 * 60000, maxT: localTime(22, 7) };
+  const ticks = hourTicks(bounds, 6);
+  assert.deepEqual(ticks, [localTime(21, 18), localTime(22, 0), localTime(22, 6)]);
+  for (const tick of ticks) {
+    const moment = new Date(tick);
+    assert.equal(moment.getMinutes(), 0);
+    assert.equal(moment.getHours() % 6, 0);
+  }
+});
+
+test("hourTicks covers a 96h window without crowding it", () => {
+  const bounds = { minT: localTime(21, 12), maxT: localTime(25, 12) };
+  const ticks = hourTicks(bounds, tickStepHours(96));
+  // 12h steps over four days: nine labels, all at 00:00 or 12:00.
+  assert.equal(ticks.length, 9);
+  assert.ok(ticks.every((tick) => new Date(tick).getHours() % 12 === 0));
+  assert.deepEqual(ticks, [...ticks].sort((a, b) => a - b));
+});
+
+test("nightBands shade 22:00 to 06:00, clipped to the window", () => {
+  const bounds = { minT: localTime(21, 18), maxT: localTime(23, 3) };
+  assert.deepEqual(nightBands(bounds), [
+    { start: localTime(21, 22), end: localTime(22, 6) },
+    { start: localTime(22, 22), end: bounds.maxT },
+  ]);
+});
+
+test("nightBands covers a window that starts in the middle of a night", () => {
+  const bounds = { minT: localTime(21, 2), maxT: localTime(21, 12) };
+  assert.deepEqual(nightBands(bounds), [{ start: bounds.minT, end: localTime(21, 6) }]);
+});
+
+test("nightBands is empty for a daytime-only window", () => {
+  assert.deepEqual(nightBands({ minT: localTime(21, 8), maxT: localTime(21, 17) }), []);
 });
 
 test("windArrowRotation turns the from-direction into a blows-to arrow", () => {
@@ -272,6 +432,12 @@ test("windArrowRotation normalises out-of-range and rejects non-numbers", () => 
   assert.equal(windArrowRotation(undefined), null);
   assert.equal(windArrowRotation(Number.NaN), null);
   assert.equal(windArrowRotation("180"), null);
+});
+
+test("windSampleCount drops with the width of the window", () => {
+  assert.equal(windSampleCount(24), 9);
+  assert.equal(windSampleCount(48), 8);
+  assert.equal(windSampleCount(96), 6);
 });
 
 test("windSamples thins the series out to a readable number of arrows", () => {
