@@ -269,23 +269,40 @@ body {
   background: var(--today-bg);
 }
 
-/* Emojis render at their own size. */
+/* Icon slot (Etappe 38): holds an inline SVG from icons.js — no emoji, the
+   kiosk browser has no font for emoji beyond the BMP and drew empty boxes.
+   The SVG paints itself in `currentColor`, so it follows the button's text
+   colour: dark on the surface, --accent-contrast inside an active mode
+   button. Deliberately no fill/stroke rule here — that would override the
+   presentation attributes the icons set per shape. */
 .btn-icon {
-  font-size: 22px;
-  line-height: 1;
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  line-height: 0;
+}
+
+.btn-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* An on/off SWITCH shows its state through colour, not through a label:
    greyed out = off, full colour = on (Roland's wording: "einmal ausgegraut
-   und einmal bei an bunt"). aria-pressed carries the same state for
-   assistive technology — the visual state alone would not. */
+   und einmal bei an bunt"). With an SVG in currentColor there is nothing to
+   desaturate (the old `filter: grayscale`), so the state is the colour
+   itself: muted grey when off, accent blue at full opacity when on.
+   aria-pressed carries the same state for assistive technology — the visual
+   state alone would not. */
 .toggle-button .btn-icon {
-  filter: grayscale(1);
-  opacity: 0.55;
+  color: var(--text-muted);
+  opacity: 0.5;
 }
 
 .toggle-button.active .btn-icon {
-  filter: none;
+  color: var(--accent);
   opacity: 1;
 }
 
@@ -960,6 +977,19 @@ body.mode-weather .status-badge {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   cursor: pointer;
+}
+
+/* The play/pause button carries an SVG icon (see icons.js) — a little
+   smaller than in the header, the radar controls are a 44px row. */
+.weather-radar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.weather-radar-btn .btn-icon {
+  width: 20px;
+  height: 20px;
 }
 
 .weather-period-active {

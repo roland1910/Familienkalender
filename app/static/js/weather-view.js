@@ -9,6 +9,7 @@
 
 import { baseTileUrl, fetchRadarFrames, fetchWeatherForecast, radarTileUrl } from "./api.js";
 import { el } from "./dom.js";
+import { setIcon } from "./icons.js";
 import {
   CHART_HEIGHT,
   CHART_WIDTH,
@@ -169,6 +170,15 @@ function iconButton(className, label, title) {
   return button;
 }
 
+// An <span class="btn-icon"> holding one of the inline SVG icons. The radar
+// play/pause used the emoji ⏸/▶ before Etappe 38 — U+23F8 has no glyph in
+// the kiosk browser's fonts, so it showed an empty box (see icons.js).
+function iconSpan(name) {
+  const span = el("span", "btn-icon");
+  setIcon(span, name);
+  return span;
+}
+
 function radarCard() {
   const card = el("div", "weather-radar");
   const head = el("div", "weather-radar-head");
@@ -176,7 +186,8 @@ function radarCard() {
 
   const controls = el("div", "weather-radar-controls");
   controls.append(el("span", "weather-radar-time", ""));
-  const play = iconButton("weather-radar-btn weather-radar-play", "⏸", "Radar anhalten");
+  const play = iconButton("weather-radar-btn weather-radar-play", "", "Radar anhalten");
+  play.append(iconSpan("pause"));
   play.addEventListener("click", togglePlay);
   controls.append(play);
   const out = iconButton("weather-radar-btn weather-zoom-out", "−", "Verkleinern");
@@ -682,7 +693,8 @@ function togglePlay() {
   const button = activeContainer.querySelector(".weather-radar-play");
   if (button === null) return;
   const title = playing ? "Radar anhalten" : "Radar abspielen";
-  button.textContent = playing ? "⏸" : "▶";
+  const slot = button.querySelector(".btn-icon");
+  if (slot !== null) setIcon(slot, playing ? "pause" : "play");
   button.title = title;
   button.setAttribute("aria-label", title);
 }

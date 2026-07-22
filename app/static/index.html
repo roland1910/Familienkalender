@@ -44,30 +44,35 @@
              alte, schlichte Optik zurück (umrandete Buttons wie Monat/Woche,
              aktiv = blau gefüllt). Die Symbole tragen aria-hidden; die
              Schaltfläche benennt sich über aria-label, damit die
-             Barrierefreiheit den deutschen Namen ansagt und nicht das Emoji.
-             Kein role="group" — die Gruppierung ist rein optisch. -->
+             Barrierefreiheit den deutschen Namen ansagt und nicht das Symbol.
+             Kein role="group" — die Gruppierung ist rein optisch.
+             Etappe 38: die Symbole sind INLINE-SVG statt Emoji — der
+             Kiosk-Browser (WebKitGTK) hat keine Schrift für Emoji jenseits
+             der BMP und zeigte leere Kästchen. Die Icons stehen in
+             static/js/icons.js; main.js füllt jeden data-icon-Platzhalter. -->
         <div class="mode-switch">
           <button id="btn-mode-calendar" class="mode-button active" type="button"
                   aria-pressed="true" aria-label="Kalender" title="Kalender">
-            <span class="btn-icon" aria-hidden="true">&#128197;</span>
+            <span class="btn-icon" data-icon="calendar" aria-hidden="true"></span>
           </button>
           <button id="btn-mode-power" class="mode-button" type="button"
                   aria-pressed="false" aria-label="Strom" title="Strom">
-            <span class="btn-icon" aria-hidden="true">&#9889;</span>
+            <span class="btn-icon" data-icon="bolt" aria-hidden="true"></span>
           </button>
           <button id="btn-mode-weather" class="mode-button" type="button"
                   aria-pressed="false" aria-label="Wetter" title="Wetter">
-            <span class="btn-icon" aria-hidden="true">&#127782;&#65039;</span>
+            <span class="btn-icon" data-icon="cloud" aria-hidden="true"></span>
           </button>
         </div>
         <!-- Theme-Umschalter (pro Gerät, localStorage): zyklisch
              Auto -> Hell -> Dunkel. Auto folgt dem System-/HA-Theme.
              Dreistufig, aber ohne Text (Etappe 37): drei UNTERSCHIEDLICHE
-             Symbole (🌗 Auto / ☀️ Hell / 🌙 Dunkel) machen den Zustand ohne
-             Wort erkennbar; aria-label sagt ihn zusätzlich an. -->
+             Symbole (halb gefüllter Kreis = Auto, Sonne = Hell, Mond =
+             Dunkel) machen den Zustand ohne Wort erkennbar; aria-label sagt
+             ihn zusätzlich an. main.js tauscht das SVG beim Umschalten. -->
         <button id="btn-theme" class="icon-button" type="button"
                 aria-label="Farbschema umschalten" title="Farbschema: automatisch">
-          <span class="btn-icon" aria-hidden="true"></span>
+          <span class="btn-icon" data-icon="theme-auto" aria-hidden="true"></span>
         </button>
         <!-- Bildschirmschoner-Umschalter (pro Gerät, localStorage). Wenn
              aktiv, startet nach Leerlauf die Foto-Diashow. Symbol bewusst
@@ -78,11 +83,12 @@
         <button id="btn-screensaver" class="icon-button toggle-button" type="button"
                 aria-pressed="false" aria-label="Diashow als Bildschirmschoner"
                 title="Diashow als Bildschirmschoner">
-          <span class="btn-icon" aria-hidden="true">&#128444;&#65039;</span>
+          <span class="btn-icon" data-icon="picture" aria-hidden="true"></span>
         </button>
         <!-- Standardmäßig versteckt; main.js blendet das Zahnrad nur für
              HA-Admins ein (GET api/me). Der Server schützt /admin zusätzlich. -->
-        <a class="nav-button admin-link" href="admin" aria-label="Verwaltung" hidden>&#9881;</a>
+        <a class="nav-button admin-link" href="admin" aria-label="Verwaltung" title="Verwaltung"
+           hidden><span class="btn-icon" data-icon="gear" aria-hidden="true"></span></a>
       </div>
     </div>
   </header>

@@ -20,6 +20,7 @@ import {
 } from "./dates.js";
 import { parseEvent } from "./events.js";
 import { attachSwipe } from "./gestures.js";
+import { renderIcons, setIcon } from "./icons.js";
 import { renderLegend } from "./legend.js";
 import { monthGridRange, renderMonthView } from "./month-view.js";
 import { closeDayPopover, initPopover } from "./popover.js";
@@ -393,9 +394,11 @@ function initScreensaver() {
 // paint; this only keeps the button label in sync and handles taps.
 
 // Three distinct symbols express the three states without a word (Etappe
-// 37): half-disc for auto, sun for light, moon for dark. aria-label/title
-// still spell the state out for assistive tech and tooltips.
-const THEME_ICON = { auto: "\u{1F317}", light: "☀️", dark: "\u{1F319}" };
+// 37): half-disc for auto, sun for light, moon for dark. They are SVG icons
+// (Etappe 38 — the kiosk browser shows emoji beyond the BMP as empty boxes,
+// see icons.js). aria-label/title still spell the state out for assistive
+// tech and tooltips.
+const THEME_ICON = { auto: "theme-auto", light: "theme-light", dark: "theme-dark" };
 const THEME_TITLE = {
   auto: "Farbschema: automatisch",
   light: "Farbschema: hell",
@@ -410,7 +413,7 @@ function applyTheme(theme) {
     document.documentElement.dataset.theme = theme;
   }
   const button = document.getElementById("btn-theme");
-  button.querySelector(".btn-icon").textContent = THEME_ICON[theme];
+  setIcon(button.querySelector(".btn-icon"), THEME_ICON[theme]);
   button.title = THEME_TITLE[theme];
   button.setAttribute("aria-label", THEME_TITLE[theme]);
 }
@@ -426,6 +429,9 @@ function initTheme() {
 }
 
 async function init() {
+  // Draw the header icons first — every control is icon-only, so an empty
+  // slot would be an unlabelled button (see icons.js).
+  renderIcons(document);
   initPopover({ onTagsChanged: render });
   initTheme();
   initScreensaver();

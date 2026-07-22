@@ -11,6 +11,10 @@ buttons, Etappe 37 takes them straight back out. The rule now:
   * the three-state theme control uses three DISTINCT symbols per state,
   * the German name lives in aria-label for assistive tech, never as visible
     text next to the symbol.
+
+Etappe 38 (photo of the real display): the symbols are inline SVG, NOT
+emoji. The kiosk browser (WebKitGTK on HA-OS) has no font for emoji beyond
+the BMP, so the calendar/rain/picture glyphs rendered as empty boxes.
 """
 
 import pytest
@@ -25,9 +29,14 @@ MIN_TOUCH_TARGET_PX = 44
 # Words that must NOT appear on the redesigned icon-only controls.
 FORBIDDEN_WORDS = ["Kalender", "Strom", "Wetter", "Auto", "Hell", "Dunkel", "Diashow"]
 
-
-def _filter_of(page: Page, selector: str) -> str:
-    return page.eval_on_selector(selector, "el => getComputedStyle(el).filter")
+# Every icon-carrying control in the header.
+ICON_BUTTONS = [
+    "#btn-mode-calendar",
+    "#btn-mode-power",
+    "#btn-mode-weather",
+    "#btn-theme",
+    "#btn-screensaver",
+]
 
 
 def _bg_of(page: Page, selector: str) -> str:
@@ -98,6 +107,42 @@ def test_period_and_mode_switch_are_separate_groups(page: Page, server_url: str)
     expect(page.locator(".toolbar-divider")).to_be_visible()
 
 
+def test_every_control_uses_an_svg_icon_never_an_emoji(page: Page, server_url: str) -> None:
+    """Regression guard for the tofu boxes on the real kiosk display: the
+    icons must be drawn as SVG, so no font is needed to show them."""
+    goto_calendar(page, server_url)
+    for selector in ICON_BUTTONS:
+        button = page.locator(selector)
+        expect(button.locator(".btn-icon svg")).to_have_count(1)
+        # The SVG actually draws something (shapes, not an empty element)...
+        shapes = page.eval_on_selector(f"{selector} .btn-icon svg", "el => el.children.length")
+        assert shapes >= 1, selector
+        # ... and no text at all is left on the button.
+        assert button.inner_text().strip() == "", (selector, button.inner_text())
+
+    # The five icons are visibly different drawings, not the same shape.
+    markups = page.eval_on_selector_all(
+        ", ".join(f"{selector} .btn-icon svg" for selector in ICON_BUTTONS),
+        "els => els.map((el) => el.innerHTML)",
+    )
+    assert len(set(markups)) == len(ICON_BUTTONS), markups
+
+
+def test_icons_inherit_the_button_colour(page: Page, server_url: str) -> None:
+    """`currentColor` is what makes the icon flip to the contrast colour
+    inside the blue active button — no separate rule per state."""
+    goto_calendar(page, server_url)
+    paints = page.eval_on_selector_all(
+        "#btn-mode-calendar .btn-icon svg > *",
+        "els => els.map((el) => [el.getAttribute('stroke'), el.getAttribute('fill')])",
+    )
+    assert paints, "icon has no shapes"
+    # Every shape is painted in currentColor — outlined ones via stroke,
+    # solid ones via fill; the other channel is explicitly "none".
+    for stroke, fill in paints:
+        assert "currentColor" in (stroke, fill), (stroke, fill)
+
+
 def test_screensaver_toggle_is_grey_when_off_and_coloured_when_on(
     page: Page, server_url: str
 ) -> None:
@@ -105,32 +150,40 @@ def test_screensaver_toggle_is_grey_when_off_and_coloured_when_on(
     toggle = page.locator("#btn-screensaver")
     icon = "#btn-screensaver .btn-icon"
 
-    # Off: the symbol is desaturated — recognisable from two metres away.
+    def look() -> tuple[str, float]:
+        return (
+            page.eval_on_selector(icon, "el => getComputedStyle(el).color"),
+            float(page.eval_on_selector(icon, "el => getComputedStyle(el).opacity")),
+        )
+
+    # Off: muted colour at reduced opacity — recognisably "inactive" from two
+    # metres away (an SVG in currentColor has nothing to desaturate, so the
+    # colour itself carries the state, not a grayscale filter).
     expect(toggle).to_have_attribute("aria-pressed", "false")
-    off_filter = _filter_of(page, icon)
-    assert "grayscale" in off_filter, off_filter
+    off = look()
+    assert off[1] < 1.0, off
 
     toggle.click()
     expect(toggle).to_have_attribute("aria-pressed", "true")
-    on_filter = _filter_of(page, icon)
-    assert on_filter != off_filter
-    assert "grayscale" not in on_filter, on_filter
+    on = look()
+    assert on != off, (off, on)
+    assert on[1] == 1.0, on
+    assert on[0] != off[0], (off, on)
 
     # And back off again.
     toggle.click()
     expect(toggle).to_have_attribute("aria-pressed", "false")
-    assert "grayscale" in _filter_of(page, icon)
+    assert look() == off
 
 
 def test_theme_button_shows_a_distinct_symbol_per_state(page: Page, server_url: str) -> None:
     goto_calendar(page, server_url)
     button = page.locator("#btn-theme")
-    icon = page.locator("#btn-theme .btn-icon")
 
     def symbol() -> str:
-        return icon.inner_text().strip()
+        return page.eval_on_selector("#btn-theme .btn-icon svg", "el => el.innerHTML")
 
-    # Auto, then light, then dark — three visibly different glyphs, and the
+    # Auto, then light, then dark — three visibly different drawings, and the
     # state is spelled out only in aria-label (never as visible text).
     auto = symbol()
     expect(button).to_have_attribute("aria-label", "Farbschema: automatisch")
