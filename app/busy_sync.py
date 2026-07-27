@@ -13,7 +13,10 @@ Safety design (see also app.google_busy):
   update/delete operations, so a write always targets a self-created id.
 - The reconciliation pass lists ONLY the add-on's own blocks (server-side
   ``privateExtendedProperty`` filter) — never a full calendar scan — and
-  removes blocks whose source event has vanished, again by their own id.
+  removes blocks whose source event has vanished, again by their own id. The
+  same listing carries each block's ``visibility``, so a still-desired block
+  written by an older version as "private" is patched back to the current
+  "default" once (again via its own mapped id — the invariant is unchanged).
 - Errors are isolated: a busy-sync failure never blocks the normal calendar
   sync. The last-run outcome (with a sanitized error) is persisted for the
   admin UI.
@@ -132,9 +135,23 @@ async def _reconcile(
     # is legitimate (not an orphan) iff it is still mapped to a desired event.
     # Built as we go so a freshly inserted block is not mistaken for an orphan.
     known_ids: set[str] = set()
+    # Ids deleted in phase 2, so the orphan pass (which reuses the start-of-run
+    # listing) does not try to delete them a second time.
+    deleted_ids: set[str] = set()
     # Outgoing change-log entries for the writes performed this run.
     audit: list[AuditEntry] = []
     ts_iso = now.astimezone(UTC).isoformat()
+
+    # List the add-on's own blocks ONCE (server-side marker filter, never a
+    # full scan). Used both to detect visibility drift on mapped blocks and to
+    # reconcile orphans. Google omits ``visibility`` when it is "default", so a
+    # missing value counts as default (no drift).
+    own_blocks = await client.list_own_blocks()
+    visibility_by_id: dict[str, str] = {
+        own["id"]: (own.get("visibility") or "default")
+        for own in own_blocks
+        if own.get("id")
+    }
 
     def _audit(action: str, title: str, event_start: str | None) -> None:
         audit.append(
@@ -162,7 +179,16 @@ async def _reconcile(
             _audit("added", item.event.title, _encode_moment(item.event.start))
         else:
             known_ids.add(existing.google_event_id)
-            if _times_differ(existing, item):
+            time_changed = _times_differ(existing, item)
+            # Correct visibility drift: old blocks were written as "private";
+            # patch them back to the current default so they no longer show up
+            # flagged private in Xalt. The patch goes through the same event id
+            # from the mapping, so the invariant (only own, marked blocks are
+            # touched) is unchanged.
+            visibility_drift = (
+                visibility_by_id.get(existing.google_event_id, "default") != "default"
+            )
+            if time_changed or visibility_drift:
                 await client.patch_block(existing.google_event_id, key, item.event)
                 storage.upsert_busy_block(
                     BusyBlock(
@@ -175,7 +201,12 @@ async def _reconcile(
                     updated_at=now,
                 )
                 updated += 1
-                _audit("updated", item.event.title, _encode_moment(item.event.start))
+                # A real time change is worth showing in the change log; a
+                # pure visibility-drift correction is one-time internal
+                # housekeeping (~85 old blocks on the first run) and would
+                # flood the log, so it is deliberately not audited.
+                if time_changed:
+                    _audit("updated", item.event.title, _encode_moment(item.event.start))
 
     # 2. Delete mapped blocks whose source event is gone or out of window.
     for key, block in mapping.items():
@@ -183,17 +214,20 @@ async def _reconcile(
             await client.delete_block(block.google_event_id)
             storage.delete_busy_block(key)
             deleted += 1
+            deleted_ids.add(block.google_event_id)
             # The source appointment is gone, so its title is unavailable —
             # the block only ever carried the neutral "Busy MV" title anyway.
             _audit("removed", BUSY_BLOCK_TITLE, _encode_moment(block.start))
 
     # 3. Reconcile orphans: own blocks in the calendar not backed by a
     #    still-desired mapping (a lost mapping row, a leftover from an earlier
-    #    run). Listing is restricted to OUR marker, so no foreign event is
-    #    ever touched. known_ids holds exactly the blocks that should remain.
-    for own in await client.list_own_blocks():
+    #    run). Reuses the start-of-run listing, which is restricted to OUR
+    #    marker, so no foreign event is ever touched. known_ids holds exactly
+    #    the blocks that should remain; deleted_ids skips blocks already
+    #    removed in phase 2 (they are still in the start-of-run listing).
+    for own in own_blocks:
         event_id = own.get("id")
-        if event_id and event_id not in known_ids:
+        if event_id and event_id not in known_ids and event_id not in deleted_ids:
             await client.delete_block(event_id)
             orphans += 1
             _audit("removed", BUSY_BLOCK_TITLE, None)

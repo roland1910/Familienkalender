@@ -21,7 +21,7 @@ from app.busy_sync import (
     source_key,
 )
 from app.google_busy import MARKER_KEY, OWNER_KEY, OWNER_VALUE, busy_write_token_path
-from app.models import CalendarEvent
+from app.models import BusyBlock, CalendarEvent
 from app.sources.google import save_tokens
 from app.storage import Storage
 
@@ -142,8 +142,13 @@ class RecordingBackend:
         return httpx.Response(200, json={"id": event_id})
 
     def _patch(self, request: httpx.Request) -> httpx.Response:
+        import json
+
         event_id = request.url.path.rsplit("/", 1)[-1]
         assert event_id in self.own_blocks, "patch must target an own block"
+        # Apply the patch body so a later list reflects the new state (e.g. the
+        # visibility flips to "default" after a drift-correcting patch).
+        self.own_blocks[event_id].update(json.loads(request.content))
         return httpx.Response(200, json={"id": event_id})
 
     def _delete(self, request: httpx.Request) -> httpx.Response:
@@ -367,6 +372,97 @@ class TestInvariantAndReconciliation:
         result = await _run(storage, backend)
         assert result.orphans_removed == 1
         assert "gevt-orphan" not in backend.own_blocks
+
+
+@pytest.mark.anyio
+class TestVisibilityDrift:
+    """Old blocks were written with visibility "private"; a plain event_body
+    change would not touch them (the diff only patches on time changes). The
+    reconciliation therefore also patches a mapped, still-desired block whose
+    current visibility in Xalt differs from the wanted "default" — once."""
+
+    def _seed_old_private_block(
+        self, storage: Storage, backend: RecordingBackend, event_id: str = "gevt-old"
+    ) -> None:
+        start = datetime(2026, 7, 20, 15, tzinfo=UTC)
+        add_mv_event(storage, 1, "u1", start)
+        event = CalendarEvent(
+            uid="u1",
+            title="MoreValue-Meeting",
+            start=start,
+            end=start + timedelta(hours=1),
+            all_day=False,
+        )
+        key = source_key(1, event)
+        storage.upsert_busy_block(
+            BusyBlock(key, event_id, event.start, event.end, False), updated_at=NOW
+        )
+        backend.own_blocks[event_id] = {
+            "id": event_id,
+            "summary": "Busy MV",
+            "visibility": "private",
+            "extendedProperties": {"private": {MARKER_KEY: key, OWNER_KEY: OWNER_VALUE}},
+        }
+
+    async def test_private_block_is_patched_to_default_once(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        self._seed_old_private_block(storage, backend)
+
+        result = await _run(storage, backend)
+        assert result.inserted == 0
+        assert result.updated == 1
+        assert backend.own_blocks["gevt-old"]["visibility"] == "default"
+
+        # Second run: drift is gone -> nulldiff, no re-patch loop.
+        result2 = await _run(storage, backend)
+        assert result2.inserted == 0
+        assert result2.updated == 0
+        assert result2.deleted == 0
+
+    async def test_visibility_patch_is_not_audited(self, env: Storage) -> None:
+        # A pure visibility-drift correction is one-time internal housekeeping
+        # (~85 old blocks on first run) and must not flood the change log.
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        self._seed_old_private_block(storage, backend)
+
+        await _run(storage, backend)
+        out = [
+            e
+            for e in storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+            if e.direction == "out"
+        ]
+        assert out == []
+
+    async def test_time_and_visibility_change_still_logs_update(self, env: Storage) -> None:
+        # When the times ALSO changed, the patch is a real update worth logging.
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        self._seed_old_private_block(storage, backend)
+        # Shift the event's end so the mapped block's stored times differ too.
+        event = CalendarEvent(
+            uid="u1",
+            title="MoreValue-Meeting",
+            start=datetime(2026, 7, 20, 15, tzinfo=UTC),
+            end=datetime(2026, 7, 20, 18, tzinfo=UTC),
+            all_day=False,
+        )
+        storage.sync_events(
+            1, [event], datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2027, 1, 1, tzinfo=UTC), synced_at=NOW,
+        )
+        result = await _run(storage, backend)
+        assert result.updated == 1
+        out = [
+            e
+            for e in storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+            if e.direction == "out"
+        ]
+        assert [e.action for e in out] == ["updated"]
 
 
 @pytest.mark.anyio

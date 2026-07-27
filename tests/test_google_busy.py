@@ -68,7 +68,9 @@ class TestEventBody:
         body = event_body("3|uid-1|2026-07-10", timed_event())
         assert body["summary"] == BUSY_TITLE
         assert body["transparency"] == "opaque"
-        assert body["visibility"] == "private"
+        # Default visibility: the title is already neutral, so no privacy
+        # marking is wanted (Roland disliked the blocks showing as "private").
+        assert body["visibility"] == "default"
         private = body["extendedProperties"]["private"]
         assert private[MARKER_KEY] == "3|uid-1|2026-07-10"
         # Constant owner marker enables the exact-match reconciliation query.
@@ -205,6 +207,26 @@ class TestListOwnBlocks:
         # wildcard) — never a full scan.
         list_req = next(r for r in captured if r.method == "GET")
         assert dict(list_req.url.params)["privateExtendedProperty"] == f"{OWNER_KEY}=1"
+
+    async def test_returns_visibility_of_each_block(self, tmp_path: Path) -> None:
+        # Reconciliation needs each block's current visibility to detect drift
+        # (old blocks written as "private"), so the raw dict must carry it.
+        token_file = tmp_path / "w.json"
+        write_write_token(token_file)
+        captured: list[httpx.Request] = []
+        marked = {
+            "id": "gevt-1",
+            "visibility": "private",
+            "extendedProperties": {"private": {MARKER_KEY: "3|uid-1|x"}},
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"items": [marked]})
+
+        async with make_client(captured, handler) as http:
+            client = BusyWriteClient(token_file, http)
+            blocks = await client.list_own_blocks()
+        assert blocks[0]["visibility"] == "private"
 
     async def test_unmarked_item_is_dropped_defensively(self, tmp_path: Path) -> None:
         token_file = tmp_path / "w.json"

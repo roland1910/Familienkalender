@@ -97,15 +97,17 @@ def event_body(source_key: str, event: CalendarEvent) -> dict[str, Any]:
     """The Google event body for a "Busy MV" block mirroring ``event``.
 
     Neutral by design: fixed summary, no description/location, marked busy
-    (``transparency: opaque``) and ``visibility: private``. The private
-    marker carries the source key so the block is self-identifying.
+    (``transparency: opaque``). Visibility is Google's ``default`` — the title
+    is already neutral and no detail leaks, so the block is shown as a normal
+    calendar entry rather than flagged "private" (Roland's request). The
+    private marker carries the source key so the block is self-identifying.
     Timed events use dateTime in UTC; all-day events use the exclusive
     date range (iCalendar semantics), exactly as stored.
     """
     body: dict[str, Any] = {
         "summary": BUSY_TITLE,
         "transparency": "opaque",
-        "visibility": "private",
+        "visibility": "default",
         "extendedProperties": {
             "private": {MARKER_KEY: source_key, OWNER_KEY: OWNER_VALUE}
         },
@@ -194,7 +196,10 @@ class BusyWriteClient:
         the constant-valued marker is what lets us list ALL own blocks in one
         query. Either way the filter is applied server-side, so ONLY the
         add-on's own blocks come back — never a foreign event. Returns raw
-        Google event dicts (id + extendedProperties + times).
+        Google event dicts (id + extendedProperties + times + visibility);
+        reconciliation uses ``visibility`` to detect and correct old blocks
+        that were written as "private" (Google omits the field when it equals
+        "default", so a missing value means default).
         """
         if source_key is not None:
             query = f"{MARKER_KEY}={source_key}"
