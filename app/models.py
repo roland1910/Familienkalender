@@ -243,6 +243,32 @@ class BusyBlock:
     all_day: bool
 
 
+@dataclass(frozen=True, slots=True)
+class MirrorEvent:
+    """One mirrored copy the add-on maintains in the target CalDAV calendar.
+
+    Maps a source event (identified by ``source_key`` = source_id|uid|start,
+    the same identity the events table and the busy sync use) to the CalDAV
+    resource that mirrors it. ``etag`` is the server's last known validator
+    and drives the conditional ``If-Match`` requests; ``title``/``location``
+    and the time range are what the diff compares against the source event,
+    and the stored title is what the change log shows when a copy is deleted
+    (the source appointment is gone by then).
+
+    Every update/delete goes through ``resource_url`` from this table, so a
+    write always targets a resource the add-on created itself.
+    """
+
+    source_key: str
+    resource_url: str
+    etag: str
+    start: datetime | date
+    end: datetime | date
+    all_day: bool
+    title: str = ""
+    location: str | None = None
+
+
 # Change log (Änderungsprotokoll): a small audit trail of what each sync
 # changed, in both directions — incoming (source → Familienkalender) and
 # outgoing (Belegt-Sync → Xalt). See app.storage (audit_log table),

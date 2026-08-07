@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models import AuditEntry, BusyBlock, CalendarEvent
+from app.models import AuditEntry, BusyBlock, CalendarEvent, MirrorEvent
 from app.storage import AUDIT_RETENTION_DAYS, Storage, resolve_data_dir
 
 BERLIN_OFFSET_SUMMER = "+02:00"
@@ -1016,6 +1016,83 @@ class TestBusyBlocks:
             block, updated_at=datetime(2026, 7, 3, tzinfo=UTC)
         )
         assert make_storage(tmp_path).list_busy_blocks() == [block]
+
+
+def mirror_event(
+    key: str = "3|uid-1|2026-07-10T16:00:00+00:00",
+    *,
+    etag: str = '"e1"',
+    title: str = "Kundentermin",
+) -> MirrorEvent:
+    return MirrorEvent(
+        source_key=key,
+        resource_url="https://cloud.example.com/dav/cal/familienkalender-mirror-ab.ics",
+        etag=etag,
+        start=datetime(2026, 7, 10, 18, tzinfo=UTC),
+        end=datetime(2026, 7, 10, 19, tzinfo=UTC),
+        all_day=False,
+        title=title,
+        location="Raum 2",
+    )
+
+
+class TestMirrorEvents:
+    def test_upsert_and_list_roundtrip(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        entry = mirror_event()
+        storage.upsert_mirror_event(entry, updated_at=datetime(2026, 7, 3, tzinfo=UTC))
+        assert storage.list_mirror_events() == [entry]
+        assert storage.count_mirror_events() == 1
+
+    def test_upsert_updates_existing_key(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.upsert_mirror_event(
+            mirror_event(), updated_at=datetime(2026, 7, 3, tzinfo=UTC)
+        )
+        storage.upsert_mirror_event(
+            mirror_event(etag='"e2"', title="Neuer Titel"),
+            updated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        )
+        stored = storage.list_mirror_events()
+        assert len(stored) == 1
+        assert stored[0].etag == '"e2"'
+        assert stored[0].title == "Neuer Titel"
+
+    def test_all_day_entry_roundtrip(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        entry = MirrorEvent(
+            source_key="3|uid-2|2026-07-12",
+            resource_url="https://cloud.example.com/dav/cal/x.ics",
+            etag="",
+            start=date(2026, 7, 12),
+            end=date(2026, 7, 13),
+            all_day=True,
+            title="Betriebsausflug",
+            location=None,
+        )
+        storage.upsert_mirror_event(entry, updated_at=datetime(2026, 7, 3, tzinfo=UTC))
+        assert storage.list_mirror_events() == [entry]
+
+    def test_delete_and_clear(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.upsert_mirror_event(
+            mirror_event(), updated_at=datetime(2026, 7, 3, tzinfo=UTC)
+        )
+        storage.upsert_mirror_event(
+            mirror_event(key="4|uid-9|2026-07-11T16:00:00+00:00"),
+            updated_at=datetime(2026, 7, 3, tzinfo=UTC),
+        )
+        storage.delete_mirror_event("3|uid-1|2026-07-10T16:00:00+00:00")
+        assert storage.count_mirror_events() == 1
+        storage.clear_mirror_events()
+        assert storage.list_mirror_events() == []
+
+    def test_entries_survive_reopening(self, tmp_path: Path) -> None:
+        entry = mirror_event()
+        make_storage(tmp_path).upsert_mirror_event(
+            entry, updated_at=datetime(2026, 7, 3, tzinfo=UTC)
+        )
+        assert make_storage(tmp_path).list_mirror_events() == [entry]
 
 
 def audit_entry(

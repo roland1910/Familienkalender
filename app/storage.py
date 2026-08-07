@@ -28,6 +28,7 @@ from app.models import (
     BusyBlock,
     CalendarEvent,
     EventChange,
+    MirrorEvent,
     Source,
     StoredEvent,
     TagLimitError,
@@ -95,6 +96,17 @@ CREATE TABLE IF NOT EXISTS busy_blocks (
     start TEXT NOT NULL,
     end TEXT NOT NULL,
     all_day INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mirror_events (
+    source_key TEXT PRIMARY KEY,
+    resource_url TEXT NOT NULL,
+    etag TEXT NOT NULL DEFAULT '',
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    location TEXT,
     updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -842,6 +854,67 @@ class Storage:
         with self._connect() as conn:
             conn.execute("DELETE FROM busy_blocks")
 
+    # -- mirror events (one-way mirror into a CalDAV calendar) -----------
+
+    def list_mirror_events(self) -> list[MirrorEvent]:
+        """All persisted mirror mappings (source_key → CalDAV resource)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT source_key, resource_url, etag, start, end, all_day,"
+                " title, location FROM mirror_events ORDER BY source_key"
+            ).fetchall()
+        return [_row_to_mirror_event(row) for row in rows]
+
+    def upsert_mirror_event(self, entry: MirrorEvent, *, updated_at: datetime) -> None:
+        """Insert or update the mapping for one source key."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO mirror_events"
+                " (source_key, resource_url, etag, start, end, all_day,"
+                " title, location, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (source_key) DO UPDATE SET"
+                " resource_url = excluded.resource_url, etag = excluded.etag,"
+                " start = excluded.start, end = excluded.end,"
+                " all_day = excluded.all_day, title = excluded.title,"
+                " location = excluded.location, updated_at = excluded.updated_at",
+                (
+                    entry.source_key,
+                    entry.resource_url,
+                    entry.etag,
+                    _encode_moment(entry.start),
+                    _encode_moment(entry.end),
+                    int(entry.all_day),
+                    entry.title,
+                    entry.location,
+                    updated_at.astimezone(UTC).isoformat(),
+                ),
+            )
+
+    def delete_mirror_event(self, source_key: str) -> None:
+        """Drop the mapping for one source key (the copy was deleted)."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM mirror_events WHERE source_key = ?", (source_key,)
+            )
+
+    def count_mirror_events(self) -> int:
+        """Number of active mirror mappings (for the admin status view)."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM mirror_events").fetchone()
+        return int(row["n"])
+
+    def clear_mirror_events(self) -> None:
+        """Drop ALL mirror mappings (a deliberate local state reset).
+
+        Used when the mirror target changes: the resource URLs of the old
+        mapping point into a different calendar collection, so reconciliation
+        must start from an empty mapping rather than risk deleting resources
+        by a URL that no longer belongs to the configured target.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM mirror_events")
+
 
 def _row_to_audit_entry(row: sqlite3.Row) -> AuditEntry:
     return AuditEntry(
@@ -852,6 +925,20 @@ def _row_to_audit_entry(row: sqlite3.Row) -> AuditEntry:
         title=row["title"],
         event_start=row["event_start"],
         details=row["details"],
+    )
+
+
+def _row_to_mirror_event(row: sqlite3.Row) -> MirrorEvent:
+    all_day = bool(row["all_day"])
+    return MirrorEvent(
+        source_key=row["source_key"],
+        resource_url=row["resource_url"],
+        etag=row["etag"],
+        start=_decode_moment(row["start"], all_day),
+        end=_decode_moment(row["end"], all_day),
+        all_day=all_day,
+        title=row["title"],
+        location=row["location"],
     )
 
 

@@ -40,6 +40,14 @@ FEED_PUBLIC_HOST_KEY = "feed_public_host"
 BUSY_SYNC_ENABLED_KEY = "busy_sync_enabled"
 BUSY_SYNC_SOURCE_IDS_KEY = "busy_sync_source_ids"
 BUSY_SYNC_STATUS_KEY = "busy_sync_status"
+# One-way mirror sync (Xalt → MoreValue, see app.mirror_sync): master
+# on/off switch, the source ids whose appointments are copied, the id of the
+# CalDAV source whose calendar receives the copies, and the last-run status
+# (JSON, error already sanitized).
+MIRROR_SYNC_ENABLED_KEY = "mirror_sync_enabled"
+MIRROR_SYNC_SOURCE_IDS_KEY = "mirror_sync_source_ids"
+MIRROR_SYNC_TARGET_KEY = "mirror_sync_target_source_id"
+MIRROR_SYNC_STATUS_KEY = "mirror_sync_status"
 # Server-side default calendar view (month/week) for devices without a
 # per-device choice in localStorage — the kiosk browser loses its storage
 # on every restart, so the initial view must come from the server.
@@ -269,13 +277,13 @@ def set_busy_sync_enabled(storage: Storage, enabled: bool) -> None:
     storage.set_setting(BUSY_SYNC_ENABLED_KEY, "1" if enabled else "0")
 
 
-def get_busy_sync_source_ids(storage: Storage) -> list[int]:
-    """The source ids whose events are mirrored as Busy MV blocks.
+def _get_source_id_list(storage: Storage, key: str) -> list[int]:
+    """A stored JSON list of source ids, defensively filtered.
 
-    Stored as a JSON list of ints; a missing or unparseable value yields the
-    empty list (nothing mirrored). Non-int entries are skipped defensively.
+    A missing or unparseable value yields the empty list (nothing selected);
+    non-int entries (including bools) are skipped rather than coerced.
     """
-    raw = storage.get_setting(BUSY_SYNC_SOURCE_IDS_KEY)
+    raw = storage.get_setting(key)
     if not raw:
         return []
     try:
@@ -287,10 +295,19 @@ def get_busy_sync_source_ids(storage: Storage) -> list[int]:
     return [int(item) for item in items if isinstance(item, int) and not isinstance(item, bool)]
 
 
+def _set_source_id_list(storage: Storage, key: str, source_ids: list[int]) -> None:
+    """Persist a source id list (deduplicated, order preserved)."""
+    storage.set_setting(key, json.dumps(list(dict.fromkeys(source_ids))))
+
+
+def get_busy_sync_source_ids(storage: Storage) -> list[int]:
+    """The source ids whose events are mirrored as Busy MV blocks."""
+    return _get_source_id_list(storage, BUSY_SYNC_SOURCE_IDS_KEY)
+
+
 def set_busy_sync_source_ids(storage: Storage, source_ids: list[int]) -> None:
     """Persist the mirrored-source id list (deduplicated, order preserved)."""
-    unique = list(dict.fromkeys(source_ids))
-    storage.set_setting(BUSY_SYNC_SOURCE_IDS_KEY, json.dumps(unique))
+    _set_source_id_list(storage, BUSY_SYNC_SOURCE_IDS_KEY, source_ids)
 
 
 def get_busy_sync_status(storage: Storage) -> dict:
@@ -320,6 +337,95 @@ def set_busy_sync_status(
         BUSY_SYNC_STATUS_KEY,
         json.dumps(
             {"last_run": last_run, "active_blocks": active_blocks, "error": error}
+        ),
+    )
+
+
+def is_mirror_sync_enabled(storage: Storage) -> bool:
+    """Whether the one-way Xalt → MoreValue mirror is switched on (default off)."""
+    return storage.get_setting(MIRROR_SYNC_ENABLED_KEY) == "1"
+
+
+def set_mirror_sync_enabled(storage: Storage, enabled: bool) -> None:
+    """Persist the mirror-sync on/off switch."""
+    storage.set_setting(MIRROR_SYNC_ENABLED_KEY, "1" if enabled else "0")
+
+
+def get_mirror_sync_source_ids(storage: Storage) -> list[int]:
+    """The source ids whose appointments are copied into the target calendar."""
+    return _get_source_id_list(storage, MIRROR_SYNC_SOURCE_IDS_KEY)
+
+
+def set_mirror_sync_source_ids(storage: Storage, source_ids: list[int]) -> None:
+    """Persist the mirrored-source id list (deduplicated, order preserved)."""
+    _set_source_id_list(storage, MIRROR_SYNC_SOURCE_IDS_KEY, source_ids)
+
+
+def get_mirror_sync_target_source_id(storage: Storage) -> int | None:
+    """The CalDAV source whose calendar receives the copies, or None.
+
+    Deliberately a source id, not a URL: the add-on writes into the already
+    configured (and SSRF-validated) collection of an existing CalDAV source,
+    so no free-form target URL ever enters the write path.
+    """
+    raw = storage.get_setting(MIRROR_SYNC_TARGET_KEY)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        logger.warning("Ignoring invalid stored mirror target: %r", raw)
+        return None
+
+
+def set_mirror_sync_target_source_id(storage: Storage, source_id: int | None) -> None:
+    """Persist the mirror target source id; None clears it."""
+    if source_id is None:
+        storage.delete_setting(MIRROR_SYNC_TARGET_KEY)
+        return
+    storage.set_setting(MIRROR_SYNC_TARGET_KEY, str(int(source_id)))
+
+
+def get_mirror_sync_status(storage: Storage) -> dict:
+    """The last mirror-sync status dict (zeroed when the sync never ran).
+
+    Shape: {"last_run": iso|None, "active_mirrors": int, "conflicts": int,
+    "error": str|None}.
+    """
+    empty = {"last_run": None, "active_mirrors": 0, "conflicts": 0, "error": None}
+    raw = storage.get_setting(MIRROR_SYNC_STATUS_KEY)
+    if not raw:
+        return empty
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return empty
+    return {
+        "last_run": data.get("last_run"),
+        "active_mirrors": int(data.get("active_mirrors", 0) or 0),
+        "conflicts": int(data.get("conflicts", 0) or 0),
+        "error": data.get("error"),
+    }
+
+
+def set_mirror_sync_status(
+    storage: Storage,
+    *,
+    last_run: str,
+    active_mirrors: int,
+    conflicts: int,
+    error: str | None,
+) -> None:
+    """Persist the mirror-sync status (error must already be sanitized)."""
+    storage.set_setting(
+        MIRROR_SYNC_STATUS_KEY,
+        json.dumps(
+            {
+                "last_run": last_run,
+                "active_mirrors": active_mirrors,
+                "conflicts": conflicts,
+                "error": error,
+            }
         ),
     )
 

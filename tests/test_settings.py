@@ -11,19 +11,30 @@ from app.settings import (
     DEFAULT_VIEW_KEY,
     EVENING_BOUNDARY_KEY,
     FEED_PUBLIC_HOST_KEY,
+    MIRROR_SYNC_SOURCE_IDS_KEY,
+    MIRROR_SYNC_STATUS_KEY,
+    MIRROR_SYNC_TARGET_KEY,
     POWER_DEVICES_KEY,
     SCREENSAVER_DEFAULT_KEY,
     PowerDevice,
     get_default_view,
     get_evening_boundary,
     get_feed_public_host,
+    get_mirror_sync_source_ids,
+    get_mirror_sync_status,
+    get_mirror_sync_target_source_id,
     get_power_devices,
     get_screensaver_default,
+    is_mirror_sync_enabled,
     is_valid_default_view,
     is_valid_public_host,
     is_valid_screensaver_default,
     set_default_view,
     set_feed_public_host,
+    set_mirror_sync_enabled,
+    set_mirror_sync_source_ids,
+    set_mirror_sync_status,
+    set_mirror_sync_target_source_id,
     set_power_devices,
     set_screensaver_default,
 )
@@ -226,3 +237,61 @@ class TestFeedPublicHost:
     )
     def test_invalid_hosts(self, host: str) -> None:
         assert not is_valid_public_host(host)
+
+
+class TestMirrorSyncSettings:
+    """Settings of the one-way Xalt -> MoreValue mirror (app.mirror_sync)."""
+
+    def test_disabled_by_default(self, storage: Storage) -> None:
+        assert is_mirror_sync_enabled(storage) is False
+
+    def test_enabled_round_trip(self, storage: Storage) -> None:
+        set_mirror_sync_enabled(storage, True)
+        assert is_mirror_sync_enabled(storage) is True
+        set_mirror_sync_enabled(storage, False)
+        assert is_mirror_sync_enabled(storage) is False
+
+    def test_source_ids_round_trip_and_dedupe(self, storage: Storage) -> None:
+        assert get_mirror_sync_source_ids(storage) == []
+        set_mirror_sync_source_ids(storage, [3, 3, 5])
+        assert get_mirror_sync_source_ids(storage) == [3, 5]
+
+    def test_source_ids_ignore_garbage(self, storage: Storage) -> None:
+        storage.set_setting(MIRROR_SYNC_SOURCE_IDS_KEY, '["x", true, 4]')
+        assert get_mirror_sync_source_ids(storage) == [4]
+        storage.set_setting(MIRROR_SYNC_SOURCE_IDS_KEY, "kein json")
+        assert get_mirror_sync_source_ids(storage) == []
+
+    def test_target_round_trip_and_clearing(self, storage: Storage) -> None:
+        assert get_mirror_sync_target_source_id(storage) is None
+        set_mirror_sync_target_source_id(storage, 1)
+        assert get_mirror_sync_target_source_id(storage) == 1
+        set_mirror_sync_target_source_id(storage, None)
+        assert get_mirror_sync_target_source_id(storage) is None
+
+    def test_invalid_stored_target_is_ignored(self, storage: Storage) -> None:
+        storage.set_setting(MIRROR_SYNC_TARGET_KEY, "https://evil.example/")
+        assert get_mirror_sync_target_source_id(storage) is None
+
+    def test_status_round_trip(self, storage: Storage) -> None:
+        assert get_mirror_sync_status(storage) == {
+            "last_run": None,
+            "active_mirrors": 0,
+            "conflicts": 0,
+            "error": None,
+        }
+        set_mirror_sync_status(
+            storage,
+            last_run="2026-07-09T10:00:00+00:00",
+            active_mirrors=7,
+            conflicts=1,
+            error=None,
+        )
+        status = get_mirror_sync_status(storage)
+        assert status["active_mirrors"] == 7
+        assert status["conflicts"] == 1
+        assert status["error"] is None
+
+    def test_broken_stored_status_falls_back(self, storage: Storage) -> None:
+        storage.set_setting(MIRROR_SYNC_STATUS_KEY, "{kaputt")
+        assert get_mirror_sync_status(storage)["active_mirrors"] == 0
