@@ -15,16 +15,24 @@ import httpx
 import pytest
 
 from app.caldav_write import (
+    BIRTHDAY_NAMESPACE,
+    BIRTHDAY_UID_PREFIX,
+    MIRROR_NAMESPACE,
     MIRROR_UID_PREFIX,
     CaldavConflictError,
     CaldavWriteClient,
     CaldavWriteError,
     build_ical,
-    mirror_uid,
+    derived_uid,
     resource_name,
     resource_url,
 )
-from app.models import MIRROR_MARKER_PROP, MIRROR_OWNER_PROP, CalendarEvent
+from app.models import (
+    BIRTHDAY_MARKER_PROP,
+    MIRROR_MARKER_PROP,
+    MIRROR_OWNER_PROP,
+    CalendarEvent,
+)
 from app.url_validation import SourceURLError
 
 COLLECTION = "https://cloud.example.com/remote.php/dav/calendars/roland/mv/"
@@ -130,13 +138,13 @@ class TestIcalGeneration:
 
     def test_uid_is_our_own_never_the_foreign_one(self) -> None:
         text = build_ical(SOURCE_KEY, TIMED_EVENT).decode()
-        assert f"UID:{mirror_uid(SOURCE_KEY)}" in text
-        assert mirror_uid(SOURCE_KEY).startswith(MIRROR_UID_PREFIX)
+        assert f"UID:{derived_uid(SOURCE_KEY)}" in text
+        assert derived_uid(SOURCE_KEY).startswith(MIRROR_UID_PREFIX)
         assert "UID:foreign-uid@xalt.example" not in text
 
     def test_uid_is_deterministic_and_key_specific(self) -> None:
-        assert mirror_uid(SOURCE_KEY) == mirror_uid(SOURCE_KEY)
-        assert mirror_uid(SOURCE_KEY) != mirror_uid(SOURCE_KEY + "x")
+        assert derived_uid(SOURCE_KEY) == derived_uid(SOURCE_KEY)
+        assert derived_uid(SOURCE_KEY) != derived_uid(SOURCE_KEY + "x")
 
     def test_resource_url_stays_inside_the_collection(self) -> None:
         url = resource_url(COLLECTION, SOURCE_KEY)
@@ -343,7 +351,7 @@ class TestListOwnResources:
         """
         stripped = (
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Familienkalender//Spiegel//DE\r\n"
-            f"BEGIN:VEVENT\r\nUID:{mirror_uid(SOURCE_KEY)}\r\n"
+            f"BEGIN:VEVENT\r\nUID:{derived_uid(SOURCE_KEY)}\r\n"
             "DTSTAMP:20260701T000000Z\r\n"
             "DTSTART:20260720T101500Z\r\nDTEND:20260720T110000Z\r\n"
             "SUMMARY:Kundentermin\r\n"
@@ -407,3 +415,109 @@ class TestListOwnResources:
                 await CaldavWriteClient(CONFIG, http).list_own_resources(
                     WINDOW_START, WINDOW_END
                 )
+
+
+BIRTHDAY_EVENT = CalendarEvent(
+    uid="people/c1|2026",
+    title="🎂 Oma",
+    start=date(2026, 8, 20),
+    end=date(2026, 8, 21),
+    all_day=True,
+)
+
+PERSON_KEY = "6|people/c1"
+
+
+class TestWriteNamespaces:
+    """The two syncs writing into the same collection must not overlap.
+
+    Both the mirror sync (Xalt -> MoreValue) and the birthday sync write
+    marked VEVENTs into Roland's Nextcloud calendar. If either could see the
+    other's objects, its orphan cleanup would delete them.
+    """
+
+    def test_each_namespace_has_its_own_uid_prefix(self) -> None:
+        assert derived_uid(PERSON_KEY, namespace=MIRROR_NAMESPACE).startswith(
+            MIRROR_UID_PREFIX
+        )
+        assert derived_uid(PERSON_KEY, namespace=BIRTHDAY_NAMESPACE).startswith(
+            BIRTHDAY_UID_PREFIX
+        )
+        assert derived_uid(PERSON_KEY, namespace=MIRROR_NAMESPACE) != derived_uid(
+            PERSON_KEY, namespace=BIRTHDAY_NAMESPACE
+        )
+
+    def test_each_namespace_writes_its_own_marker_property(self) -> None:
+        text = build_ical(
+            PERSON_KEY, BIRTHDAY_EVENT, namespace=BIRTHDAY_NAMESPACE
+        ).decode()
+        assert f"{BIRTHDAY_MARKER_PROP}:{PERSON_KEY}" in text
+        # The shared owner flag stays: it is what the CalDAV READ client
+        # skips on, so a birthday series is never read back either.
+        assert f"{MIRROR_OWNER_PROP}:1" in text
+        assert MIRROR_MARKER_PROP not in text
+
+    def test_yearly_series_carries_the_recurrence_rule(self) -> None:
+        text = build_ical(
+            PERSON_KEY, BIRTHDAY_EVENT, namespace=BIRTHDAY_NAMESPACE, yearly=True
+        ).decode()
+        assert "RRULE:FREQ=YEARLY" in text
+        assert "DTSTART;VALUE=DATE:20260820" in text
+        assert "DTEND;VALUE=DATE:20260821" in text
+
+    def test_a_plain_copy_has_no_recurrence_rule(self) -> None:
+        assert "RRULE" not in build_ical(SOURCE_KEY, TIMED_EVENT).decode()
+
+
+@pytest.mark.anyio
+class TestNamespaceIsolationInListing:
+    async def test_mirror_listing_ignores_birthday_series(self) -> None:
+        birthday = build_ical(
+            PERSON_KEY, BIRTHDAY_EVENT, namespace=BIRTHDAY_NAMESPACE, yearly=True
+        ).decode()
+        body = multistatus(
+            (
+                "/remote.php/dav/calendars/roland/mv/"
+                f"{resource_name(PERSON_KEY, namespace=BIRTHDAY_NAMESPACE)}",
+                '"e1"',
+                birthday,
+            )
+        )
+        async with make_client(lambda r: httpx.Response(207, content=body)) as http:
+            found = await CaldavWriteClient(CONFIG, http).list_own_resources(
+                WINDOW_START, WINDOW_END
+            )
+        assert found == []
+
+    async def test_birthday_listing_ignores_mirror_copies(self) -> None:
+        copy = build_ical(SOURCE_KEY, TIMED_EVENT).decode()
+        body = multistatus(
+            (
+                f"/remote.php/dav/calendars/roland/mv/{resource_name(SOURCE_KEY)}",
+                '"e1"',
+                copy,
+            )
+        )
+        async with make_client(lambda r: httpx.Response(207, content=body)) as http:
+            found = await CaldavWriteClient(
+                CONFIG, http, namespace=BIRTHDAY_NAMESPACE
+            ).list_own_resources(WINDOW_START, WINDOW_END)
+        assert found == []
+
+    async def test_birthday_listing_reports_its_own_series_with_the_start(self) -> None:
+        birthday = build_ical(
+            PERSON_KEY, BIRTHDAY_EVENT, namespace=BIRTHDAY_NAMESPACE, yearly=True
+        ).decode()
+        href = (
+            "/remote.php/dav/calendars/roland/mv/"
+            f"{resource_name(PERSON_KEY, namespace=BIRTHDAY_NAMESPACE)}"
+        )
+        body = multistatus((href, '"e1"', birthday))
+        async with make_client(lambda r: httpx.Response(207, content=body)) as http:
+            found = await CaldavWriteClient(
+                CONFIG, http, namespace=BIRTHDAY_NAMESPACE
+            ).list_own_resources(WINDOW_START, WINDOW_END)
+        assert len(found) == 1
+        assert found[0].source_key == PERSON_KEY
+        assert found[0].summary == "🎂 Oma"
+        assert found[0].start == date(2026, 8, 20)

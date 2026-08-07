@@ -185,6 +185,35 @@ class TestFetchEvents:
             )
         assert [event.uid for event in events] == ["evt-timed"]
 
+    async def test_skips_own_birthday_series(self, tmp_path: Path) -> None:
+        """A birthday series the add-on wrote is never read back.
+
+        Otherwise it would show up twice (next to the contact source) and the
+        mirror sync would copy it on into MoreValue — where the birthday sync
+        already maintains its own series.
+        """
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        series = {
+            "id": "gevt-bday",
+            "status": "confirmed",
+            "summary": "🎂 Oma",
+            "extendedProperties": {
+                "private": {
+                    "familienkalender_birthday": "6|people/c1",
+                    "familienkalender_owner": "birthday",
+                }
+            },
+            "start": {"date": "2026-08-20"},
+            "end": {"date": "2026-08-21"},
+        }
+        pages = [{"items": [series, TIMED_ITEM]}]
+        async with make_client([], pages=pages) as client:
+            events = await fetch_events(
+                CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+            )
+        assert [event.uid for event in events] == ["evt-timed"]
+
     async def test_normal_event_with_other_extended_props_kept(self, tmp_path: Path) -> None:
         tokens_file = tmp_path / "tokens.json"
         write_tokens(tokens_file)

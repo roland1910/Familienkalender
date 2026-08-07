@@ -141,24 +141,32 @@ async def _refresh_access_token(
     return tokens
 
 
-# Private-marker key of the blocks the add-on writes into Roland's Xalt
-# calendar (see app.google_busy; the block title is BUSY_BLOCK_TITLE in
-# app.models). When the same account is also read as a read-only source, these
-# self-created blocks must NOT be read back — otherwise they would duplicate the
-# MoreValue appointments they mirror in the calendar views and the feed. They
-# are skipped here so they never reach the DB.
+# Private-marker keys of everything the add-on WRITES into Roland's Xalt
+# calendar (see app.google_busy): the "Busy MV" blocks and the yearly
+# birthday series. When the same account is also read as a read-only source,
+# these self-created events must NOT be read back — the busy blocks would
+# duplicate the MoreValue appointments they mirror, and the birthday series
+# would duplicate the contact source AND be copied on into MoreValue by the
+# mirror sync. They are skipped here so they never reach the DB.
+#
+# The constant-valued OWNER key covers every purpose in one check (any value
+# means "we wrote it"); the two purpose keys stay listed as a fallback for
+# events written before the owner marker existed.
+OWNER_MARKER_KEY = "familienkalender_owner"
 BUSY_MARKER_KEY = "familienkalender_busy"
+BIRTHDAY_MARKER_KEY = "familienkalender_birthday"
+_OWN_MARKER_KEYS = (OWNER_MARKER_KEY, BUSY_MARKER_KEY, BIRTHDAY_MARKER_KEY)
 
 
 def _is_own_busy_block(item: dict[str, Any]) -> bool:
-    """Whether a Google event is one of the add-on's own "Busy MV" blocks.
+    """Whether a Google event is one the add-on wrote itself.
 
-    Primary signal: the private marker key. Defensive fallback: the fixed
-    "Busy MV" title (covers a block whose marker was somehow stripped). Both
-    are checked so a self-created block is never read back into the calendar.
+    Primary signal: any of the private marker keys. Defensive fallback: the
+    fixed "Busy MV" title (covers a block whose marker was somehow stripped).
+    Both are checked so a self-created event is never read back.
     """
     private = (item.get("extendedProperties") or {}).get("private") or {}
-    if isinstance(private, dict) and BUSY_MARKER_KEY in private:
+    if isinstance(private, dict) and any(key in private for key in _OWN_MARKER_KEYS):
         return True
     return is_busy_block_title(item.get("summary"))
 

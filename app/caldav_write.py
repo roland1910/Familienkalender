@@ -1,4 +1,4 @@
-"""CalDAV write client for the one-way Xalt -> MoreValue mirror sync.
+"""CalDAV write client for the add-on's outgoing syncs into Nextcloud.
 
 This is the only module that WRITES into Roland's Nextcloud. It creates,
 updates and deletes single VEVENT resources over plain CalDAV (PUT/DELETE),
@@ -6,13 +6,22 @@ reusing the read client's infrastructure (httpx, basic auth, the streamed
 response-size limit in app.sources.limits and the SSRF URL validation in
 app.url_validation) instead of duplicating it.
 
+Two different syncs write into the same collection — the mirror sync
+(Xalt → MoreValue, app.mirror_sync) and the birthday sync (contact birthdays
+→ MoreValue, app.birthday_sync). They are kept apart by a ``WriteNamespace``:
+each owns a UID prefix and a marker property of its own, and both the
+listing and the "is this ours?" test are scoped to the instance's namespace.
+Neither sync can therefore see — let alone delete as an orphan — anything the
+other one wrote.
+
 Hard security invariant (enforced here, covered by tests):
 
 - Every resource the add-on writes carries the marker properties
-  ``X-FAMILIENKALENDER-OWNER:1`` and ``X-FAMILIENKALENDER-MIRROR:<source-key>``
-  in its VEVENT (constants in app.models, shared with the read client).
+  ``X-FAMILIENKALENDER-OWNER:1`` (constant, shared by all namespaces — it is
+  what the READ client skips on, so nothing we wrote is ever read back) and
+  the namespace's own ``X-FAMILIENKALENDER-<PURPOSE>:<key>``.
 - Resources are written under OUR OWN, derived UID/filename
-  (``familienkalender-mirror-<hash>.ics``) — never under a foreign
+  (``familienkalender-<purpose>-<hash>.ics``) — never under a foreign
   appointment's UID, so a name collision with a real Nextcloud event is
   impossible.
 - Every request URL must resolve INSIDE the configured calendar collection
@@ -22,12 +31,12 @@ Hard security invariant (enforced here, covered by tests):
   the DECODED path too, so a percent-encoded traversal (``%2e%2e``, which
   ``httpx.URL.join`` does not normalize) cannot slip past the prefix test.
 - Discovery of the add-on's own copies (``list_own_resources``) returns ONLY
-  components that carry the owner marker AND a UID from the derived
-  namespace; everything else is dropped while parsing, so a foreign
-  appointment is never even offered to the caller as a deletion candidate.
-  Both halves are required on purpose: the marker property name is public,
-  so an injected marker must not be enough — the UID of a genuine, already
-  existing appointment can never be one of ours.
+  components that carry the owner marker AND a UID from THIS INSTANCE's
+  derived namespace; everything else is dropped while parsing, so neither a
+  foreign appointment nor the other sync's objects are ever offered to the
+  caller as a deletion candidate. Both halves are required on purpose: the
+  marker property name is public, so an injected marker must not be enough —
+  the UID of a genuine, already existing appointment can never be one of ours.
 
 Conditional requests: an update/delete sends ``If-Match`` with the ETag the
 server last reported, a create sends ``If-None-Match: *``. A 412 therefore
@@ -40,7 +49,7 @@ import hashlib
 import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -48,6 +57,7 @@ import icalendar
 from defusedxml import ElementTree as SafeET
 
 from app.models import (
+    BIRTHDAY_MARKER_PROP,
     MIRROR_MARKER_PROP,
     MIRROR_OWNER_PROP,
     MIRROR_OWNER_VALUE,
@@ -68,6 +78,10 @@ PRODID = "-//Familienkalender//Spiegel//DE"
 # makes an accidental collision with a real Nextcloud resource impossible and
 # lets a human recognize the add-on's own objects in the calendar folder.
 MIRROR_UID_PREFIX = "familienkalender-mirror-"
+
+# ... and of every yearly birthday series. A SEPARATE prefix is what keeps the
+# two syncs from treating each other's objects as their own orphans.
+BIRTHDAY_UID_PREFIX = "familienkalender-birthday-"
 
 # Length of the hex digest in the derived UID. 32 hex chars = 128 bits of the
 # SHA-256 over the source key — far beyond any collision concern for a few
@@ -97,34 +111,61 @@ class CaldavConflictError(CaldavWriteError):
 
 
 @dataclass(frozen=True, slots=True)
-class OwnResource:
-    """One mirrored copy discovered in the target calendar.
+class WriteNamespace:
+    """Identity of ONE outgoing sync inside a CalDAV collection.
 
-    Only ever built for components that carry the owner marker, so an
-    instance of this class is by construction one of the add-on's own
-    resources — never a foreign appointment.
+    Three sync directions write into Roland's calendars, two of them into the
+    same Nextcloud collection. Each gets its own UID prefix and marker
+    property here, so "is this object mine?" is answered per sync and never
+    per add-on: the mirror sync can never delete a birthday series as an
+    orphan, and the birthday sync can never delete a mirrored copy.
+    """
+
+    uid_prefix: str
+    marker_prop: str
+
+
+MIRROR_NAMESPACE = WriteNamespace(MIRROR_UID_PREFIX, MIRROR_MARKER_PROP)
+BIRTHDAY_NAMESPACE = WriteNamespace(BIRTHDAY_UID_PREFIX, BIRTHDAY_MARKER_PROP)
+
+
+@dataclass(frozen=True, slots=True)
+class OwnResource:
+    """One of the add-on's own resources discovered in the target calendar.
+
+    Only ever built for components that carry the owner marker AND a UID from
+    the discovering client's namespace, so an instance of this class is by
+    construction one of that sync's own resources — never a foreign
+    appointment and never the other sync's.
+
+    ``start`` is the component's DTSTART (a plain date for all-day/recurring
+    entries). The birthday sync needs it to decide whether an unmapped series
+    may be deleted at all; the mirror sync ignores it.
     """
 
     url: str
     etag: str
     source_key: str
     summary: str
+    start: datetime | date | None = None
 
 
-def mirror_uid(source_key: str) -> str:
-    """The add-on's own, derived UID for the copy of ``source_key``.
+def derived_uid(source_key: str, *, namespace: WriteNamespace = MIRROR_NAMESPACE) -> str:
+    """The add-on's own, derived UID for the object of ``source_key``.
 
     Deterministic (so a lost mapping row can rediscover the same resource)
     and derived — the foreign appointment's own UID is never reused as the
     UID or filename of a resource we write.
     """
     digest = hashlib.sha256(source_key.encode("utf-8")).hexdigest()
-    return f"{MIRROR_UID_PREFIX}{digest[:_UID_DIGEST_CHARS]}"
+    return f"{namespace.uid_prefix}{digest[:_UID_DIGEST_CHARS]}"
 
 
-def resource_name(source_key: str) -> str:
-    """The .ics filename of the copy of ``source_key`` inside the collection."""
-    return f"{mirror_uid(source_key)}.ics"
+def resource_name(
+    source_key: str, *, namespace: WriteNamespace = MIRROR_NAMESPACE
+) -> str:
+    """The .ics filename of the object of ``source_key`` inside the collection."""
+    return f"{derived_uid(source_key, namespace=namespace)}.ics"
 
 
 def collection_url(calendar_url: str) -> str:
@@ -132,26 +173,39 @@ def collection_url(calendar_url: str) -> str:
     return calendar_url if calendar_url.endswith("/") else f"{calendar_url}/"
 
 
-def resource_url(calendar_url: str, source_key: str) -> str:
-    """Absolute URL of the copy of ``source_key`` inside the collection."""
-    return f"{collection_url(calendar_url)}{resource_name(source_key)}"
+def resource_url(
+    calendar_url: str, source_key: str, *, namespace: WriteNamespace = MIRROR_NAMESPACE
+) -> str:
+    """Absolute URL of the object of ``source_key`` inside the collection."""
+    return (
+        f"{collection_url(calendar_url)}"
+        f"{resource_name(source_key, namespace=namespace)}"
+    )
 
 
 def build_ical(
-    source_key: str, event: CalendarEvent, *, now: datetime | None = None
+    source_key: str,
+    event: CalendarEvent,
+    *,
+    now: datetime | None = None,
+    namespace: WriteNamespace = MIRROR_NAMESPACE,
+    yearly: bool = False,
 ) -> bytes:
-    """The complete VCALENDAR document for one mirrored appointment.
+    """The complete VCALENDAR document for one written object.
 
     Carries title, times and location only. Description and attendees are
     deliberately NOT copied: the mirror exists so Roland sees his Xalt
     appointments in MoreValue, and copying meeting bodies/participant lists
     into a second system would spread data that nobody needs there.
+
+    ``yearly`` adds ``RRULE:FREQ=YEARLY``: birthdays are recurring by nature,
+    so one series per person replaces a fresh copy every year.
     """
     calendar = icalendar.Calendar()
     calendar.add("prodid", PRODID)
     calendar.add("version", "2.0")
     component = icalendar.Event()
-    component.add("uid", mirror_uid(source_key))
+    component.add("uid", derived_uid(source_key, namespace=namespace))
     component.add("dtstamp", (now or datetime.now(UTC)).astimezone(UTC))
     component.add("summary", event.title)
     if event.all_day:
@@ -162,36 +216,42 @@ def build_ical(
     else:
         component.add("dtstart", as_local_datetime(event.start).astimezone(UTC))
         component.add("dtend", as_local_datetime(event.end).astimezone(UTC))
+    if yearly:
+        component.add("rrule", {"freq": "yearly"})
     if event.location:
         component.add("location", event.location)
-    component.add(MIRROR_MARKER_PROP, source_key)
+    component.add(namespace.marker_prop, source_key)
     component.add(MIRROR_OWNER_PROP, MIRROR_OWNER_VALUE)
     calendar.add_component(component)
     return calendar.to_ical()
 
 
-def _marked_component(ics_text: str) -> icalendar.cal.Component | None:
-    """The first VEVENT that is one of the add-on's own copies, else None.
+def _marked_component(
+    ics_text: str, namespace: WriteNamespace
+) -> icalendar.cal.Component | None:
+    """The first VEVENT belonging to ``namespace``, else None.
 
     This is the gate that decides whether a resource found in the target
-    calendar belongs to the add-on, and it demands BOTH halves of the
+    calendar belongs to THIS sync, and it demands BOTH halves of the
     identity:
 
     - the owner marker property, and
-    - a UID inside the derived namespace (``familienkalender-mirror-…``).
+    - a UID inside the namespace's derived prefix
+      (``familienkalender-mirror-…`` resp. ``familienkalender-birthday-…``).
 
     The marker alone is not enough: the property name is public (the project
     is open source) and any X-property can ride into Roland's Nextcloud on a
     foreign invitation, an import or a shared calendar. The UID, in contrast,
     is fixed when an appointment is created — a genuine, pre-existing
     appointment can never carry ours, so a marker somebody else injected can
-    never make a real appointment a write or delete candidate.
+    never make a real appointment a write or delete candidate. The prefix
+    test additionally separates the two syncs from each other.
     """
     calendar = icalendar.Calendar.from_ical(ics_text)
     for component in calendar.walk("VEVENT"):
         if component.get(MIRROR_OWNER_PROP) is None:
             continue
-        if not str(component.get("UID", "")).startswith(MIRROR_UID_PREFIX):
+        if not str(component.get("UID", "")).startswith(namespace.uid_prefix):
             continue
         return component
     return None
@@ -222,15 +282,26 @@ class CaldavWriteClient:
     re-validated here, defensively, exactly like the read client does.
     """
 
-    def __init__(self, config: dict[str, Any], client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        client: httpx.AsyncClient,
+        *,
+        namespace: WriteNamespace = MIRROR_NAMESPACE,
+    ) -> None:
         self._collection = collection_url(config["calendar_url"])
         validate_source_url(self._collection)
         self._auth = (config["username"], config["app_password"])
         self._client = client
+        self._namespace = namespace
 
     @property
     def collection(self) -> str:
         return self._collection
+
+    @property
+    def namespace(self) -> WriteNamespace:
+        return self._namespace
 
     def _ensure_own_url(self, url: str) -> str:
         """Reject any URL outside the configured collection.
@@ -292,30 +363,41 @@ class CaldavWriteClient:
             )
         return response.headers.get("ETag", "")
 
+    def _body(self, source_key: str, event: CalendarEvent, yearly: bool) -> bytes:
+        return build_ical(
+            source_key, event, namespace=self._namespace, yearly=yearly
+        )
+
     async def create_event(
-        self, url: str, source_key: str, event: CalendarEvent
+        self, url: str, source_key: str, event: CalendarEvent, *, yearly: bool = False
     ) -> str:
-        """Create a new mirrored copy; returns the new ETag (may be empty).
+        """Create a new own resource; returns the new ETag (may be empty).
 
         ``If-None-Match: *`` makes the server refuse if something already
         lives at that URL — the add-on never overwrites an existing resource
         while creating.
         """
         return await self._put(
-            url, build_ical(source_key, event), {"If-None-Match": "*"}
+            url, self._body(source_key, event, yearly), {"If-None-Match": "*"}
         )
 
     async def update_event(
-        self, url: str, source_key: str, event: CalendarEvent, *, etag: str
+        self,
+        url: str,
+        source_key: str,
+        event: CalendarEvent,
+        *,
+        etag: str,
+        yearly: bool = False,
     ) -> str:
-        """Overwrite an existing own copy; returns the new ETag.
+        """Overwrite an existing own resource; returns the new ETag.
 
         ``If-Match`` guards against clobbering a concurrent foreign change.
         An empty/unknown ETag falls back to ``*`` ("must still exist"), which
         is still stricter than an unconditional PUT.
         """
         return await self._put(
-            url, build_ical(source_key, event), {"If-Match": etag or "*"}
+            url, self._body(source_key, event, yearly), {"If-Match": etag or "*"}
         )
 
     async def delete_event(self, url: str, *, etag: str = "") -> None:
@@ -336,11 +418,14 @@ class CaldavWriteClient:
     async def list_own_resources(
         self, window_start: datetime, window_end: datetime
     ) -> list[OwnResource]:
-        """The add-on's own copies in [window_start, window_end).
+        """This namespace's own resources in [window_start, window_end).
 
         Uses the same time-range calendar-query the read client uses, then
-        keeps ONLY components carrying the owner marker. The window matches
-        the mirror window, i.e. exactly the range the add-on ever writes into.
+        keeps ONLY components carrying the owner marker AND a UID from this
+        client's namespace. Callers pass a window that certainly contains an
+        occurrence of everything they wrote: the mirror window for one-off
+        copies, and a full year for the yearly birthday series (a recurring
+        entry only matches a time-range that one of its occurrences falls in).
         """
         body = _MIRROR_QUERY_TEMPLATE.format(
             start=_utc_stamp(window_start), end=_utc_stamp(window_end)
@@ -376,7 +461,7 @@ class CaldavWriteClient:
         if data_el is None or not data_el.text or not data_el.text.strip():
             return None
         try:
-            component = _marked_component(data_el.text)
+            component = _marked_component(data_el.text, self._namespace)
         except Exception as exc:
             # Only the exception type is logged: parser messages may quote
             # raw (foreign, untrusted) calendar data.
@@ -397,9 +482,23 @@ class CaldavWriteClient:
         return OwnResource(
             url=url,
             etag=(etag_el.text or "").strip() if etag_el is not None else "",
-            source_key=_text(component.get(MIRROR_MARKER_PROP)),
+            source_key=_text(component.get(self._namespace.marker_prop)),
             summary=_text(component.get("SUMMARY")),
+            start=_component_start(component),
         )
+
+
+def _component_start(component: icalendar.cal.Component) -> datetime | date | None:
+    """The component's DTSTART, or None when it is missing/unreadable.
+
+    Foreign-shaped data must never abort the listing: a resource without a
+    readable start is still reported, just without one.
+    """
+    try:
+        value = component.get("DTSTART")
+        return value.dt if value is not None else None
+    except (AttributeError, ValueError, TypeError):
+        return None
 
 
 def _utc_stamp(moment: datetime) -> str:
