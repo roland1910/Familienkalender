@@ -20,7 +20,14 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import feed_constants, google_busy, google_oauth, power, settings
+from app import (
+    birthday_sync,
+    feed_constants,
+    google_busy,
+    google_oauth,
+    power,
+    settings,
+)
 from app.auth import require_admin
 from app.models import (
     DISPLAY_MODES,
@@ -155,6 +162,17 @@ class MirrorSyncUpdate(BaseModel):
     # Deliberately an id, never a URL — the mirror only ever writes into the
     # already validated collection of a configured source.
     target_source_id: int | None = None
+
+
+class BirthdaySyncUpdate(BaseModel):
+    enabled: bool
+    # Contact source ids (type google_contacts) whose birthdays are written.
+    source_ids: list[int] = Field(default_factory=list, max_length=50)
+    # Target 1: the Google calendar behind the existing write token.
+    google_enabled: bool = False
+    # Target 2: a configured CalDAV source; None clears it. An id, never a
+    # URL — the add-on only writes into an already validated collection.
+    caldav_target_source_id: int | None = None
 
 
 def _mask_client_id(client_id: str) -> str:
@@ -619,6 +637,88 @@ async def update_mirror_sync(update: MirrorSyncUpdate) -> dict:
     return _mirror_sync_payload()
 
 
+# -- birthday sync (contact birthdays -> Xalt and/or MoreValue) ------------
+
+
+def _birthday_sync_payload() -> dict:
+    """Current birthday-sync configuration + status for the admin UI."""
+    storage = get_storage()
+    sources = storage.list_sources()
+    return {
+        "birthday_sync": {
+            "enabled": settings.is_birthday_sync_enabled(storage),
+            "source_ids": sorted(set(settings.get_birthday_sync_source_ids(storage))),
+            "google_enabled": settings.is_birthday_sync_google_enabled(storage),
+            "google_connected": google_busy.has_write_token(),
+            "caldav_target_source_id": settings.get_birthday_sync_caldav_target_id(
+                storage
+            ),
+            # Only contact sources can feed this sync: turning every
+            # appointment of a normal calendar into a yearly series is nonsense.
+            "sources": [
+                {"id": source.id, "name": source.name}
+                for source in sources
+                if source.type == "google_contacts"
+            ],
+            # Only CalDAV sources can receive the series — their stored,
+            # already validated collection URL is what is written into.
+            "targets": [
+                {"id": source.id, "name": source.name}
+                for source in sources
+                if source.type == "caldav"
+            ],
+            "status": settings.get_birthday_sync_status(storage),
+        }
+    }
+
+
+@router.get("/birthday-sync")
+async def get_birthday_sync() -> dict:
+    """Birthday-sync configuration and last-run status."""
+    return _birthday_sync_payload()
+
+
+@router.put("/birthday-sync")
+async def update_birthday_sync(update: BirthdaySyncUpdate) -> dict:
+    """Enable/disable the birthday sync, pick the sources and the targets.
+
+    Validation: every source id must be an existing contact source, and the
+    CalDAV target must be an existing CalDAV source. Changing the CalDAV
+    target resets that target's mapping — its resource URLs point into the
+    old collection and must never drive a delete in the new one.
+    """
+    storage = get_storage()
+    known = {source.id: source for source in storage.list_sources()}
+    invalid = [
+        sid
+        for sid in update.source_ids
+        if sid not in known or known[sid].type != "google_contacts"
+    ]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Nur Geburtstags-Quellen (Google-Kontakte) sind erlaubt: "
+                f"{', '.join(str(sid) for sid in invalid)}"
+            ),
+        )
+    target_id = update.caldav_target_source_id
+    if target_id is not None:
+        target = known.get(target_id)
+        if target is None or target.type != "caldav":
+            raise HTTPException(
+                status_code=400,
+                detail="Das Ziel muss eine vorhandene Nextcloud-/CalDAV-Quelle sein.",
+            )
+    if target_id != settings.get_birthday_sync_caldav_target_id(storage):
+        storage.clear_birthday_blocks(birthday_sync.TARGET_CALDAV)
+    settings.set_birthday_sync_caldav_target_id(storage, target_id)
+    settings.set_birthday_sync_source_ids(storage, update.source_ids)
+    settings.set_birthday_sync_google_enabled(storage, update.google_enabled)
+    settings.set_birthday_sync_enabled(storage, update.enabled)
+    return _birthday_sync_payload()
+
+
 @router.post("/google/write-auth-url")
 async def google_write_auth_url() -> dict:
     """Start of the busy-sync OAuth flow: consent URL with the write scope.
@@ -876,6 +976,17 @@ async def delete_source(source_id: int) -> dict:
         settings.set_mirror_sync_target_source_id(storage, None)
         settings.set_mirror_sync_enabled(storage, False)
         storage.clear_mirror_events()
+    # Same for the birthday sync: drop the deleted source from the selection
+    # and, if it was the CalDAV target, clear the target plus that target's
+    # mapping (its resource URLs address a calendar we no longer reach).
+    birthdays = settings.get_birthday_sync_source_ids(storage)
+    if source_id in birthdays:
+        settings.set_birthday_sync_source_ids(
+            storage, [sid for sid in birthdays if sid != source_id]
+        )
+    if settings.get_birthday_sync_caldav_target_id(storage) == source_id:
+        settings.set_birthday_sync_caldav_target_id(storage, None)
+        storage.clear_birthday_blocks(birthday_sync.TARGET_CALDAV)
     return {"deleted": source_id}
 
 

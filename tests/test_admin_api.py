@@ -1603,3 +1603,204 @@ class TestMirrorSyncEndpoints:
         )
         client.delete(f"/api/admin/sources/{google}")
         assert settings.get_mirror_sync_source_ids(storage) == []
+
+
+class TestBirthdaySyncEndpoints:
+    """Admin API of the birthday sync (app.birthday_sync)."""
+
+    def _contact_source(self, storage: Storage, name: str = "Geburtstage Roland") -> int:
+        return storage.add_source(type="google_contacts", name=name, config={})
+
+    def _caldav_target(self, storage: Storage) -> int:
+        return storage.add_source(type="caldav", name="Roland MV", config=CALDAV_CONFIG)
+
+    def test_defaults_are_off_and_unconfigured(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        payload = client.get("/api/admin/birthday-sync").json()["birthday_sync"]
+        assert payload["enabled"] is False
+        assert payload["google_enabled"] is False
+        assert payload["caldav_target_source_id"] is None
+        assert payload["source_ids"] == []
+        assert payload["status"]["error"] is None
+
+    def test_only_contact_sources_and_caldav_targets_are_offered(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        contacts = self._contact_source(storage)
+        target = self._caldav_target(storage)
+        storage.add_source(type="google", name="Roland@Xalt", config={})
+        payload = client.get("/api/admin/birthday-sync").json()["birthday_sync"]
+        assert [s["id"] for s in payload["sources"]] == [contacts]
+        assert [t["id"] for t in payload["targets"]] == [target]
+
+    def test_enable_with_both_targets(self, client: TestClient, storage: Storage) -> None:
+        from app import settings
+
+        contacts = self._contact_source(storage)
+        target = self._caldav_target(storage)
+        response = client.put(
+            "/api/admin/birthday-sync",
+            json={
+                "enabled": True,
+                "source_ids": [contacts],
+                "google_enabled": True,
+                "caldav_target_source_id": target,
+            },
+        )
+        assert response.status_code == 200
+        assert settings.is_birthday_sync_enabled(storage) is True
+        assert settings.is_birthday_sync_google_enabled(storage) is True
+        assert settings.get_birthday_sync_caldav_target_id(storage) == target
+        assert settings.get_birthday_sync_source_ids(storage) == [contacts]
+
+    def test_targets_are_independently_switchable(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        contacts = self._contact_source(storage)
+        target = self._caldav_target(storage)
+        client.put(
+            "/api/admin/birthday-sync",
+            json={
+                "enabled": True,
+                "source_ids": [contacts],
+                "google_enabled": False,
+                "caldav_target_source_id": target,
+            },
+        )
+        assert settings.is_birthday_sync_google_enabled(storage) is False
+        assert settings.get_birthday_sync_caldav_target_id(storage) == target
+        client.put(
+            "/api/admin/birthday-sync",
+            json={
+                "enabled": True,
+                "source_ids": [contacts],
+                "google_enabled": True,
+                "caldav_target_source_id": None,
+            },
+        )
+        assert settings.is_birthday_sync_google_enabled(storage) is True
+        assert settings.get_birthday_sync_caldav_target_id(storage) is None
+
+    def test_unknown_source_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.put(
+            "/api/admin/birthday-sync",
+            json={"enabled": True, "source_ids": [999], "google_enabled": True},
+        )
+        assert response.status_code == 400
+        assert "Geburtstags-Quellen" in response.json()["detail"]
+
+    def test_a_normal_calendar_source_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        """Only contact sources feed this sync — a normal calendar would turn
+        every appointment into a yearly series."""
+        calendar = storage.add_source(type="google", name="Roland@Xalt", config={})
+        response = client.put(
+            "/api/admin/birthday-sync",
+            json={"enabled": True, "source_ids": [calendar], "google_enabled": True},
+        )
+        assert response.status_code == 400
+
+    def test_non_caldav_target_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        contacts = self._contact_source(storage)
+        google = storage.add_source(type="google", name="Roland@Xalt", config={})
+        response = client.put(
+            "/api/admin/birthday-sync",
+            json={
+                "enabled": True,
+                "source_ids": [contacts],
+                "caldav_target_source_id": google,
+            },
+        )
+        assert response.status_code == 400
+        assert "CalDAV" in response.json()["detail"]
+
+    def test_changing_the_caldav_target_resets_that_mapping(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from datetime import UTC, date, datetime
+
+        from app.models import BirthdayBlock
+
+        contacts = self._contact_source(storage)
+        first = self._caldav_target(storage)
+        second = storage.add_source(
+            type="caldav", name="Anderer Kalender", config=CALDAV_CONFIG
+        )
+        client.put(
+            "/api/admin/birthday-sync",
+            json={
+                "enabled": True,
+                "source_ids": [contacts],
+                "caldav_target_source_id": first,
+            },
+        )
+        storage.upsert_birthday_block(
+            BirthdayBlock(
+                person_key="6|people/c1",
+                target="caldav",
+                remote_id="https://cloud/dav/cal/x.ics",
+                start=date(2026, 8, 20),
+                title="🎂 Oma",
+            ),
+            updated_at=datetime(2026, 7, 9, tzinfo=UTC),
+        )
+        storage.upsert_birthday_block(
+            BirthdayBlock(
+                person_key="6|people/c1",
+                target="google",
+                remote_id="gid-1",
+                start=date(2026, 8, 20),
+                title="🎂 Oma",
+            ),
+            updated_at=datetime(2026, 7, 9, tzinfo=UTC),
+        )
+        client.put(
+            "/api/admin/birthday-sync",
+            json={
+                "enabled": True,
+                "source_ids": [contacts],
+                "caldav_target_source_id": second,
+            },
+        )
+        # Only the CalDAV mapping is dropped; the Google series stay mapped.
+        assert storage.count_birthday_blocks("caldav") == 0
+        assert storage.count_birthday_blocks("google") == 1
+
+    def test_deleting_a_selected_source_drops_it_from_the_selection(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        contacts = self._contact_source(storage)
+        client.put(
+            "/api/admin/birthday-sync",
+            json={"enabled": True, "source_ids": [contacts], "google_enabled": True},
+        )
+        client.delete(f"/api/admin/sources/{contacts}")
+        assert settings.get_birthday_sync_source_ids(storage) == []
+
+    def test_deleting_the_caldav_target_clears_it(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        contacts = self._contact_source(storage)
+        target = self._caldav_target(storage)
+        client.put(
+            "/api/admin/birthday-sync",
+            json={
+                "enabled": True,
+                "source_ids": [contacts],
+                "caldav_target_source_id": target,
+            },
+        )
+        client.delete(f"/api/admin/sources/{target}")
+        assert settings.get_birthday_sync_caldav_target_id(storage) is None

@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, time, timedelta
 
-from app import busy_sync, mirror_sync
+from app import birthday_sync, busy_sync, mirror_sync
 from app.models import LOCAL_TZ, AuditEntry, CalendarEvent, EventChange, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google, google_contacts, limits
@@ -148,6 +148,16 @@ async def _sync_all_locked(
         )
     except Exception:  # pragma: no cover - run_mirror_sync already isolates errors
         logger.exception("Unexpected error in mirror sync")
+    # Finally the contact birthdays as yearly series in Roland's work
+    # calendars. Same contract again (isolated errors, no-op when disabled or
+    # without a usable target), and it needs ``results`` for the same reason
+    # the mirror does: it deletes in real calendars.
+    try:
+        await birthday_sync.run_birthday_sync(
+            storage, now=synced_at, source_results=results
+        )
+    except Exception:  # pragma: no cover - run_birthday_sync already isolates errors
+        logger.exception("Unexpected error in birthday sync")
     # Keep the change log bounded: drop entries older than the retention
     # window at the end of every run. Isolated so a prune failure never
     # breaks the sync.

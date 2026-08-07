@@ -557,3 +557,48 @@ class TestMirrorSyncIntegration:
         # Must not raise: mirror-sync errors are isolated from the calendar sync.
         results = await sync_all(storage, now=FIXED_NOW)
         assert results  # calendar sources still processed
+
+
+@pytest.mark.anyio
+class TestBirthdaySyncIntegration:
+    async def test_birthday_sync_runs_with_this_runs_per_source_outcome(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It deletes in real calendars, so its guard needs the run outcome."""
+        storage = Storage(tmp_path / "test.db")
+        source_id = storage.add_source(type="caldav", name="Firma", config={})
+        seen = {}
+
+        async def fake_birthday(storage_arg, *, now=None, client=None, source_results=None):
+            from app.birthday_sync import BirthdaySyncResult
+
+            seen["now"] = now
+            seen["results"] = source_results
+            return BirthdaySyncResult()
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.birthday_sync.run_birthday_sync", fake_birthday)
+        await sync_all(storage, now=FIXED_NOW)
+
+        assert seen["now"] == FIXED_NOW
+        assert seen["results"][source_id] is None
+
+    async def test_birthday_sync_error_does_not_break_calendar_sync(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("birthday sync exploded")
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.birthday_sync.run_birthday_sync", boom)
+        results = await sync_all(storage, now=FIXED_NOW)
+        assert results  # calendar sources still processed
