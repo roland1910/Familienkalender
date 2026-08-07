@@ -23,7 +23,12 @@ import icalendar
 import recurring_ical_events
 from defusedxml import ElementTree as SafeET
 
-from app.models import LOCAL_TZ, CalendarEvent, is_busy_block_title
+from app.models import (
+    LOCAL_TZ,
+    MIRROR_OWNER_PROP,
+    CalendarEvent,
+    is_busy_block_title,
+)
 from app.sources import limits
 from app.url_validation import validate_source_url
 
@@ -96,6 +101,15 @@ def _extract_events(
     occurrences = recurring_ical_events.of(calendar).between(window_start, window_end)
     events: list[CalendarEvent] = []
     for component in occurrences:
+        # Skip the add-on's own mirrored copies (Xalt -> MoreValue, see
+        # app.mirror_sync). Without this the copies would be read straight
+        # back: they would show up a second time next to the Xalt original in
+        # the views and the feed, and the busy sync would mirror them back
+        # into Xalt as "Busy MV" blocks — a feedback loop between the two
+        # write directions. The marker property is written by app.caldav_write
+        # and is checked BEFORE anything else is parsed.
+        if component.get(MIRROR_OWNER_PROP) is not None:
+            continue
         event = _component_to_event(component)
         # Skip the add-on's own "Busy MV" blocks. Roland runs an external tool
         # that syncs his Xalt Google calendar back into MoreValue (Nextcloud),

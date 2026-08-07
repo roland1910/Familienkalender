@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
+from app.caldav_write import build_ical
+from app.models import CalendarEvent
 from app.sources import limits
 from app.sources.caldav import fetch_events, list_calendars
 from app.url_validation import SourceURLError
@@ -322,6 +324,62 @@ class TestBusyBlockSkip:
 
         assert [event.uid for event in events] == ["prep@example.com"]
         assert events[0].title == "Busy MV Vorbereitung"
+
+
+@pytest.mark.anyio
+class TestMirrorCopySkip:
+    """The CalDAV reader skips the add-on's own mirrored copies.
+
+    Since Etappe 41 the add-on writes Xalt appointments into MoreValue. If it
+    read those copies back they would (a) appear twice — once as the Xalt
+    original, once as the Nextcloud copy — in the views and the ICS feed and
+    (b) be mirrored back into Xalt as "Busy MV" blocks by the busy sync: a
+    feedback loop between the two write directions. The marker property, not
+    the title, is what identifies a copy (copies carry the real title).
+    """
+
+    def _mirrored_ics(self) -> str:
+        return build_ical(
+            "3|foreign-uid@xalt|2026-07-14T08:00:00+00:00",
+            CalendarEvent(
+                uid="foreign-uid@xalt",
+                title="Kundentermin",
+                start=datetime(2026, 7, 14, 8, tzinfo=UTC),
+                end=datetime(2026, 7, 14, 9, tzinfo=UTC),
+                all_day=False,
+            ),
+        ).decode()
+
+    async def test_own_mirror_copy_is_skipped(self) -> None:
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(self._mirrored_ics())
+        async with make_client(xml, captured) as client:
+            events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+        assert events == []
+
+    async def test_real_events_next_to_a_copy_survive(self) -> None:
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(
+            fixture("simple.ics"), self._mirrored_ics(), fixture("allday.ics")
+        )
+        async with make_client(xml, captured) as client:
+            events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+        assert {event.uid for event in events} == {
+            "simple-1@example.com",
+            "allday-1@example.com",
+        }
+
+    async def test_identically_titled_foreign_event_is_kept(self) -> None:
+        # Only the marker decides — an unmarked appointment with the same
+        # title as a mirrored one is a real Nextcloud event and must stay.
+        captured: list[httpx.Request] = []
+        xml = multistatus_report(busy_mv_ics("Kundentermin", uid="real@example.com"))
+        async with make_client(xml, captured) as client:
+            events = await fetch_events(CONFIG, WINDOW_START, WINDOW_END, client=client)
+
+        assert [event.uid for event in events] == ["real@example.com"]
 
 
 PROPFIND_MULTISTATUS = """<?xml version="1.0"?>
