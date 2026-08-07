@@ -438,6 +438,61 @@ class TestDelete:
 
 
 @pytest.mark.anyio
+class TestStaleMapping:
+    """A mapping row pointing outside the CURRENT collection is discarded.
+
+    Roland can repoint the target source's ``calendar_url`` with a plain
+    PATCH on the source — that path does not clear the mapping, so its URLs
+    suddenly lie outside the collection. Aborting the run there would wedge
+    the mirror permanently at the same spot on every following run.
+    """
+
+    def _stale_row(self, storage: Storage, url: str) -> str:
+        event = meeting(uid="alt")
+        key = source_key(99, event)
+        storage.upsert_mirror_event(
+            MirrorEvent(
+                source_key=key,
+                resource_url=url,
+                etag='"stale"',
+                start=event.start,
+                end=event.end,
+                all_day=False,
+                title=event.title,
+            ),
+            updated_at=NOW,
+        )
+        return key
+
+    async def test_url_outside_the_collection_drops_the_row_and_run_continues(
+        self, env
+    ) -> None:
+        storage, xalt_id, _ = env
+        key = self._stale_row(
+            storage,
+            "https://cloud.example.com/remote.php/dav/calendars/roland/alt/x.ics",
+        )
+        store_events(storage, xalt_id, [meeting()])
+        backend = RecordingCaldav()
+
+        result = await _run(storage, backend)
+
+        assert result.error is None
+        assert result.inserted == 1  # the run finished its normal work
+        assert result.deleted == 0  # nothing was deleted on the server
+        assert key not in {row.source_key for row in storage.list_mirror_events()}
+        assert all(str(r.url).startswith(COLLECTION) for r in backend.requests)
+
+    async def test_dropping_a_stale_row_is_not_logged_as_a_deletion(self, env) -> None:
+        storage, _, _ = env
+        self._stale_row(storage, "https://evil.example.com/x.ics")
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+        entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        assert entries == []
+
+
+@pytest.mark.anyio
 class TestWindowBoundaries:
     async def test_past_appointment_is_not_mirrored(self, env) -> None:
         storage, xalt_id, _ = env

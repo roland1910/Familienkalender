@@ -273,9 +273,23 @@ class _Reconciler:
 
         The URL comes from the mapping (or, when the copy was rediscovered,
         from the listing) — always a resource the add-on created itself.
+
+        A mapped URL can nevertheless have gone STALE: repointing the target
+        source's ``calendar_url`` with a plain source PATCH leaves the mapping
+        untouched, so its rows suddenly address the old collection. Such a row
+        is simply discarded — nothing is touched on the server (we no longer
+        know that calendar), and the run carries on. Letting the URL check
+        abort the run instead would wedge the mirror at the same row forever.
         """
         url = existing.url if existing is not None else row.resource_url
         etag = existing.etag if existing is not None else row.etag
+        if existing is None and not self._client.owns_url(url):
+            self._storage.delete_mirror_event(key)
+            logger.info(
+                "Discarded a mirror mapping row pointing outside the current "
+                "calendar (stale target); nothing was deleted on the server."
+            )
+            return
         # Marked as dealt with up front, so a conflict here does not make the
         # orphan pass attempt the very same resource again in this run.
         handled.add(url)
