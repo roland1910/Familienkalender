@@ -48,6 +48,16 @@ MIRROR_SYNC_ENABLED_KEY = "mirror_sync_enabled"
 MIRROR_SYNC_SOURCE_IDS_KEY = "mirror_sync_source_ids"
 MIRROR_SYNC_TARGET_KEY = "mirror_sync_target_source_id"
 MIRROR_SYNC_STATUS_KEY = "mirror_sync_status"
+# Birthday sync (contact birthdays → Xalt and/or a CalDAV calendar, see
+# app.birthday_sync): master on/off switch, the google_contacts source ids
+# whose birthdays are written out, the two independently switchable targets
+# (the Google write token's primary calendar, and a CalDAV source's calendar)
+# and the last-run status (JSON, error already sanitized).
+BIRTHDAY_SYNC_ENABLED_KEY = "birthday_sync_enabled"
+BIRTHDAY_SYNC_SOURCE_IDS_KEY = "birthday_sync_source_ids"
+BIRTHDAY_SYNC_GOOGLE_KEY = "birthday_sync_google"
+BIRTHDAY_SYNC_CALDAV_TARGET_KEY = "birthday_sync_caldav_target_id"
+BIRTHDAY_SYNC_STATUS_KEY = "birthday_sync_status"
 # Server-side default calendar view (month/week) for devices without a
 # per-device choice in localStorage — the kiosk browser loses its storage
 # on every restart, so the initial view must come from the server.
@@ -438,6 +448,129 @@ def set_mirror_sync_status(
             {
                 "last_run": last_run,
                 "active_mirrors": active_mirrors,
+                "conflicts": conflicts,
+                "error": error,
+                "skipped": skipped,
+                "skip_reason": skip_reason,
+            }
+        ),
+    )
+
+
+def is_birthday_sync_enabled(storage: Storage) -> bool:
+    """Whether the birthday sync is switched on (default off)."""
+    return storage.get_setting(BIRTHDAY_SYNC_ENABLED_KEY) == "1"
+
+
+def set_birthday_sync_enabled(storage: Storage, enabled: bool) -> None:
+    """Persist the birthday-sync on/off switch."""
+    storage.set_setting(BIRTHDAY_SYNC_ENABLED_KEY, "1" if enabled else "0")
+
+
+def get_birthday_sync_source_ids(storage: Storage) -> list[int]:
+    """The contact-source ids whose birthdays are written into the targets."""
+    return _get_source_id_list(storage, BIRTHDAY_SYNC_SOURCE_IDS_KEY)
+
+
+def set_birthday_sync_source_ids(storage: Storage, source_ids: list[int]) -> None:
+    """Persist the birthday-source id list (deduplicated, order preserved)."""
+    _set_source_id_list(storage, BIRTHDAY_SYNC_SOURCE_IDS_KEY, source_ids)
+
+
+def is_birthday_sync_google_enabled(storage: Storage) -> bool:
+    """Whether birthdays go into the Google (Xalt) calendar (default off).
+
+    Independent of the CalDAV target: Roland can pick either, both or — with
+    the master switch on but no target — none, in which case the sync simply
+    has nothing to do.
+    """
+    return storage.get_setting(BIRTHDAY_SYNC_GOOGLE_KEY) == "1"
+
+
+def set_birthday_sync_google_enabled(storage: Storage, enabled: bool) -> None:
+    """Persist the Google target switch of the birthday sync."""
+    storage.set_setting(BIRTHDAY_SYNC_GOOGLE_KEY, "1" if enabled else "0")
+
+
+def get_birthday_sync_caldav_target_id(storage: Storage) -> int | None:
+    """The CalDAV source whose calendar receives the birthday series, or None.
+
+    A source id, never a URL — same rationale as the mirror target: the
+    add-on only ever writes into an already configured, SSRF-validated
+    collection.
+    """
+    raw = storage.get_setting(BIRTHDAY_SYNC_CALDAV_TARGET_KEY)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        logger.warning("Ignoring invalid stored birthday CalDAV target: %r", raw)
+        return None
+
+
+def set_birthday_sync_caldav_target_id(storage: Storage, source_id: int | None) -> None:
+    """Persist the birthday CalDAV target source id; None clears it."""
+    if source_id is None:
+        storage.delete_setting(BIRTHDAY_SYNC_CALDAV_TARGET_KEY)
+        return
+    storage.set_setting(BIRTHDAY_SYNC_CALDAV_TARGET_KEY, str(int(source_id)))
+
+
+def get_birthday_sync_status(storage: Storage) -> dict:
+    """The last birthday-sync status dict (zeroed when it never ran).
+
+    Shape: {"last_run": iso|None, "active_google": int, "active_caldav": int,
+    "conflicts": int, "error": str|None, "skipped": bool,
+    "skip_reason": str|None}. ``skipped`` marks a run the data-loss guard
+    held back — deliberately NOT an error (see app.sync_guard).
+    """
+    empty = {
+        "last_run": None,
+        "active_google": 0,
+        "active_caldav": 0,
+        "conflicts": 0,
+        "error": None,
+        "skipped": False,
+        "skip_reason": None,
+    }
+    raw = storage.get_setting(BIRTHDAY_SYNC_STATUS_KEY)
+    if not raw:
+        return empty
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return empty
+    return {
+        "last_run": data.get("last_run"),
+        "active_google": int(data.get("active_google", 0) or 0),
+        "active_caldav": int(data.get("active_caldav", 0) or 0),
+        "conflicts": int(data.get("conflicts", 0) or 0),
+        "error": data.get("error"),
+        "skipped": bool(data.get("skipped")),
+        "skip_reason": data.get("skip_reason"),
+    }
+
+
+def set_birthday_sync_status(
+    storage: Storage,
+    *,
+    last_run: str,
+    active_google: int,
+    active_caldav: int,
+    conflicts: int = 0,
+    error: str | None,
+    skipped: bool = False,
+    skip_reason: str | None = None,
+) -> None:
+    """Persist the birthday-sync status (error must already be sanitized)."""
+    storage.set_setting(
+        BIRTHDAY_SYNC_STATUS_KEY,
+        json.dumps(
+            {
+                "last_run": last_run,
+                "active_google": active_google,
+                "active_caldav": active_caldav,
                 "conflicts": conflicts,
                 "error": error,
                 "skipped": skipped,

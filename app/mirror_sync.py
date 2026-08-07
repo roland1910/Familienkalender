@@ -40,7 +40,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from app import settings
+from app import settings, sync_guard
 from app.caldav_write import (
     CaldavConflictError,
     CaldavWriteClient,
@@ -64,10 +64,11 @@ MIRROR_AUDIT_SCOPE = "MoreValue (Spiegel)"
 
 # Reasons the data-loss guard held a run back. Stored as codes (not German
 # text) in mirror_sync_status; the admin UI turns them into a sentence —
-# same split as slideshow_scan_status/scanWarningText.
-SKIP_SOURCE_ERROR = "source_error"
-SKIP_EMPTY_RESULT = "empty_result"
-SKIP_NO_SOURCES = "no_sources"
+# same split as slideshow_scan_status/scanWarningText. The rule itself lives
+# in app.sync_guard, shared with the birthday sync.
+SKIP_SOURCE_ERROR = sync_guard.SKIP_SOURCE_ERROR
+SKIP_EMPTY_RESULT = sync_guard.SKIP_EMPTY_RESULT
+SKIP_NO_SOURCES = sync_guard.SKIP_NO_SOURCES
 
 
 def mirror_sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -377,24 +378,6 @@ def _target_source(storage: Storage) -> Source | None:
     return source
 
 
-def _sources_verified_fresh(
-    source_ids: set[int], source_results: dict[int, str | None] | None
-) -> bool:
-    """Whether EVERY selected source was read without error in THIS run.
-
-    Only then is an empty desired set trustworthy. ``source_results`` is what
-    app.sync reports for the run that just finished; ``None`` means "no
-    information" (a manual/standalone call), which counts as not verified.
-    A selected source missing from the mapping — disabled, deleted, never
-    fetched — is not verified either, on purpose.
-    """
-    if source_results is None or not source_ids:
-        return False
-    return all(
-        sid in source_results and source_results[sid] is None for sid in source_ids
-    )
-
-
 def _skip_reason(
     source_ids: set[int],
     source_results: dict[int, str | None] | None,
@@ -404,56 +387,19 @@ def _skip_reason(
 ) -> str | None:
     """Why this run must not reconcile, or None when it may proceed.
 
-    The add-on's copies are driven by what the sources delivered — so a run
-    that would DELETE must be able to trust that delivery. The same lesson as
-    the slideshow index guard (CLAUDE.md): availability, not emptiness, is the
-    criterion. Four cases, deliberately:
-
-    (a) A selected source reported an error in this run → skip. Its events in
-        the DB are whatever an earlier run left behind and may already have
-        been thinned out; nothing is deleted on that basis.
-    (b) No source selected at all while copies are still mapped → skip. A
-        missing or unparseable ``mirror_sync_source_ids`` setting reads as the
-        empty list and is indistinguishable from "deliberately deselected", so
-        it must never mean "delete everything". Switching the mirror OFF is
-        the deliberate way to stop; the admin UI therefore switches it off when
-        the last source is deselected.
-    (c) Nothing desired while copies exist (mapped or discovered in the
-        calendar) and the sources are not verified fresh → skip. This is the
-        "successful but empty" case: one unlucky fetch would otherwise wipe
-        every copy out of Roland's real work calendar.
-    (d) Everything else → run. Notably the legitimate cleanups still work: all
-        appointments really gone (or the source deselected) plus an error-free
-        sync of the selected sources means the empty set is the truth, and a
-        fresh install with neither mapping nor copies has nothing to lose.
+    Thin adapter over the shared rule in app.sync_guard (which documents the
+    four cases). Called twice per run: once before any network access, and
+    once more with the discovered copies — a LOST mapping is protected too,
+    because a copy found in the calendar counts just like a mapped one.
     """
-    # A missing entry reads as None here, i.e. "did not fail" — the absent
-    # case is handled by the verified-fresh test further down instead.
-    failed = [sid for sid in source_ids if (source_results or {}).get(sid) is not None]
-    if failed:
-        logger.warning(
-            "Mirror sync skipped: %d selected source(s) failed this run — "
-            "copies are left untouched rather than deleted on stale data.",
-            len(failed),
-        )
-        return SKIP_SOURCE_ERROR
-    if not source_ids and mapping:
-        logger.warning(
-            "Mirror sync skipped: no source selected while %d copies are "
-            "mapped — switch the mirror off to stop it deliberately.",
-            len(mapping),
-        )
-        return SKIP_NO_SOURCES
-    if desired or _sources_verified_fresh(source_ids, source_results):
-        return None
-    if mapping or resources:
-        logger.warning(
-            "Mirror sync skipped: nothing to mirror while %d mapped copies "
-            "exist and the sources were not verified in this run.",
-            len(mapping) or len(resources or []),
-        )
-        return SKIP_EMPTY_RESULT
-    return None
+    return sync_guard.skip_reason(
+        source_ids,
+        source_results,
+        desired_count=len(desired),
+        mapped_count=len(mapping),
+        remote_count=len(resources or []),
+        label="Mirror sync",
+    )
 
 
 def _skipped_result(storage: Storage, reason: str, run_at: datetime) -> MirrorSyncResult:

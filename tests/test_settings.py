@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from app.settings import (
+    BIRTHDAY_SYNC_CALDAV_TARGET_KEY,
+    BIRTHDAY_SYNC_SOURCE_IDS_KEY,
+    BIRTHDAY_SYNC_STATUS_KEY,
     DEFAULT_POWER_DEVICES,
     DEFAULT_VIEW_KEY,
     EVENING_BOUNDARY_KEY,
@@ -17,6 +20,9 @@ from app.settings import (
     POWER_DEVICES_KEY,
     SCREENSAVER_DEFAULT_KEY,
     PowerDevice,
+    get_birthday_sync_caldav_target_id,
+    get_birthday_sync_source_ids,
+    get_birthday_sync_status,
     get_default_view,
     get_evening_boundary,
     get_feed_public_host,
@@ -25,10 +31,17 @@ from app.settings import (
     get_mirror_sync_target_source_id,
     get_power_devices,
     get_screensaver_default,
+    is_birthday_sync_enabled,
+    is_birthday_sync_google_enabled,
     is_mirror_sync_enabled,
     is_valid_default_view,
     is_valid_public_host,
     is_valid_screensaver_default,
+    set_birthday_sync_caldav_target_id,
+    set_birthday_sync_enabled,
+    set_birthday_sync_google_enabled,
+    set_birthday_sync_source_ids,
+    set_birthday_sync_status,
     set_default_view,
     set_feed_public_host,
     set_mirror_sync_enabled,
@@ -315,3 +328,70 @@ class TestMirrorSyncSettings:
     def test_broken_stored_status_falls_back(self, storage: Storage) -> None:
         storage.set_setting(MIRROR_SYNC_STATUS_KEY, "{kaputt")
         assert get_mirror_sync_status(storage)["active_mirrors"] == 0
+
+
+class TestBirthdaySyncSettings:
+    """Settings of the birthday sync (app.birthday_sync)."""
+
+    def test_everything_is_off_by_default(self, storage: Storage) -> None:
+        assert is_birthday_sync_enabled(storage) is False
+        assert is_birthday_sync_google_enabled(storage) is False
+        assert get_birthday_sync_caldav_target_id(storage) is None
+        assert get_birthday_sync_source_ids(storage) == []
+
+    def test_switches_round_trip(self, storage: Storage) -> None:
+        set_birthday_sync_enabled(storage, True)
+        set_birthday_sync_google_enabled(storage, True)
+        assert is_birthday_sync_enabled(storage) is True
+        assert is_birthday_sync_google_enabled(storage) is True
+        set_birthday_sync_google_enabled(storage, False)
+        # The two targets are independent: switching Google off leaves the
+        # master switch (and a configured CalDAV target) alone.
+        assert is_birthday_sync_enabled(storage) is True
+
+    def test_source_ids_round_trip_and_ignore_garbage(self, storage: Storage) -> None:
+        set_birthday_sync_source_ids(storage, [6, 6, 7])
+        assert get_birthday_sync_source_ids(storage) == [6, 7]
+        storage.set_setting(BIRTHDAY_SYNC_SOURCE_IDS_KEY, '["x", true, 4]')
+        assert get_birthday_sync_source_ids(storage) == [4]
+
+    def test_caldav_target_round_trip_and_clearing(self, storage: Storage) -> None:
+        set_birthday_sync_caldav_target_id(storage, 2)
+        assert get_birthday_sync_caldav_target_id(storage) == 2
+        set_birthday_sync_caldav_target_id(storage, None)
+        assert get_birthday_sync_caldav_target_id(storage) is None
+
+    def test_invalid_stored_target_is_ignored(self, storage: Storage) -> None:
+        storage.set_setting(BIRTHDAY_SYNC_CALDAV_TARGET_KEY, "https://evil.example/")
+        assert get_birthday_sync_caldav_target_id(storage) is None
+
+    def test_status_round_trip_including_skip(self, storage: Storage) -> None:
+        assert get_birthday_sync_status(storage) == {
+            "last_run": None,
+            "active_google": 0,
+            "active_caldav": 0,
+            "conflicts": 0,
+            "error": None,
+            "skipped": False,
+            "skip_reason": None,
+        }
+        set_birthday_sync_status(
+            storage,
+            last_run="2026-07-09T10:00:00+00:00",
+            active_google=12,
+            active_caldav=12,
+            error=None,
+            skipped=True,
+            skip_reason="source_error",
+        )
+        status = get_birthday_sync_status(storage)
+        assert status["active_google"] == 12
+        assert status["active_caldav"] == 12
+        assert status["skipped"] is True
+        assert status["skip_reason"] == "source_error"
+        # A skipped run is not a failed run.
+        assert status["error"] is None
+
+    def test_broken_stored_status_falls_back(self, storage: Storage) -> None:
+        storage.set_setting(BIRTHDAY_SYNC_STATUS_KEY, "{kaputt")
+        assert get_birthday_sync_status(storage)["active_google"] == 0
