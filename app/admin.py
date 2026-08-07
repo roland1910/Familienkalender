@@ -147,6 +147,16 @@ class BusySyncUpdate(BaseModel):
     source_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
+class MirrorSyncUpdate(BaseModel):
+    enabled: bool
+    # Source ids whose appointments are copied into the target calendar.
+    source_ids: list[int] = Field(default_factory=list, max_length=50)
+    # The CalDAV source whose calendar receives the copies; None clears it.
+    # Deliberately an id, never a URL — the mirror only ever writes into the
+    # already validated collection of a configured source.
+    target_source_id: int | None = None
+
+
 def _mask_client_id(client_id: str) -> str:
     """Recognizable prefix so the admin can tell which client is configured."""
     return client_id[:8] + "…" if len(client_id) > 8 else client_id
@@ -536,6 +546,79 @@ async def update_busy_sync(update: BusySyncUpdate) -> dict:
     return _busy_sync_payload()
 
 
+# -- mirror sync (Xalt -> MoreValue) ---------------------------------------
+
+
+def _mirror_sync_payload() -> dict:
+    """Current mirror-sync configuration + status for the admin UI."""
+    storage = get_storage()
+    sources = storage.list_sources()
+    return {
+        "mirror_sync": {
+            "enabled": settings.is_mirror_sync_enabled(storage),
+            "source_ids": sorted(set(settings.get_mirror_sync_source_ids(storage))),
+            "target_source_id": settings.get_mirror_sync_target_source_id(storage),
+            "sources": [
+                {"id": source.id, "name": source.name, "type": source.type}
+                for source in sources
+            ],
+            # Only CalDAV sources can receive copies — their stored, already
+            # validated collection URL is what the mirror writes into.
+            "targets": [
+                {"id": source.id, "name": source.name}
+                for source in sources
+                if source.type == "caldav"
+            ],
+            "status": settings.get_mirror_sync_status(storage),
+        }
+    }
+
+
+@router.get("/mirror-sync")
+async def get_mirror_sync() -> dict:
+    """Mirror-sync configuration and last-run status."""
+    return _mirror_sync_payload()
+
+
+@router.put("/mirror-sync")
+async def update_mirror_sync(update: MirrorSyncUpdate) -> dict:
+    """Enable/disable the mirror sync, pick the sources and the target.
+
+    Validation: every source id must exist, the target must be an existing
+    CalDAV source, and the target must not be one of the mirrored sources
+    (mirroring a calendar into itself would copy the copies). Changing the
+    target resets the local mapping — its resource URLs point into the old
+    collection and must never drive a delete in the new one.
+    """
+    storage = get_storage()
+    known = {source.id: source for source in storage.list_sources()}
+    unknown = [sid for sid in update.source_ids if sid not in known]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unbekannte Quelle(n): {', '.join(str(sid) for sid in unknown)}",
+        )
+    target_id = update.target_source_id
+    if target_id is not None:
+        target = known.get(target_id)
+        if target is None or target.type != "caldav":
+            raise HTTPException(
+                status_code=400,
+                detail="Das Ziel muss eine vorhandene Nextcloud-/CalDAV-Quelle sein.",
+            )
+        if target_id in update.source_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Der Ziel-Kalender darf nicht gleichzeitig Quelle sein.",
+            )
+    if target_id != settings.get_mirror_sync_target_source_id(storage):
+        storage.clear_mirror_events()
+    settings.set_mirror_sync_target_source_id(storage, target_id)
+    settings.set_mirror_sync_source_ids(storage, update.source_ids)
+    settings.set_mirror_sync_enabled(storage, update.enabled)
+    return _mirror_sync_payload()
+
+
 @router.post("/google/write-auth-url")
 async def google_write_auth_url() -> dict:
     """Start of the busy-sync OAuth flow: consent URL with the write scope.
@@ -780,6 +863,19 @@ async def delete_source(source_id: int) -> dict:
         settings.set_busy_sync_source_ids(
             storage, [sid for sid in selected if sid != source_id]
         )
+    # Same for the mirror sync. If the deleted source was the mirror TARGET,
+    # the target is cleared and the local mapping reset: its resource URLs
+    # point into a calendar the add-on no longer has credentials for, so they
+    # must never drive a later delete.
+    mirrored = settings.get_mirror_sync_source_ids(storage)
+    if source_id in mirrored:
+        settings.set_mirror_sync_source_ids(
+            storage, [sid for sid in mirrored if sid != source_id]
+        )
+    if settings.get_mirror_sync_target_source_id(storage) == source_id:
+        settings.set_mirror_sync_target_source_id(storage, None)
+        settings.set_mirror_sync_enabled(storage, False)
+        storage.clear_mirror_events()
     return {"deleted": source_id}
 
 

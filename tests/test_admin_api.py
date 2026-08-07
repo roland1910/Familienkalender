@@ -1446,3 +1446,160 @@ class TestChangelogEndpoint:
         self, client: TestClient, storage: Storage
     ) -> None:
         assert client.get("/api/admin/changelog").json()["entries"] == []
+
+
+class TestMirrorSyncEndpoints:
+    """Admin API of the Xalt -> MoreValue mirror (app.mirror_sync)."""
+
+    def _caldav_target(self, storage: Storage) -> int:
+        return storage.add_source(type="caldav", name="Roland MV", config=CALDAV_CONFIG)
+
+    def test_defaults_are_off_and_unconfigured(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        payload = client.get("/api/admin/mirror-sync").json()["mirror_sync"]
+        assert payload["enabled"] is False
+        assert payload["source_ids"] == []
+        assert payload["target_source_id"] is None
+        assert payload["status"]["error"] is None
+
+    def test_only_caldav_sources_are_offered_as_targets(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        target = self._caldav_target(storage)
+        google = storage.add_source(type="google", name="Roland@Xalt", config={})
+        payload = client.get("/api/admin/mirror-sync").json()["mirror_sync"]
+        assert [t["id"] for t in payload["targets"]] == [target]
+        assert {s["id"] for s in payload["sources"]} == {target, google}
+
+    def test_enable_with_source_and_target(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        target = self._caldav_target(storage)
+        google = storage.add_source(type="google", name="Roland@Xalt", config={})
+        response = client.put(
+            "/api/admin/mirror-sync",
+            json={
+                "enabled": True,
+                "source_ids": [google],
+                "target_source_id": target,
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()["mirror_sync"]
+        assert payload["enabled"] is True
+        assert payload["source_ids"] == [google]
+        assert payload["target_source_id"] == target
+        assert settings.is_mirror_sync_enabled(storage) is True
+        assert settings.get_mirror_sync_target_source_id(storage) == target
+
+    def test_unknown_source_id_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        target = self._caldav_target(storage)
+        response = client.put(
+            "/api/admin/mirror-sync",
+            json={"enabled": True, "source_ids": [9999], "target_source_id": target},
+        )
+        assert response.status_code == 400
+        assert "Unbekannte" in response.json()["detail"]
+
+    def test_unknown_target_rejected(self, client: TestClient, storage: Storage) -> None:
+        response = client.put(
+            "/api/admin/mirror-sync",
+            json={"enabled": True, "source_ids": [], "target_source_id": 4242},
+        )
+        assert response.status_code == 400
+
+    def test_non_caldav_target_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        google = storage.add_source(type="google", name="Roland@Xalt", config={})
+        response = client.put(
+            "/api/admin/mirror-sync",
+            json={"enabled": True, "source_ids": [], "target_source_id": google},
+        )
+        assert response.status_code == 400
+        assert "CalDAV" in response.json()["detail"]
+
+    def test_target_may_not_also_be_a_source(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        target = self._caldav_target(storage)
+        response = client.put(
+            "/api/admin/mirror-sync",
+            json={
+                "enabled": True,
+                "source_ids": [target],
+                "target_source_id": target,
+            },
+        )
+        assert response.status_code == 400
+
+    def test_changing_the_target_resets_the_mapping(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app.models import MirrorEvent
+
+        target = self._caldav_target(storage)
+        other = storage.add_source(type="caldav", name="Anderer", config=CALDAV_CONFIG)
+        client.put(
+            "/api/admin/mirror-sync",
+            json={"enabled": True, "source_ids": [], "target_source_id": target},
+        )
+        storage.upsert_mirror_event(
+            MirrorEvent(
+                source_key="3|u|2026-07-20T08:00:00+00:00",
+                resource_url="https://cloud.example.com/alt/x.ics",
+                etag='"e"',
+                start=datetime(2026, 7, 20, 8, tzinfo=UTC),
+                end=datetime(2026, 7, 20, 9, tzinfo=UTC),
+                all_day=False,
+                title="Termin",
+            ),
+            updated_at=NOW,
+        )
+        client.put(
+            "/api/admin/mirror-sync",
+            json={"enabled": True, "source_ids": [], "target_source_id": other},
+        )
+        assert storage.count_mirror_events() == 0
+
+    def test_deleting_the_target_source_disables_the_mirror(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        target = self._caldav_target(storage)
+        google = storage.add_source(type="google", name="Roland@Xalt", config={})
+        client.put(
+            "/api/admin/mirror-sync",
+            json={
+                "enabled": True,
+                "source_ids": [google],
+                "target_source_id": target,
+            },
+        )
+        client.delete(f"/api/admin/sources/{target}")
+        assert settings.get_mirror_sync_target_source_id(storage) is None
+        assert settings.is_mirror_sync_enabled(storage) is False
+
+    def test_deleting_a_mirrored_source_drops_it_from_the_selection(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        target = self._caldav_target(storage)
+        google = storage.add_source(type="google", name="Roland@Xalt", config={})
+        client.put(
+            "/api/admin/mirror-sync",
+            json={
+                "enabled": True,
+                "source_ids": [google],
+                "target_source_id": target,
+            },
+        )
+        client.delete(f"/api/admin/sources/{google}")
+        assert settings.get_mirror_sync_source_ids(storage) == []
