@@ -40,6 +40,7 @@ from app.google_busy import (
 from app.models import BUSY_BLOCK_TITLE, LOCAL_TZ, AuditEntry, BusyBlock, StoredEvent
 from app.sanitize import sanitize_error
 from app.storage import Storage, _encode_moment
+from app.sync_identity import desired_source_events
 
 logger = logging.getLogger(__name__)
 
@@ -62,16 +63,6 @@ def busy_sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
     return start, end
 
 
-def source_key(source_id: int, event) -> str:
-    """Stable key for a source event, matching the events-table identity.
-
-    ``source_id|uid|<encoded-start>`` — the encoded start uses the same
-    encoding storage uses (UTC ISO for timed, ISO date for all-day), so the
-    key is stable across syncs and independent of the process timezone.
-    """
-    return f"{source_id}|{event.uid}|{_encode_moment(event.start)}"
-
-
 @dataclass(frozen=True)
 class BusySyncResult:
     """Outcome of one busy-sync run (for logging/status)."""
@@ -85,32 +76,6 @@ class BusySyncResult:
     # Change-log entries for the writes this run performed (outgoing
     # direction). Persisted by run_busy_sync, isolated from the sync itself.
     audit_entries: tuple[AuditEntry, ...] = ()
-
-
-def _desired_events(
-    storage: Storage, source_ids: set[int], window_start: datetime, window_end: datetime
-) -> dict[str, StoredEvent]:
-    """Source events to mirror, keyed by source key.
-
-    Only events from the selected sources whose start lies within
-    [window_start, window_end) — all-day events included. Past events (start
-    before window_start) are excluded so no blocks are created in the past.
-    """
-    desired: dict[str, StoredEvent] = {}
-    for item in storage.get_events(window_start, window_end):
-        if item.source_id not in source_ids:
-            continue
-        start = item.event.start_as_datetime()
-        # storage.get_events returns everything OVERLAPPING the window,
-        # including an event that started before window_start and merely
-        # reaches into it. Only a start actually inside the window counts
-        # for busy-sync (see the docstring above and busy_sync_window: past
-        # appointments are never mirrored) — so this second, strict check on
-        # the start alone is required and not redundant with get_events.
-        if not (window_start <= start < window_end):
-            continue
-        desired[source_key(item.source_id, item.event)] = item
-    return desired
 
 
 def _times_differ(block: BusyBlock, item: StoredEvent) -> bool:
@@ -261,7 +226,7 @@ async def run_busy_sync(
             return await run_busy_sync(storage, now=run_at, client=own_client)
 
     try:
-        desired = _desired_events(storage, source_ids, window_start, window_end)
+        desired = desired_source_events(storage, source_ids, window_start, window_end)
         mapping = {block.source_key: block for block in storage.list_busy_blocks()}
         write_client = BusyWriteClient(busy_write_token_path(), client)
         result = await _reconcile(storage, write_client, desired, mapping, run_at)

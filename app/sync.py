@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, time, timedelta
 
-from app import busy_sync
+from app import busy_sync, mirror_sync
 from app.models import LOCAL_TZ, AuditEntry, CalendarEvent, EventChange, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google, google_contacts, limits
@@ -136,6 +136,13 @@ async def _sync_all_locked(
         await busy_sync.run_busy_sync(storage, now=synced_at)
     except Exception:  # pragma: no cover - run_busy_sync already isolates errors
         logger.exception("Unexpected error in busy sync")
+    # Then mirror the Xalt appointments into the MoreValue calendar. Same
+    # contract as the busy sync: isolates its own errors, no-ops when disabled
+    # or without a configured target, so it can never break the calendar sync.
+    try:
+        await mirror_sync.run_mirror_sync(storage, now=synced_at)
+    except Exception:  # pragma: no cover - run_mirror_sync already isolates errors
+        logger.exception("Unexpected error in mirror sync")
     # Keep the change log bounded: drop entries older than the retention
     # window at the end of every run. Isolated so a prune failure never
     # breaks the sync.

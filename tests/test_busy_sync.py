@@ -18,12 +18,12 @@ from app.busy_sync import (
     BUSY_SYNC_FUTURE_DAYS,
     busy_sync_window,
     run_busy_sync,
-    source_key,
 )
 from app.google_busy import MARKER_KEY, OWNER_KEY, OWNER_VALUE, busy_write_token_path
 from app.models import BusyBlock, CalendarEvent
 from app.sources.google import save_tokens
 from app.storage import Storage
+from app.sync_identity import source_key
 
 BERLIN = ZoneInfo("Europe/Berlin")
 NOW = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)

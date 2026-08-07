@@ -481,3 +481,47 @@ class TestBusySyncIntegration:
         # Must not raise: busy-sync errors are isolated from the calendar sync.
         results = await sync_all(storage, now=FIXED_NOW)
         assert results  # calendar sources still processed
+
+
+@pytest.mark.anyio
+class TestMirrorSyncIntegration:
+    async def test_mirror_sync_runs_after_sources(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        called = {}
+
+        async def fake_mirror(storage_arg, *, now=None, client=None):
+            from app.mirror_sync import MirrorSyncResult
+
+            called["ran"] = True
+            called["now"] = now
+            return MirrorSyncResult(0, 0, 0, 0, 0, 0, None)
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.mirror_sync.run_mirror_sync", fake_mirror)
+        await sync_all(storage, now=FIXED_NOW)
+        assert called["ran"] is True
+        assert called["now"] == FIXED_NOW
+
+    async def test_mirror_sync_error_does_not_break_calendar_sync(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("mirror sync exploded")
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.mirror_sync.run_mirror_sync", boom)
+        # Must not raise: mirror-sync errors are isolated from the calendar sync.
+        results = await sync_all(storage, now=FIXED_NOW)
+        assert results  # calendar sources still processed
