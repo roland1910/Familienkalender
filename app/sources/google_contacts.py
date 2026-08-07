@@ -94,7 +94,7 @@ def _person_birthday(item: dict[str, Any]) -> tuple[int, int, int | None] | None
     return None
 
 
-def _occurrence_in_year(month: int, day: int, year: int) -> date | None:
+def occurrence_in_year(month: int, day: int, year: int) -> date | None:
     """The birthday's date in ``year``, clamping 29 Feb to the 28th if needed.
 
     Impossible month/day combinations (e.g. 31 April) are clamped to the
@@ -134,7 +134,7 @@ def birthday_events(
     title = f"{BIRTHDAY_PREFIX}{name}"
     events: list[CalendarEvent] = []
     for occ_year in range(window_start.year, window_end.year + 1):
-        occurrence = _occurrence_in_year(month, day, occ_year)
+        occurrence = occurrence_in_year(month, day, occ_year)
         if occurrence is None:
             continue
         if not (window_start.date() <= occurrence < window_end.date()):
