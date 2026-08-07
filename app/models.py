@@ -70,6 +70,20 @@ def is_valid_feed_priority(value: int) -> bool:
 BUSY_BLOCK_TITLE = "Busy MV"
 
 
+# Marker properties on every VEVENT the add-on mirrors from a Google source
+# into a Nextcloud/CalDAV calendar (see app.caldav_write / app.mirror_sync).
+# Single source of truth for the write side AND for the CalDAV read client,
+# which skips marked components so a self-written copy is never read back
+# (duplicate in views/feed, and a mirror loop through the busy sync).
+#
+# MIRROR_MARKER_PROP carries the source key of the mirrored appointment, so a
+# copy is self-describing; MIRROR_OWNER_PROP is a constant-valued flag, so
+# "is this ours?" is one exact lookup independent of the key's value.
+MIRROR_MARKER_PROP = "X-FAMILIENKALENDER-MIRROR"
+MIRROR_OWNER_PROP = "X-FAMILIENKALENDER-OWNER"
+MIRROR_OWNER_VALUE = "1"
+
+
 def is_busy_block_title(title: str | None) -> bool:
     """Whether ``title`` is exactly the "Busy MV" block title (normalized).
 
