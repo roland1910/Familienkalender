@@ -398,6 +398,36 @@
       <p id="busy-message" class="message" hidden></p>
     </section>
 
+    <section class="admin-section" aria-labelledby="mirror-heading">
+      <h2 id="mirror-heading">Spiegel-Sync (Xalt &#8594; MoreValue)</h2>
+      <p>Schreibt jeden Termin der ausgew&auml;hlten Kalender als
+        <strong>echten Termin mit Titel</strong> in den unten gew&auml;hlten
+        Nextcloud-Kalender &#8211; inklusive Aktualisierungen und
+        L&ouml;schungen. Gespiegelt wird <strong>alles</strong> in den
+        n&auml;chsten 180 Tagen, auch reine Untertags-Termine; Beschreibung
+        und Teilnehmer werden bewusst nicht kopiert.</p>
+      <p class="hint">Wichtig: Rolands bisheriges externes Tool f&uuml;r diese
+        Richtung muss abgeschaltet sein &#8211; sonst legen beide Werkzeuge
+        Kopien an.</p>
+      <div class="form-grid">
+        <label for="mirror-target">Ziel-Kalender (Nextcloud)</label>
+        <select id="mirror-target"></select>
+      </div>
+      <h3>Welche Kalender nach MoreValue spiegeln:</h3>
+      <div id="mirror-source-list" class="busy-source-list"></div>
+      <div class="button-row">
+        <button id="btn-mirror-save" class="action-button subtle" type="button">
+          Auswahl speichern
+        </button>
+      </div>
+      <button id="btn-mirror-toggle" class="busy-sync-toggle" type="button"
+              aria-pressed="false">
+        Spiegel-Sync ist AUS &#8211; einschalten
+      </button>
+      <p id="mirror-status" class="message" hidden></p>
+      <p id="mirror-message" class="message" hidden></p>
+    </section>
+
     <section class="admin-section" aria-labelledby="changelog-heading">
       <h2 id="changelog-heading">&Auml;nderungsprotokoll (letzte 4 Wochen)</h2>
       <p>Alle Kalender-&Auml;nderungen der letzten vier Wochen &#8211; in beide

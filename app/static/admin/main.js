@@ -9,6 +9,7 @@ import { initChangelog, loadChangelog } from "./changelog.js";
 import { byId, showMessage, withPageError } from "./dom.js";
 import { initFeed, loadFeed } from "./feed.js";
 import { initGoogleWizard, resetGoogleWizard } from "./google-wizard.js";
+import { initMirrorSync, loadMirrorSync } from "./mirror-sync.js";
 import { initNextcloudWizard, resetNextcloudWizard } from "./nextcloud-wizard.js";
 import { initSettings, loadSettings } from "./settings.js";
 import { initSlideshow, loadSlideshow } from "./slideshow.js";
@@ -56,6 +57,7 @@ function init() {
   initFeed();
   initSlideshow();
   initBusySync();
+  initMirrorSync();
   initChangelog();
   initSync();
   withPageError(async () => {
@@ -65,6 +67,7 @@ function init() {
       loadFeed(),
       loadSlideshow(),
       loadBusySync(),
+      loadMirrorSync(),
       loadChangelog(),
     ]);
   });

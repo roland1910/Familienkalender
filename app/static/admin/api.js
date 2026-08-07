@@ -119,6 +119,18 @@ export function saveBusySync(enabled, sourceIds) {
   });
 }
 
+export function getMirrorSync() {
+  return request("GET", "api/admin/mirror-sync");
+}
+
+export function saveMirrorSync(enabled, sourceIds, targetSourceId) {
+  return request("PUT", "api/admin/mirror-sync", {
+    enabled,
+    source_ids: sourceIds,
+    target_source_id: targetSourceId,
+  });
+}
+
 export function busyWriteAuthUrl() {
   return request("POST", "api/admin/google/write-auth-url");
 }

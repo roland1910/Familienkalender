@@ -618,6 +618,51 @@ class TestBusySync:
         expect(section.locator("#busy-connect-step")).to_be_visible()
 
 
+class TestMirrorSync:
+    def test_target_selection_and_toggle_roundtrip(
+        self, page: Page, server_url: str
+    ) -> None:
+        """Ziel + Quelle wählen, einschalten, neu laden — alles bleibt stehen."""
+        goto_admin(page, server_url)
+        section = page.locator("section[aria-labelledby='mirror-heading']")
+        target = section.locator("#mirror-target")
+        # Only CalDAV sources are offered as a target (demo: "Firma").
+        expect(target.locator("option")).to_have_count(2)
+        expect(target).to_contain_text("Firma")
+
+        toggle = section.locator("#btn-mirror-toggle")
+        expect(toggle).to_contain_text("Spiegel-Sync ist AUS")
+        expect(toggle).to_have_attribute("aria-pressed", "false")
+
+        target.select_option(label="Firma")
+        # The target calendar must not offer itself as a source.
+        expect(section.locator(".busy-source-row", has_text="Firma")).to_have_count(0)
+        section.locator(".busy-source-row input[type=checkbox]").first.check()
+        section.locator("#btn-mirror-save").click()
+        expect(section.locator("#mirror-message")).to_contain_text("gespeichert")
+
+        toggle.click()
+        expect(section.locator("#mirror-message")).to_contain_text("eingeschaltet")
+        expect(toggle).to_have_attribute("aria-pressed", "true")
+
+        page.reload()
+        expect(section.locator("#btn-mirror-toggle")).to_have_attribute(
+            "aria-pressed", "true"
+        )
+        expect(section.locator("#mirror-target")).not_to_have_value("")
+        expect(
+            section.locator(".busy-source-row input[type=checkbox]:checked")
+        ).to_have_count(1)
+
+        # Clean up so the shared DB stays neutral for other tests.
+        section.locator("#btn-mirror-toggle").click()
+        expect(section.locator("#mirror-message")).to_contain_text("ausgeschaltet")
+        section.locator(".busy-source-row input:checked").first.uncheck()
+        section.locator("#mirror-target").select_option("")
+        section.locator("#btn-mirror-save").click()
+        expect(section.locator("#mirror-message")).to_contain_text("gespeichert")
+
+
 class TestChangelog:
     def test_section_shows_seeded_entries(self, page: Page, server_url: str) -> None:
         """Das Änderungsprotokoll zeigt die Demo-Einträge beider Richtungen."""
