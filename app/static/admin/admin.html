@@ -429,6 +429,44 @@
       <p id="mirror-message" class="message" hidden></p>
     </section>
 
+    <section class="admin-section" aria-labelledby="birthday-heading">
+      <h2 id="birthday-heading">Geburtstags-Sync</h2>
+      <p>Schreibt die Geburtstage aus den gew&auml;hlten Kontakt-Quellen als
+        <strong>ganzt&auml;gigen, j&auml;hrlich wiederkehrenden Termin</strong>
+        (einer pro Person) in Rolands Arbeitskalender &#8211; wahlweise in den
+        Google-Kalender (Xalt), in den Nextcloud-Kalender oder in beide.
+        Namens&auml;nderungen werden &uuml;bernommen; entfernte Kontakte
+        verschwinden wieder.</p>
+      <p class="hint">Weil die Termine als Serie geschrieben werden, gen&uuml;gt
+        ein Eintrag je Person &#8211; der Kalender f&uuml;llt sich nicht mit
+        Jahres-Kopien. Ein Geburtstag am 29.&nbsp;Februar wird bewusst am
+        28.&nbsp;Februar gef&uuml;hrt, damit er jedes Jahr erscheint.</p>
+      <h3>Welche Geburtstage schreiben:</h3>
+      <div id="birthday-source-list" class="busy-source-list"></div>
+      <h3>Wohin schreiben:</h3>
+      <label class="busy-source-row">
+        <input id="birthday-google" type="checkbox">
+        <span>Google-Kalender (Xalt)</span>
+      </label>
+      <p id="birthday-google-hint" class="message" hidden></p>
+      <div class="form-grid">
+        <label for="birthday-caldav-target">Nextcloud-Kalender</label>
+        <select id="birthday-caldav-target"></select>
+      </div>
+      <div class="button-row">
+        <button id="btn-birthday-save" class="action-button subtle" type="button">
+          Auswahl speichern
+        </button>
+      </div>
+      <button id="btn-birthday-toggle" class="busy-sync-toggle" type="button"
+              aria-pressed="false">
+        Geburtstags-Sync ist AUS &#8211; einschalten
+      </button>
+      <p id="birthday-status" class="message" hidden></p>
+      <p id="birthday-skip" class="message" hidden></p>
+      <p id="birthday-message" class="message" hidden></p>
+    </section>
+
     <section class="admin-section" aria-labelledby="changelog-heading">
       <h2 id="changelog-heading">&Auml;nderungsprotokoll (letzte 4 Wochen)</h2>
       <p>Alle Kalender-&Auml;nderungen der letzten vier Wochen &#8211; in beide

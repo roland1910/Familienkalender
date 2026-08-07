@@ -3,6 +3,7 @@
 // exclusively via textContent — see dom.js.
 
 import * as api from "./api.js";
+import { initBirthdaySync, loadBirthdaySync } from "./birthday-sync.js";
 import { initBirthdaysWizard, resetBirthdaysWizard } from "./birthdays-wizard.js";
 import { initBusySync, loadBusySync } from "./busy-sync.js";
 import { initChangelog, loadChangelog } from "./changelog.js";
@@ -58,6 +59,7 @@ function init() {
   initSlideshow();
   initBusySync();
   initMirrorSync();
+  initBirthdaySync();
   initChangelog();
   initSync();
   withPageError(async () => {
@@ -68,6 +70,7 @@ function init() {
       loadSlideshow(),
       loadBusySync(),
       loadMirrorSync(),
+      loadBirthdaySync(),
       loadChangelog(),
     ]);
   });

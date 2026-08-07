@@ -131,6 +131,19 @@ export function saveMirrorSync(enabled, sourceIds, targetSourceId) {
   });
 }
 
+export function getBirthdaySync() {
+  return request("GET", "api/admin/birthday-sync");
+}
+
+export function saveBirthdaySync(enabled, sourceIds, googleEnabled, caldavTargetId) {
+  return request("PUT", "api/admin/birthday-sync", {
+    enabled,
+    source_ids: sourceIds,
+    google_enabled: googleEnabled,
+    caldav_target_source_id: caldavTargetId,
+  });
+}
+
 export function busyWriteAuthUrl() {
   return request("POST", "api/admin/google/write-auth-url");
 }

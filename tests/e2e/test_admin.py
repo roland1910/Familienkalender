@@ -694,6 +694,64 @@ class TestMirrorSync:
         expect(section.locator("#mirror-message")).to_contain_text("gespeichert")
 
 
+class TestBirthdaySync:
+    """Admin-Sektion des Geburtstags-Syncs.
+
+    Die Demo-Datenbank hat bewusst keine Kontakt-Quelle (die drei Demo-Quellen
+    sind zwei Google-Kalender und ein CalDAV-Kalender), deshalb prüft dieser
+    Test genau den Zustand, den Roland vor dem Anlegen einer Geburtstags-Quelle
+    sieht — plus den Rundlauf der beiden Ziel-Schalter.
+    """
+
+    def test_section_offers_both_targets_and_survives_a_reload(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        section = page.locator("section[aria-labelledby='birthday-heading']")
+        expect(section.locator("h2")).to_contain_text("Geburtstags-Sync")
+        # Ohne Kontakt-Quelle steht dort ein deutscher Hinweis statt einer Liste.
+        expect(section.locator("#birthday-source-list")).to_contain_text(
+            "Noch keine Geburtstags-Quelle"
+        )
+        # Ziel 2: nur CalDAV-Quellen (Demo: "Firma") plus "kein Ziel".
+        target = section.locator("#birthday-caldav-target")
+        expect(target.locator("option")).to_have_count(2)
+        expect(target).to_contain_text("Firma")
+
+        toggle = section.locator("#btn-birthday-toggle")
+        expect(toggle).to_contain_text("Geburtstags-Sync ist AUS")
+        expect(toggle).to_have_attribute("aria-pressed", "false")
+
+        # Beide Ziele sind unabhängig schaltbar.
+        section.locator("#birthday-google").check()
+        target.select_option(label="Firma")
+        section.locator("#btn-birthday-save").click()
+        expect(section.locator("#birthday-message")).to_contain_text("gespeichert")
+
+        toggle.click()
+        expect(section.locator("#birthday-message")).to_contain_text("eingeschaltet")
+        expect(toggle).to_have_attribute("aria-pressed", "true")
+
+        page.reload()
+        expect(section.locator("#btn-birthday-toggle")).to_have_attribute(
+            "aria-pressed", "true"
+        )
+        expect(section.locator("#birthday-google")).to_be_checked()
+        expect(section.locator("#birthday-caldav-target")).not_to_have_value("")
+        # Ohne Schreib-Verbindung sagt die Sektion, dass Xalt so nicht geht.
+        expect(section.locator("#birthday-google-hint")).to_contain_text(
+            "Schreib-Verbindung"
+        )
+
+        # Aufräumen, damit die gemeinsame DB für andere Tests neutral bleibt.
+        section.locator("#btn-birthday-toggle").click()
+        expect(section.locator("#birthday-message")).to_contain_text("ausgeschaltet")
+        section.locator("#birthday-google").uncheck()
+        section.locator("#birthday-caldav-target").select_option("")
+        section.locator("#btn-birthday-save").click()
+        expect(section.locator("#birthday-message")).to_contain_text("gespeichert")
+
+
 class TestChangelog:
     def test_section_shows_seeded_entries(self, page: Page, server_url: str) -> None:
         """Das Änderungsprotokoll zeigt die Demo-Einträge beider Richtungen."""
