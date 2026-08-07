@@ -139,8 +139,13 @@ async def _sync_all_locked(
     # Then mirror the Xalt appointments into the MoreValue calendar. Same
     # contract as the busy sync: isolates its own errors, no-ops when disabled
     # or without a configured target, so it can never break the calendar sync.
+    # ``results`` is handed over on purpose: the mirror writes into Roland's
+    # real work calendar, so its data-loss guard has to know which sources
+    # were actually read without error in THIS run before it deletes anything.
     try:
-        await mirror_sync.run_mirror_sync(storage, now=synced_at)
+        await mirror_sync.run_mirror_sync(
+            storage, now=synced_at, source_results=results
+        )
     except Exception:  # pragma: no cover - run_mirror_sync already isolates errors
         logger.exception("Unexpected error in mirror sync")
     # Keep the change log bounded: drop entries older than the retention

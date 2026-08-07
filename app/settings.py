@@ -390,9 +390,20 @@ def get_mirror_sync_status(storage: Storage) -> dict:
     """The last mirror-sync status dict (zeroed when the sync never ran).
 
     Shape: {"last_run": iso|None, "active_mirrors": int, "conflicts": int,
-    "error": str|None}.
+    "error": str|None, "skipped": bool, "skip_reason": str|None}.
+
+    ``skipped`` marks a run the data-loss guard held back (see
+    app.mirror_sync); it is deliberately NOT an error — nothing failed, the
+    run simply refused to delete on an untrustworthy basis.
     """
-    empty = {"last_run": None, "active_mirrors": 0, "conflicts": 0, "error": None}
+    empty = {
+        "last_run": None,
+        "active_mirrors": 0,
+        "conflicts": 0,
+        "error": None,
+        "skipped": False,
+        "skip_reason": None,
+    }
     raw = storage.get_setting(MIRROR_SYNC_STATUS_KEY)
     if not raw:
         return empty
@@ -405,6 +416,8 @@ def get_mirror_sync_status(storage: Storage) -> dict:
         "active_mirrors": int(data.get("active_mirrors", 0) or 0),
         "conflicts": int(data.get("conflicts", 0) or 0),
         "error": data.get("error"),
+        "skipped": bool(data.get("skipped")),
+        "skip_reason": data.get("skip_reason"),
     }
 
 
@@ -415,6 +428,8 @@ def set_mirror_sync_status(
     active_mirrors: int,
     conflicts: int,
     error: str | None,
+    skipped: bool = False,
+    skip_reason: str | None = None,
 ) -> None:
     """Persist the mirror-sync status (error must already be sanitized)."""
     storage.set_setting(
@@ -425,6 +440,8 @@ def set_mirror_sync_status(
                 "active_mirrors": active_mirrors,
                 "conflicts": conflicts,
                 "error": error,
+                "skipped": skipped,
+                "skip_reason": skip_reason,
             }
         ),
     )

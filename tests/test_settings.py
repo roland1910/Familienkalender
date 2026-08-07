@@ -279,6 +279,8 @@ class TestMirrorSyncSettings:
             "active_mirrors": 0,
             "conflicts": 0,
             "error": None,
+            "skipped": False,
+            "skip_reason": None,
         }
         set_mirror_sync_status(
             storage,
@@ -290,6 +292,24 @@ class TestMirrorSyncSettings:
         status = get_mirror_sync_status(storage)
         assert status["active_mirrors"] == 7
         assert status["conflicts"] == 1
+        assert status["error"] is None
+        assert status["skipped"] is False
+        assert status["skip_reason"] is None
+
+    def test_skipped_run_round_trip(self, storage: Storage) -> None:
+        set_mirror_sync_status(
+            storage,
+            last_run="2026-07-09T10:00:00+00:00",
+            active_mirrors=7,
+            conflicts=0,
+            error=None,
+            skipped=True,
+            skip_reason="source_error",
+        )
+        status = get_mirror_sync_status(storage)
+        assert status["skipped"] is True
+        assert status["skip_reason"] == "source_error"
+        # A skipped run is not a failed run.
         assert status["error"] is None
 
     def test_broken_stored_status_falls_back(self, storage: Storage) -> None:

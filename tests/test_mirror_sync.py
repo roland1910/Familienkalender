@@ -172,9 +172,22 @@ def env(tmp_path: Path) -> tuple[Storage, int, int]:
     return storage, xalt_id, target_id
 
 
-async def _run(storage: Storage, backend: RecordingCaldav):
+async def _run(
+    storage: Storage,
+    backend: RecordingCaldav,
+    *,
+    source_results: dict[int, str | None] | None = None,
+):
+    """One mirror run.
+
+    ``source_results`` is what the calendar sync reports about this very run
+    (source id -> error or None). Omitting it means "no information", which is
+    exactly the situation in which the data-loss guard refuses to delete.
+    """
     async with httpx.AsyncClient(transport=httpx.MockTransport(backend.handler)) as http:
-        return await run_mirror_sync(storage, now=NOW, client=http)
+        return await run_mirror_sync(
+            storage, now=NOW, client=http, source_results=source_results
+        )
 
 
 class TestWindow:
@@ -383,23 +396,27 @@ class TestDelete:
         await _run(storage, backend)
 
         store_events(storage, xalt_id, [])
-        result = await _run(storage, backend)
+        result = await _run(storage, backend, source_results={xalt_id: None})
 
         assert result.deleted == 1
         assert backend.own == {}
         assert storage.count_mirror_events() == 0
 
-    async def test_deselecting_the_source_deletes_its_copies(self, env) -> None:
+    async def test_deselecting_one_source_deletes_only_its_copies(self, env) -> None:
         storage, xalt_id, _ = env
-        store_events(storage, xalt_id, [meeting()])
+        other = storage.add_source(type="google", name="Zweitkalender", config={})
+        settings.set_mirror_sync_source_ids(storage, [xalt_id, other])
+        store_events(storage, xalt_id, [meeting(uid="a")])
+        store_events(storage, other, [meeting(uid="b", title="Zweiter Termin")])
         backend = RecordingCaldav()
         await _run(storage, backend)
+        assert len(backend.own) == 2
 
-        settings.set_mirror_sync_source_ids(storage, [])
-        result = await _run(storage, backend)
+        settings.set_mirror_sync_source_ids(storage, [xalt_id])
+        result = await _run(storage, backend, source_results={xalt_id: None})
 
         assert result.deleted == 1
-        assert backend.own == {}
+        assert backend.summaries() == {"Kundentermin"}
 
     async def test_delete_is_conditional(self, env) -> None:
         storage, xalt_id, _ = env
@@ -409,7 +426,7 @@ class TestDelete:
         etag = next(iter(backend.own.values()))[0]
 
         store_events(storage, xalt_id, [])
-        await _run(storage, backend)
+        await _run(storage, backend, source_results={xalt_id: None})
 
         delete = [r for r in backend.requests if r.method == "DELETE"][-1]
         assert delete.headers["If-Match"] == etag
@@ -431,10 +448,157 @@ class TestDelete:
             updated_at=NOW,
         )
         backend = RecordingCaldav()  # the resource does not exist any more
-        result = await _run(storage, backend)
+        result = await _run(storage, backend, source_results={xalt_id: None})
         assert result.error is None
         assert result.deleted == 1
         assert storage.count_mirror_events() == 0
+
+
+@pytest.mark.anyio
+class TestDataLossGuard:
+    """No attacker needed: an unlucky run must not empty the real calendar.
+
+    Same lesson as the slideshow index guard — the criterion for deleting is
+    "the sources were read without error in THIS run", never "the result set
+    happens to be empty".
+    """
+
+    async def _seeded(self, env) -> RecordingCaldav:
+        storage, xalt_id, _ = env
+        store_events(storage, xalt_id, [meeting()])
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+        assert len(backend.own) == 1
+        return backend
+
+    async def test_failed_source_skips_the_run_and_keeps_the_copies(
+        self, env
+    ) -> None:
+        storage, xalt_id, _ = env
+        backend = await self._seeded(env)
+        # The source failed this run; storage.sync_events therefore never
+        # replaced the window and the events may be stale — but a failing
+        # source could equally have wiped the window in an earlier run.
+        store_events(storage, xalt_id, [])
+        before = len(backend.requests)
+
+        result = await _run(
+            storage, backend, source_results={xalt_id: "Zeitüberschreitung"}
+        )
+
+        assert result.skipped is True
+        assert result.skip_reason == "source_error"
+        assert result.deleted == 0
+        assert len(backend.own) == 1  # the copy survived
+        assert storage.count_mirror_events() == 1
+        assert len(backend.requests) == before  # not even a REPORT was sent
+
+    async def test_empty_result_without_source_information_skips(self, env) -> None:
+        storage, xalt_id, _ = env
+        backend = await self._seeded(env)
+        store_events(storage, xalt_id, [])
+
+        result = await _run(storage, backend)  # no per-source information
+
+        assert result.skipped is True
+        assert result.skip_reason == "empty_result"
+        assert len(backend.own) == 1
+        assert storage.count_mirror_events() == 1
+
+    async def test_empty_result_after_a_clean_sync_cleans_up(self, env) -> None:
+        # The legitimate case: Roland really deleted every appointment and the
+        # source reported success — the copies must go.
+        storage, xalt_id, _ = env
+        backend = await self._seeded(env)
+        store_events(storage, xalt_id, [])
+
+        result = await _run(storage, backend, source_results={xalt_id: None})
+
+        assert result.skipped is False
+        assert result.deleted == 1
+        assert backend.own == {}
+
+    async def test_orphan_copies_without_mapping_also_hold_the_run_back(
+        self, env
+    ) -> None:
+        # Mapping lost (restored DB) but copies still in Nextcloud: an empty
+        # desired set would delete all of them as orphans.
+        storage, _, _ = env
+        backend = RecordingCaldav()
+        url = backend.seed_own("9|weg|2026-07-20T08:15:00+00:00", meeting())
+
+        result = await _run(storage, backend)
+
+        assert result.skipped is True
+        assert result.skip_reason == "empty_result"
+        assert url in backend.own
+
+    async def test_nothing_to_lose_is_not_a_skip(self, env) -> None:
+        # First run on a fresh install: no mapping, no copies, no events.
+        storage, _, _ = env
+        backend = RecordingCaldav()
+        result = await _run(storage, backend)
+        assert result.skipped is False
+        assert result.error is None
+
+    async def test_empty_source_selection_skips_instead_of_deleting(
+        self, env
+    ) -> None:
+        # A missing or unparseable mirror_sync_source_ids setting reads as
+        # the empty list, indistinguishable from "deliberately deselected".
+        storage, _, _ = env
+        backend = await self._seeded(env)
+        settings.set_mirror_sync_source_ids(storage, [])
+        before = len(backend.requests)
+
+        result = await _run(storage, backend, source_results={})
+
+        assert result.skipped is True
+        assert result.skip_reason == "no_sources"
+        assert len(backend.own) == 1
+        assert storage.count_mirror_events() == 1
+        assert len(backend.requests) == before
+
+    async def test_empty_selection_without_mapping_is_not_a_skip(self, env) -> None:
+        storage, _, _ = env
+        settings.set_mirror_sync_source_ids(storage, [])
+        backend = RecordingCaldav()
+        result = await _run(storage, backend)
+        assert result.skipped is False
+
+    async def test_skip_is_visible_in_the_status(self, env) -> None:
+        storage, xalt_id, _ = env
+        backend = await self._seeded(env)
+        store_events(storage, xalt_id, [])
+        await _run(storage, backend, source_results={xalt_id: "kaputt"})
+
+        status = settings.get_mirror_sync_status(storage)
+        assert status["skipped"] is True
+        assert status["skip_reason"] == "source_error"
+        assert status["error"] is None  # a skipped run is not a failed run
+        assert status["active_mirrors"] == 1
+
+    async def test_a_normal_run_clears_the_skip_flag(self, env) -> None:
+        storage, xalt_id, _ = env
+        backend = await self._seeded(env)
+        store_events(storage, xalt_id, [])
+        await _run(storage, backend, source_results={xalt_id: "kaputt"})
+        assert settings.get_mirror_sync_status(storage)["skipped"] is True
+
+        store_events(storage, xalt_id, [meeting()])
+        await _run(storage, backend, source_results={xalt_id: None})
+        status = settings.get_mirror_sync_status(storage)
+        assert status["skipped"] is False
+        assert status["skip_reason"] is None
+
+    async def test_a_skipped_run_logs_nothing(self, env) -> None:
+        storage, xalt_id, _ = env
+        backend = await self._seeded(env)
+        before = len(storage.get_audit_entries("2026-01-01T00:00:00+00:00"))
+        store_events(storage, xalt_id, [])
+        await _run(storage, backend, source_results={xalt_id: "kaputt"})
+        after = len(storage.get_audit_entries("2026-01-01T00:00:00+00:00"))
+        assert before == after
 
 
 @pytest.mark.anyio
@@ -484,10 +648,10 @@ class TestStaleMapping:
         assert all(str(r.url).startswith(COLLECTION) for r in backend.requests)
 
     async def test_dropping_a_stale_row_is_not_logged_as_a_deletion(self, env) -> None:
-        storage, _, _ = env
+        storage, xalt_id, _ = env
         self._stale_row(storage, "https://evil.example.com/x.ics")
         backend = RecordingCaldav()
-        await _run(storage, backend)
+        await _run(storage, backend, source_results={xalt_id: None})
         entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
         assert entries == []
 
@@ -537,7 +701,9 @@ class TestInvariantAndOrphans:
         store_events(storage, xalt_id, [meeting(title="Anders")])
         await _run(storage, backend)  # update phase
         store_events(storage, xalt_id, [])
-        await _run(storage, backend)  # delete + orphan phase
+        # delete + orphan phase (the source reported success, so the empty
+        # result is trustworthy and the cleanup runs)
+        await _run(storage, backend, source_results={xalt_id: None})
         assert foreign_url in backend.foreign  # still there, never requested
 
     async def test_foreign_event_carrying_the_marker_is_never_deleted(self, env) -> None:
@@ -565,10 +731,10 @@ class TestInvariantAndOrphans:
         assert foreign_url in backend.foreign  # still there, never requested
 
     async def test_orphan_copy_without_mapping_is_removed(self, env) -> None:
-        storage, _, _ = env
+        storage, xalt_id, _ = env
         backend = RecordingCaldav()
         url = backend.seed_own("9|weg|2026-07-20T08:15:00+00:00", meeting())
-        result = await _run(storage, backend)
+        result = await _run(storage, backend, source_results={xalt_id: None})
         assert result.orphans_removed == 1
         assert url not in backend.own
 
@@ -623,13 +789,13 @@ class TestConflicts:
         backend.conflict_urls.add(url)
 
         store_events(storage, xalt_id, [])
-        result = await _run(storage, backend)
+        result = await _run(storage, backend, source_results={xalt_id: None})
         assert result.conflicts == 1
         assert storage.count_mirror_events() == 1
 
         # Next run without the conflict: the deletion goes through.
         backend.conflict_urls.clear()
-        result2 = await _run(storage, backend)
+        result2 = await _run(storage, backend, source_results={xalt_id: None})
         assert result2.deleted == 1
         assert backend.own == {}
 
@@ -669,7 +835,7 @@ class TestOutgoingChangeLog:
         store_events(storage, xalt_id, [meeting(title="Kundentermin neu")])
         await _run(storage, backend)
         store_events(storage, xalt_id, [])
-        await _run(storage, backend)
+        await _run(storage, backend, source_results={xalt_id: None})
 
         entries = [
             e

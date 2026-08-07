@@ -492,7 +492,9 @@ class TestMirrorSyncIntegration:
         storage.add_source(type="caldav", name="Firma", config={})
         called = {}
 
-        async def fake_mirror(storage_arg, *, now=None, client=None):
+        async def fake_mirror(
+            storage_arg, *, now=None, client=None, source_results=None
+        ):
             from app.mirror_sync import MirrorSyncResult
 
             called["ran"] = True
@@ -507,6 +509,36 @@ class TestMirrorSyncIntegration:
         await sync_all(storage, now=FIXED_NOW)
         assert called["ran"] is True
         assert called["now"] == FIXED_NOW
+
+    async def test_mirror_sync_gets_this_runs_per_source_outcome(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The data-loss guard depends on knowing which sources succeeded."""
+        storage = Storage(tmp_path / "test.db")
+        good = storage.add_source(type="caldav", name="Gut", config={})
+        bad = storage.add_source(type="caldav", name="Kaputt", config={})
+        seen = {}
+
+        async def fake_mirror(
+            storage_arg, *, now=None, client=None, source_results=None
+        ):
+            from app.mirror_sync import MirrorSyncResult
+
+            seen["results"] = source_results
+            return MirrorSyncResult(0, 0, 0, 0, 0, 0, None)
+
+        async def fake_fetch(config, *args, **kwargs):
+            if config.get("name") == "kaputt":
+                raise RuntimeError("Server nicht erreichbar")
+            return []
+
+        storage.update_source(bad, config={"name": "kaputt"})
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.mirror_sync.run_mirror_sync", fake_mirror)
+        await sync_all(storage, now=FIXED_NOW)
+
+        assert seen["results"][good] is None
+        assert seen["results"][bad] is not None
 
     async def test_mirror_sync_error_does_not_break_calendar_sync(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

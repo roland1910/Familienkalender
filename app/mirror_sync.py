@@ -62,6 +62,13 @@ MIRROR_SYNC_FUTURE_DAYS = 180
 # Change-log scope label for the outgoing writes into the MoreValue calendar.
 MIRROR_AUDIT_SCOPE = "MoreValue (Spiegel)"
 
+# Reasons the data-loss guard held a run back. Stored as codes (not German
+# text) in mirror_sync_status; the admin UI turns them into a sentence —
+# same split as slideshow_scan_status/scanWarningText.
+SKIP_SOURCE_ERROR = "source_error"
+SKIP_EMPTY_RESULT = "empty_result"
+SKIP_NO_SOURCES = "no_sources"
+
 
 def mirror_sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
     """The mirror window: local midnight today to +180 days.
@@ -88,6 +95,9 @@ class MirrorSyncResult:
     # Change-log entries for the writes this run performed (outgoing
     # direction). Persisted by run_mirror_sync, isolated from the sync.
     audit_entries: tuple[AuditEntry, ...] = ()
+    # The data-loss guard held this run back; nothing was written or deleted.
+    skipped: bool = False
+    skip_reason: str | None = None
 
 
 def _empty_result(storage: Storage, error: str | None = None) -> MirrorSyncResult:
@@ -182,12 +192,9 @@ class _Reconciler:
         self,
         desired: dict[str, StoredEvent],
         mapping: dict[str, MirrorEvent],
-        window_start: datetime,
-        window_end: datetime,
+        resources: list[OwnResource],
     ) -> None:
-        own_by_key, extras = _index_own(
-            await self._client.list_own_resources(window_start, window_end)
-        )
+        own_by_key, extras = _index_own(resources)
         # URLs already dealt with this run, so the orphan pass does not try to
         # delete a resource a second time.
         handled: set[str] = set()
@@ -370,11 +377,107 @@ def _target_source(storage: Storage) -> Source | None:
     return source
 
 
+def _sources_verified_fresh(
+    source_ids: set[int], source_results: dict[int, str | None] | None
+) -> bool:
+    """Whether EVERY selected source was read without error in THIS run.
+
+    Only then is an empty desired set trustworthy. ``source_results`` is what
+    app.sync reports for the run that just finished; ``None`` means "no
+    information" (a manual/standalone call), which counts as not verified.
+    A selected source missing from the mapping — disabled, deleted, never
+    fetched — is not verified either, on purpose.
+    """
+    if source_results is None or not source_ids:
+        return False
+    return all(
+        sid in source_results and source_results[sid] is None for sid in source_ids
+    )
+
+
+def _skip_reason(
+    source_ids: set[int],
+    source_results: dict[int, str | None] | None,
+    desired: dict[str, StoredEvent],
+    mapping: dict[str, MirrorEvent],
+    resources: list[OwnResource] | None,
+) -> str | None:
+    """Why this run must not reconcile, or None when it may proceed.
+
+    The add-on's copies are driven by what the sources delivered — so a run
+    that would DELETE must be able to trust that delivery. The same lesson as
+    the slideshow index guard (CLAUDE.md): availability, not emptiness, is the
+    criterion. Four cases, deliberately:
+
+    (a) A selected source reported an error in this run → skip. Its events in
+        the DB are whatever an earlier run left behind and may already have
+        been thinned out; nothing is deleted on that basis.
+    (b) No source selected at all while copies are still mapped → skip. A
+        missing or unparseable ``mirror_sync_source_ids`` setting reads as the
+        empty list and is indistinguishable from "deliberately deselected", so
+        it must never mean "delete everything". Switching the mirror OFF is
+        the deliberate way to stop; the admin UI therefore switches it off when
+        the last source is deselected.
+    (c) Nothing desired while copies exist (mapped or discovered in the
+        calendar) and the sources are not verified fresh → skip. This is the
+        "successful but empty" case: one unlucky fetch would otherwise wipe
+        every copy out of Roland's real work calendar.
+    (d) Everything else → run. Notably the legitimate cleanups still work: all
+        appointments really gone (or the source deselected) plus an error-free
+        sync of the selected sources means the empty set is the truth, and a
+        fresh install with neither mapping nor copies has nothing to lose.
+    """
+    # A missing entry reads as None here, i.e. "did not fail" — the absent
+    # case is handled by the verified-fresh test further down instead.
+    failed = [sid for sid in source_ids if (source_results or {}).get(sid) is not None]
+    if failed:
+        logger.warning(
+            "Mirror sync skipped: %d selected source(s) failed this run — "
+            "copies are left untouched rather than deleted on stale data.",
+            len(failed),
+        )
+        return SKIP_SOURCE_ERROR
+    if not source_ids and mapping:
+        logger.warning(
+            "Mirror sync skipped: no source selected while %d copies are "
+            "mapped — switch the mirror off to stop it deliberately.",
+            len(mapping),
+        )
+        return SKIP_NO_SOURCES
+    if desired or _sources_verified_fresh(source_ids, source_results):
+        return None
+    if mapping or resources:
+        logger.warning(
+            "Mirror sync skipped: nothing to mirror while %d mapped copies "
+            "exist and the sources were not verified in this run.",
+            len(mapping) or len(resources or []),
+        )
+        return SKIP_EMPTY_RESULT
+    return None
+
+
+def _skipped_result(storage: Storage, reason: str, run_at: datetime) -> MirrorSyncResult:
+    active = storage.count_mirror_events()
+    settings.set_mirror_sync_status(
+        storage,
+        last_run=run_at.astimezone(UTC).isoformat(),
+        active_mirrors=active,
+        conflicts=0,
+        error=None,
+        skipped=True,
+        skip_reason=reason,
+    )
+    return MirrorSyncResult(
+        0, 0, 0, 0, 0, active, None, (), skipped=True, skip_reason=reason
+    )
+
+
 async def run_mirror_sync(
     storage: Storage,
     *,
     now: datetime | None = None,
     client: httpx.AsyncClient | None = None,
+    source_results: dict[int, str | None] | None = None,
 ) -> MirrorSyncResult:
     """Run one mirror-sync pass and persist the status.
 
@@ -382,6 +485,11 @@ async def run_mirror_sync(
     usable CalDAV target is configured. All failures are caught, sanitized and
     stored as the last-run error — they never propagate to the caller (the
     periodic calendar sync must not be affected).
+
+    ``source_results`` is the per-source outcome of the calendar sync that
+    just ran (source id -> sanitized error or None). It is what the data-loss
+    guard in ``_skip_reason`` needs: without it, an empty result set is never
+    taken as permission to delete.
     """
     run_at = now or datetime.now(UTC)
     if not settings.is_mirror_sync_enabled(storage):
@@ -397,16 +505,28 @@ async def run_mirror_sync(
 
     if client is None:
         async with httpx.AsyncClient(timeout=30) as own_client:
-            return await run_mirror_sync(storage, now=run_at, client=own_client)
+            return await run_mirror_sync(
+                storage, now=run_at, client=own_client, source_results=source_results
+            )
 
     try:
         desired = desired_source_events(storage, source_ids, window_start, window_end)
         mapping = {row.source_key: row for row in storage.list_mirror_events()}
+        # Guards that need no network run before the client is even built.
+        reason = _skip_reason(source_ids, source_results, desired, mapping, None)
+        if reason is not None:
+            return _skipped_result(storage, reason, run_at)
         write_client = CaldavWriteClient(target.config, client)
+        resources = await write_client.list_own_resources(window_start, window_end)
+        # The listing can reveal copies the (lost) mapping no longer knows —
+        # they hold the run back just as mapped ones do.
+        reason = _skip_reason(source_ids, source_results, desired, mapping, resources)
+        if reason is not None:
+            return _skipped_result(storage, reason, run_at)
         reconciler = _Reconciler(
             storage, write_client, target.config["calendar_url"], run_at
         )
-        await reconciler.run(desired, mapping, window_start, window_end)
+        await reconciler.run(desired, mapping, resources)
         result = reconciler.result()
     except (
         CaldavWriteError,
