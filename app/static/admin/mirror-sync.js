@@ -81,6 +81,31 @@ export function toggleButtonLabel(enabled) {
   return enabled ? "Spiegel-Sync ist AN – ausschalten" : "Spiegel-Sync ist AUS – einschalten";
 }
 
+// German explanation for a run the backend's data-loss guard held back.
+// The backend stores a code (same split as slideshow_scan_status /
+// scanWarningText), the sentence lives here. Pure, node-testable.
+const SKIP_TEXTS = {
+  source_error:
+    "eine ausgewählte Quelle konnte in diesem Lauf nicht gelesen werden — " +
+    "es wurde nichts gelöscht. Sobald die Quelle wieder liefert, gleicht der " +
+    "nächste Lauf normal ab.",
+  empty_result:
+    "die ausgewählten Kalender lieferten keine Termine, obwohl Kopien " +
+    "vorhanden sind — zur Sicherheit wurde nichts gelöscht.",
+  no_sources:
+    "es ist keine Quelle ausgewählt, obwohl Kopien vorhanden sind — zur " +
+    "Sicherheit wurde nichts gelöscht. Zum bewussten Beenden bitte den " +
+    "Spiegel-Sync ausschalten.",
+};
+
+export function skipWarningText(status) {
+  if (!status?.skipped) return "";
+  const reason = SKIP_TEXTS[status.skip_reason];
+  return reason
+    ? `Letzter Lauf übersprungen: ${reason}`
+    : "Letzter Lauf übersprungen — es wurde nichts geändert.";
+}
+
 function renderToggleButton(enabled) {
   const button = byId("btn-mirror-toggle");
   button.textContent = toggleButtonLabel(enabled);
@@ -96,6 +121,8 @@ export async function loadMirrorSync() {
   renderTargets(byId("mirror-target"), data.targets, data.target_source_id);
   renderSources(byId("mirror-source-list"), lastSources, data.source_ids, data.target_source_id);
   showMessage(byId("mirror-status"), formatStatus(data.status), Boolean(data.status?.error));
+  // A held-back run is not an error — shown as its own, dezente warning line.
+  showMessage(byId("mirror-skip"), skipWarningText(data.status), true);
 }
 
 async function save(enabled) {
@@ -113,8 +140,19 @@ export function initMirrorSync() {
   byId("btn-mirror-save").addEventListener("click", async () => {
     showMessage(byId("mirror-message"), "");
     try {
-      await save(currentEnabled);
-      showMessage(byId("mirror-message"), "Auswahl gespeichert.");
+      // Deselecting the LAST source switches the mirror off in the same
+      // step. Otherwise "no source selected" would be a silent instruction
+      // to delete every copy — and the backend cannot tell that apart from a
+      // lost/unreadable setting, so it refuses to act on it anyway. Stopping
+      // the mirror stays a deliberate act via the on/off button.
+      const emptied = selectedSourceIds().length === 0;
+      await save(emptied ? false : currentEnabled);
+      showMessage(
+        byId("mirror-message"),
+        emptied
+          ? "Auswahl gespeichert. Ohne Quelle wurde der Spiegel-Sync ausgeschaltet."
+          : "Auswahl gespeichert.",
+      );
     } catch (error) {
       showMessage(byId("mirror-message"), error.message, true);
     }

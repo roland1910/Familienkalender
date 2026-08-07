@@ -662,6 +662,37 @@ class TestMirrorSync:
         section.locator("#btn-mirror-save").click()
         expect(section.locator("#mirror-message")).to_contain_text("gespeichert")
 
+    def test_deselecting_the_last_source_switches_the_mirror_off(
+        self, page: Page, server_url: str
+    ) -> None:
+        """Ohne Quelle bleibt der Spiegel-Sync nicht heimlich an.
+
+        Sonst wäre „keine Quelle" eine stille Anweisung, alle Kopien zu
+        löschen — der Riegel im Backend verweigert das ohnehin.
+        """
+        goto_admin(page, server_url)
+        section = page.locator("section[aria-labelledby='mirror-heading']")
+        section.locator("#mirror-target").select_option(label="Firma")
+        section.locator(".busy-source-row input[type=checkbox]").first.check()
+        section.locator("#btn-mirror-save").click()
+        expect(section.locator("#mirror-message")).to_contain_text("gespeichert")
+        section.locator("#btn-mirror-toggle").click()
+        expect(section.locator("#btn-mirror-toggle")).to_have_attribute(
+            "aria-pressed", "true"
+        )
+
+        section.locator(".busy-source-row input:checked").first.uncheck()
+        section.locator("#btn-mirror-save").click()
+        expect(section.locator("#mirror-message")).to_contain_text("ausgeschaltet")
+        expect(section.locator("#btn-mirror-toggle")).to_have_attribute(
+            "aria-pressed", "false"
+        )
+
+        # Clean up so the shared DB stays neutral for other tests.
+        section.locator("#mirror-target").select_option("")
+        section.locator("#btn-mirror-save").click()
+        expect(section.locator("#mirror-message")).to_contain_text("gespeichert")
+
 
 class TestChangelog:
     def test_section_shows_seeded_entries(self, page: Page, server_url: str) -> None:

@@ -3,7 +3,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatStatus, toggleButtonLabel } from "../../app/static/admin/mirror-sync.js";
+import {
+  formatStatus,
+  skipWarningText,
+  toggleButtonLabel,
+} from "../../app/static/admin/mirror-sync.js";
 
 test("no last_run yields the never-ran text", () => {
   assert.equal(formatStatus(null), "Noch nie gelaufen.");
@@ -40,4 +44,30 @@ test("error run surfaces the sanitized error", () => {
 test("toggle button label reflects the current on/off state", () => {
   assert.equal(toggleButtonLabel(false), "Spiegel-Sync ist AUS – einschalten");
   assert.equal(toggleButtonLabel(true), "Spiegel-Sync ist AN – ausschalten");
+});
+
+test("a normal run shows no skip warning", () => {
+  assert.equal(skipWarningText(null), "");
+  assert.equal(skipWarningText({}), "");
+  assert.equal(skipWarningText({ skipped: false, skip_reason: "source_error" }), "");
+});
+
+test("each skip reason gets its own German explanation", () => {
+  const failed = skipWarningText({ skipped: true, skip_reason: "source_error" });
+  assert.match(failed, /nicht gel(ö|oe)scht|nichts gel(ö|oe)scht/i);
+  assert.match(failed, /Quelle/);
+
+  const empty = skipWarningText({ skipped: true, skip_reason: "empty_result" });
+  assert.match(empty, /keine Termine|leer/i);
+  assert.ok(empty !== failed);
+
+  const none = skipWarningText({ skipped: true, skip_reason: "no_sources" });
+  assert.match(none, /Quelle/);
+  assert.ok(none !== failed && none !== empty);
+});
+
+test("an unknown skip reason still explains that nothing was changed", () => {
+  const text = skipWarningText({ skipped: true, skip_reason: "voellig-neu" });
+  assert.ok(text.length > 0);
+  assert.match(text, /(ü|ue)bersprungen/i);
 });
