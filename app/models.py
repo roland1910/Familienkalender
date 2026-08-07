@@ -83,6 +83,15 @@ MIRROR_MARKER_PROP = "X-FAMILIENKALENDER-MIRROR"
 MIRROR_OWNER_PROP = "X-FAMILIENKALENDER-OWNER"
 MIRROR_OWNER_VALUE = "1"
 
+# Marker property of the yearly birthday series the add-on writes into a
+# CalDAV calendar (see app.caldav_write / app.birthday_sync). It carries the
+# PERSON key, and the series additionally lives in its own UID namespace, so
+# the mirror sync and the birthday sync can never mistake each other's
+# objects for their own orphans. MIRROR_OWNER_PROP is deliberately shared by
+# both: it is the flag the CalDAV READ client uses to skip everything the
+# add-on wrote itself (loop guard), and that applies to both kinds.
+BIRTHDAY_MARKER_PROP = "X-FAMILIENKALENDER-BIRTHDAY"
+
 
 def is_busy_block_title(title: str | None) -> bool:
     """Whether ``title`` is exactly the "Busy MV" block title (normalized).
@@ -267,6 +276,35 @@ class MirrorEvent:
     all_day: bool
     title: str = ""
     location: str | None = None
+
+
+# The two calendars the birthday sync can write into. Both are optional and
+# switched independently in the admin UI (see app.birthday_sync).
+BIRTHDAY_TARGETS = ("google", "caldav")
+
+
+@dataclass(frozen=True, slots=True)
+class BirthdayBlock:
+    """One yearly birthday series the add-on maintains in a target calendar.
+
+    Maps a PERSON (``person_key`` = source_id|<contact resource>, deliberately
+    year-independent — see app.birthday_sync.person_key) to the remote object
+    that represents their birthday: a Google event id or a CalDAV resource
+    URL, depending on ``target``. The primary key is the (person, target)
+    pair, because the same person is written into both calendars.
+
+    ``start`` is the series' DTSTART date (all-day; a 29 February birthday is
+    normalized to the 28th so the yearly recurrence fires every year).
+    ``title`` and ``start`` are what the diff compares, and ``etag`` is the
+    CalDAV validator driving the conditional requests (empty for Google).
+    """
+
+    person_key: str
+    target: str
+    remote_id: str
+    start: date
+    title: str = ""
+    etag: str = ""
 
 
 # Change log (Änderungsprotokoll): a small audit trail of what each sync

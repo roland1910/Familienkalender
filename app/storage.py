@@ -25,6 +25,7 @@ from app.models import (
     SOURCE_TYPES,
     TAG_OPTIONS,
     AuditEntry,
+    BirthdayBlock,
     BusyBlock,
     CalendarEvent,
     EventChange,
@@ -108,6 +109,16 @@ CREATE TABLE IF NOT EXISTS mirror_events (
     title TEXT NOT NULL DEFAULT '',
     location TEXT,
     updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS birthday_blocks (
+    person_key TEXT NOT NULL,
+    target TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    etag TEXT NOT NULL DEFAULT '',
+    start TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (person_key, target)
 );
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -915,6 +926,78 @@ class Storage:
         with self._connect() as conn:
             conn.execute("DELETE FROM mirror_events")
 
+    # -- birthday blocks (yearly series in Xalt and/or MoreValue) ---------
+
+    def list_birthday_blocks(self) -> list[BirthdayBlock]:
+        """All persisted birthday mappings ((person, target) → remote object)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT person_key, target, remote_id, etag, start, title"
+                " FROM birthday_blocks ORDER BY person_key, target"
+            ).fetchall()
+        return [_row_to_birthday_block(row) for row in rows]
+
+    def upsert_birthday_block(
+        self, block: BirthdayBlock, *, updated_at: datetime
+    ) -> None:
+        """Insert or update the mapping for one (person, target) pair."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO birthday_blocks"
+                " (person_key, target, remote_id, etag, start, title, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (person_key, target) DO UPDATE SET"
+                " remote_id = excluded.remote_id, etag = excluded.etag,"
+                " start = excluded.start, title = excluded.title,"
+                " updated_at = excluded.updated_at",
+                (
+                    block.person_key,
+                    block.target,
+                    block.remote_id,
+                    block.etag,
+                    block.start.isoformat(),
+                    block.title,
+                    updated_at.astimezone(UTC).isoformat(),
+                ),
+            )
+
+    def delete_birthday_block(self, person_key: str, target: str) -> None:
+        """Drop the mapping for one (person, target) pair."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM birthday_blocks WHERE person_key = ? AND target = ?",
+                (person_key, target),
+            )
+
+    def count_birthday_blocks(self, target: str | None = None) -> int:
+        """Number of birthday mappings, optionally for one target only."""
+        with self._connect() as conn:
+            if target is None:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM birthday_blocks"
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM birthday_blocks WHERE target = ?",
+                    (target,),
+                ).fetchone()
+        return int(row["n"])
+
+    def clear_birthday_blocks(self, target: str | None = None) -> None:
+        """Drop birthday mappings (all, or one target's).
+
+        Used when a target is switched off or repointed: the remote ids/URLs
+        of the old mapping address a different calendar and must never drive a
+        delete in the new one (same rationale as clear_mirror_events).
+        """
+        with self._connect() as conn:
+            if target is None:
+                conn.execute("DELETE FROM birthday_blocks")
+            else:
+                conn.execute(
+                    "DELETE FROM birthday_blocks WHERE target = ?", (target,)
+                )
+
 
 def _row_to_audit_entry(row: sqlite3.Row) -> AuditEntry:
     return AuditEntry(
@@ -939,6 +1022,17 @@ def _row_to_mirror_event(row: sqlite3.Row) -> MirrorEvent:
         all_day=all_day,
         title=row["title"],
         location=row["location"],
+    )
+
+
+def _row_to_birthday_block(row: sqlite3.Row) -> BirthdayBlock:
+    return BirthdayBlock(
+        person_key=row["person_key"],
+        target=row["target"],
+        remote_id=row["remote_id"],
+        start=date.fromisoformat(row["start"]),
+        title=row["title"],
+        etag=row["etag"],
     )
 
 

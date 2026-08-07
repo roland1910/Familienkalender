@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models import AuditEntry, BusyBlock, CalendarEvent, MirrorEvent
+from app.models import AuditEntry, BirthdayBlock, BusyBlock, CalendarEvent, MirrorEvent
 from app.storage import AUDIT_RETENTION_DAYS, Storage, resolve_data_dir
 
 BERLIN_OFFSET_SUMMER = "+02:00"
@@ -1093,6 +1093,102 @@ class TestMirrorEvents:
             entry, updated_at=datetime(2026, 7, 3, tzinfo=UTC)
         )
         assert make_storage(tmp_path).list_mirror_events() == [entry]
+
+
+def birthday_block(
+    person_key: str = "6|people/c1",
+    target: str = "google",
+    remote_id: str = "gid-1",
+    start: date | None = None,
+    title: str = "🎂 Oma",
+    etag: str = "",
+) -> BirthdayBlock:
+    return BirthdayBlock(
+        person_key=person_key,
+        target=target,
+        remote_id=remote_id,
+        start=start or date(2026, 8, 20),
+        title=title,
+        etag=etag,
+    )
+
+
+class TestBirthdayBlocks:
+    """The birthday-sync mapping is keyed by (person, target).
+
+    The same person is written into BOTH targets (Xalt and MoreValue), so the
+    primary key has to be the pair — a person-only key would let one target
+    overwrite the other's remote id.
+    """
+
+    def test_upsert_and_list_roundtrip(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        block = birthday_block()
+        storage.upsert_birthday_block(block, updated_at=datetime(2026, 7, 3, tzinfo=UTC))
+        assert storage.list_birthday_blocks() == [block]
+        assert storage.count_birthday_blocks() == 1
+
+    def test_same_person_in_both_targets_is_two_rows(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        updated = datetime(2026, 7, 3, tzinfo=UTC)
+        storage.upsert_birthday_block(birthday_block(), updated_at=updated)
+        storage.upsert_birthday_block(
+            birthday_block(
+                target="caldav",
+                remote_id="https://cloud/dav/cal/b.ics",
+                etag='"e1"',
+            ),
+            updated_at=updated,
+        )
+        assert storage.count_birthday_blocks() == 2
+        assert storage.count_birthday_blocks(target="google") == 1
+        assert storage.count_birthday_blocks(target="caldav") == 1
+
+    def test_upsert_updates_existing_pair(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.upsert_birthday_block(
+            birthday_block(), updated_at=datetime(2026, 7, 3, tzinfo=UTC)
+        )
+        storage.upsert_birthday_block(
+            birthday_block(title="🎂 Oma Müller", start=date(2026, 8, 21)),
+            updated_at=datetime(2026, 7, 4, tzinfo=UTC),
+        )
+        stored = storage.list_birthday_blocks()
+        assert len(stored) == 1
+        assert stored[0].title == "🎂 Oma Müller"
+        assert stored[0].start == date(2026, 8, 21)
+
+    def test_delete_targets_one_pair_only(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        updated = datetime(2026, 7, 3, tzinfo=UTC)
+        storage.upsert_birthday_block(birthday_block(), updated_at=updated)
+        storage.upsert_birthday_block(
+            birthday_block(target="caldav", remote_id="https://cloud/dav/cal/b.ics"),
+            updated_at=updated,
+        )
+        storage.delete_birthday_block("6|people/c1", "google")
+        remaining = storage.list_birthday_blocks()
+        assert [block.target for block in remaining] == ["caldav"]
+
+    def test_clear_can_be_scoped_to_one_target(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        updated = datetime(2026, 7, 3, tzinfo=UTC)
+        storage.upsert_birthday_block(birthday_block(), updated_at=updated)
+        storage.upsert_birthday_block(
+            birthday_block(target="caldav", remote_id="https://cloud/dav/cal/b.ics"),
+            updated_at=updated,
+        )
+        storage.clear_birthday_blocks(target="caldav")
+        assert [block.target for block in storage.list_birthday_blocks()] == ["google"]
+        storage.clear_birthday_blocks()
+        assert storage.list_birthday_blocks() == []
+
+    def test_entries_survive_reopening(self, tmp_path: Path) -> None:
+        block = birthday_block()
+        make_storage(tmp_path).upsert_birthday_block(
+            block, updated_at=datetime(2026, 7, 3, tzinfo=UTC)
+        )
+        assert make_storage(tmp_path).list_birthday_blocks() == [block]
 
 
 def audit_entry(
