@@ -260,6 +260,24 @@ class TestUrlInvariant:
             with pytest.raises(SourceURLError):
                 CaldavWriteClient({**CONFIG, "calendar_url": "ftp://x/y/"}, http)
 
+    async def test_percent_encoded_traversal_is_refused(self) -> None:
+        # httpx.URL.join normalizes a literal "..", but NOT "%2e%2e" — the
+        # raw prefix check alone would happily accept a URL that the server
+        # resolves to a resource outside the collection.
+        captured: list[httpx.Request] = []
+        async with make_client(lambda r: httpx.Response(204), captured) as http:
+            client = CaldavWriteClient(CONFIG, http)
+            with pytest.raises(CaldavWriteError):
+                await client.delete_event(COLLECTION + "%2e%2e/privat/x.ics")
+        assert captured == []
+
+    async def test_owns_url_rejects_percent_encoded_traversal(self) -> None:
+        async with make_client(lambda r: httpx.Response(204)) as http:
+            client = CaldavWriteClient(CONFIG, http)
+            assert client.owns_url(COLLECTION + "x.ics") is True
+            assert client.owns_url(COLLECTION + "%2e%2e/privat/x.ics") is False
+            assert client.owns_url("https://evil.example.com/x.ics") is False
+
 
 @pytest.mark.anyio
 class TestListOwnResources:
@@ -349,6 +367,24 @@ class TestListOwnResources:
     async def test_href_outside_the_collection_is_dropped(self) -> None:
         own = build_ical(SOURCE_KEY, TIMED_EVENT).decode()
         body = multistatus(("https://evil.example.com/pwned.ics", '"e1"', own))
+        async with make_client(lambda r: httpx.Response(207, content=body)) as http:
+            found = await CaldavWriteClient(CONFIG, http).list_own_resources(
+                WINDOW_START, WINDOW_END
+            )
+        assert found == []
+
+    async def test_percent_encoded_traversal_href_is_dropped(self) -> None:
+        # A server (or something upstream of it) answering with an href that
+        # only LOOKS like it sits in the collection: "%2e%2e" survives
+        # httpx's join untouched and would resolve one level up.
+        own = build_ical(SOURCE_KEY, TIMED_EVENT).decode()
+        body = multistatus(
+            (
+                "/remote.php/dav/calendars/roland/mv/%2e%2e/privat/pwned.ics",
+                '"e1"',
+                own,
+            )
+        )
         async with make_client(lambda r: httpx.Response(207, content=body)) as http:
             found = await CaldavWriteClient(CONFIG, http).list_own_resources(
                 WINDOW_START, WINDOW_END

@@ -18,7 +18,9 @@ Hard security invariant (enforced here, covered by tests):
 - Every request URL must resolve INSIDE the configured calendar collection
   (``_ensure_own_url``) and must pass ``validate_source_url``. A server that
   answers a REPORT with an href pointing somewhere else can therefore never
-  make the add-on write or delete outside that collection.
+  make the add-on write or delete outside that collection. The check looks at
+  the DECODED path too, so a percent-encoded traversal (``%2e%2e``, which
+  ``httpx.URL.join`` does not normalize) cannot slip past the prefix test.
 - Discovery of the add-on's own copies (``list_own_resources``) returns ONLY
   components that carry the owner marker AND a UID from the derived
   namespace; everything else is dropped while parsing, so a foreign
@@ -53,7 +55,7 @@ from app.models import (
     as_local_datetime,
 )
 from app.sources import limits
-from app.url_validation import validate_source_url
+from app.url_validation import SourceURLError, validate_source_url
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +201,19 @@ def _text(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def _has_dot_segment(url: str) -> bool:
+    """Whether the DECODED path of ``url`` contains a "." or ".." segment.
+
+    ``httpx.URL.path`` percent-decodes, so ``%2e%2e`` surfaces here as ``..``
+    — which is exactly the case a raw string prefix check cannot see.
+    """
+    try:
+        path = httpx.URL(url).path
+    except (ValueError, TypeError):
+        return True  # unparseable: treat as unsafe
+    return any(segment in (".", "..") for segment in path.split("/"))
+
+
 class CaldavWriteClient:
     """Authenticated CalDAV writer scoped to ONE calendar collection.
 
@@ -224,13 +239,32 @@ class CaldavWriteClient:
         in ``list_own_resources`` this is what makes "the add-on only ever
         touches its own resources" a property of the transport layer and not
         just of the calling logic.
+
+        The plain prefix check is not sufficient on its own: ``httpx.URL.join``
+        normalizes a literal ``..`` away, but leaves a PERCENT-ENCODED
+        ``%2e%2e`` untouched — such a URL passes ``startswith`` while the
+        server resolves it one level up, i.e. outside the collection. The
+        decoded path is therefore checked for dot segments as well.
         """
-        if not url.startswith(self._collection):
+        if not url.startswith(self._collection) or _has_dot_segment(url):
             raise CaldavWriteError(
                 "Ziel-Adresse liegt außerhalb des konfigurierten Kalenders."
             )
         validate_source_url(url)
         return url
+
+    def owns_url(self, url: str) -> bool:
+        """Whether ``url`` is a valid address inside this collection.
+
+        The non-raising twin of ``_ensure_own_url``, for callers that want to
+        DISCARD a stale address (e.g. a mapping row left over from a previous
+        target calendar) instead of aborting their run.
+        """
+        try:
+            self._ensure_own_url(url)
+        except (CaldavWriteError, SourceURLError, ValueError):
+            return False
+        return True
 
     async def _send(
         self, method: str, url: str, *, content: bytes | None = None, headers: dict
