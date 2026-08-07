@@ -20,9 +20,12 @@ Hard security invariant (enforced here, covered by tests):
   answers a REPORT with an href pointing somewhere else can therefore never
   make the add-on write or delete outside that collection.
 - Discovery of the add-on's own copies (``list_own_resources``) returns ONLY
-  components carrying the owner marker; everything else is dropped while
-  parsing, so a foreign appointment is never even offered to the caller as
-  a deletion candidate.
+  components that carry the owner marker AND a UID from the derived
+  namespace; everything else is dropped while parsing, so a foreign
+  appointment is never even offered to the caller as a deletion candidate.
+  Both halves are required on purpose: the marker property name is public,
+  so an injected marker must not be enough — the UID of a genuine, already
+  existing appointment can never be one of ours.
 
 Conditional requests: an update/delete sends ``If-Match`` with the ETag the
 server last reported, a create sends ``If-None-Match: *``. A 412 therefore
@@ -166,15 +169,27 @@ def build_ical(
 
 
 def _marked_component(ics_text: str) -> icalendar.cal.Component | None:
-    """The first VEVENT carrying the owner marker, or None if there is none.
+    """The first VEVENT that is one of the add-on's own copies, else None.
 
-    This is the single gate that decides whether a resource found in the
-    target calendar belongs to the add-on. Anything without the marker is
-    dropped here and never reaches the caller.
+    This is the gate that decides whether a resource found in the target
+    calendar belongs to the add-on, and it demands BOTH halves of the
+    identity:
+
+    - the owner marker property, and
+    - a UID inside the derived namespace (``familienkalender-mirror-…``).
+
+    The marker alone is not enough: the property name is public (the project
+    is open source) and any X-property can ride into Roland's Nextcloud on a
+    foreign invitation, an import or a shared calendar. The UID, in contrast,
+    is fixed when an appointment is created — a genuine, pre-existing
+    appointment can never carry ours, so a marker somebody else injected can
+    never make a real appointment a write or delete candidate.
     """
     calendar = icalendar.Calendar.from_ical(ics_text)
     for component in calendar.walk("VEVENT"):
         if component.get(MIRROR_OWNER_PROP) is None:
+            continue
+        if not str(component.get("UID", "")).startswith(MIRROR_UID_PREFIX):
             continue
         return component
     return None

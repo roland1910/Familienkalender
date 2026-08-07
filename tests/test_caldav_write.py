@@ -289,6 +289,63 @@ class TestListOwnResources:
         assert captured[0].method == "REPORT"
         assert 'start="20260709T000000Z"' in captured[0].content.decode()
 
+    async def test_foreign_uid_with_an_injected_marker_is_not_ours(self) -> None:
+        """The marker alone must not make a foreign appointment ours.
+
+        The property name is public (open source), and an invitation
+        (.ics by mail, an import, a shared calendar) can carry any
+        X-property into Roland's Nextcloud. A resource only counts as the
+        add-on's own when its UID also lies in the derived UID namespace —
+        which no pre-existing, genuine appointment can have.
+        """
+        injected = (
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Angreifer//EN\r\n"
+            "BEGIN:VEVENT\r\nUID:echter-kundentermin@example.com\r\n"
+            "DTSTAMP:20260701T000000Z\r\n"
+            "DTSTART:20260720T080000Z\r\nDTEND:20260720T090000Z\r\n"
+            "SUMMARY:Wichtiger Kundentermin\r\n"
+            f"{MIRROR_OWNER_PROP}:1\r\n"
+            f"{MIRROR_MARKER_PROP}:3|beliebig|2026-07-20T08:00:00+00:00\r\n"
+            "END:VEVENT\r\nEND:VCALENDAR\r\n"
+        )
+        body = multistatus(
+            ("/remote.php/dav/calendars/roland/mv/kundentermin.ics", '"e1"', injected)
+        )
+        async with make_client(lambda r: httpx.Response(207, content=body)) as http:
+            found = await CaldavWriteClient(CONFIG, http).list_own_resources(
+                WINDOW_START, WINDOW_END
+            )
+        assert found == []
+
+    async def test_own_copy_with_a_lost_marker_property_is_still_ours(self) -> None:
+        """A copy whose source-key marker got lost stays a cleanup candidate.
+
+        The owner marker plus our derived UID are enough to recognize it, so
+        orphan cleanup keeps working (it is deleted, not left behind forever).
+        """
+        stripped = (
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Familienkalender//Spiegel//DE\r\n"
+            f"BEGIN:VEVENT\r\nUID:{mirror_uid(SOURCE_KEY)}\r\n"
+            "DTSTAMP:20260701T000000Z\r\n"
+            "DTSTART:20260720T101500Z\r\nDTEND:20260720T110000Z\r\n"
+            "SUMMARY:Kundentermin\r\n"
+            f"{MIRROR_OWNER_PROP}:1\r\n"
+            "END:VEVENT\r\nEND:VCALENDAR\r\n"
+        )
+        body = multistatus(
+            (
+                f"/remote.php/dav/calendars/roland/mv/{resource_name(SOURCE_KEY)}",
+                '"e1"',
+                stripped,
+            )
+        )
+        async with make_client(lambda r: httpx.Response(207, content=body)) as http:
+            found = await CaldavWriteClient(CONFIG, http).list_own_resources(
+                WINDOW_START, WINDOW_END
+            )
+        assert len(found) == 1
+        assert found[0].source_key == ""
+
     async def test_href_outside_the_collection_is_dropped(self) -> None:
         own = build_ical(SOURCE_KEY, TIMED_EVENT).decode()
         body = multistatus(("https://evil.example.com/pwned.ics", '"e1"', own))

@@ -485,6 +485,30 @@ class TestInvariantAndOrphans:
         await _run(storage, backend)  # delete + orphan phase
         assert foreign_url in backend.foreign  # still there, never requested
 
+    async def test_foreign_event_carrying_the_marker_is_never_deleted(self, env) -> None:
+        # The marker property name is public (open source), so an invitation
+        # can arrive carrying it — that alone must not turn a real appointment
+        # into a deletion candidate. The backend raises if it is ever targeted.
+        storage, xalt_id, _ = env
+        foreign_url = COLLECTION + "wichtiger-kundentermin.ics"
+        backend = RecordingCaldav(
+            foreign={
+                foreign_url: (
+                    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Angreifer//EN\r\n"
+                    "BEGIN:VEVENT\r\nUID:echter-kundentermin@example.com\r\n"
+                    "DTSTAMP:20260701T000000Z\r\n"
+                    "DTSTART:20260721T090000Z\r\nDTEND:20260721T100000Z\r\n"
+                    "SUMMARY:Wichtiger Kundentermin\r\n"
+                    "X-FAMILIENKALENDER-OWNER:1\r\n"
+                    "END:VEVENT\r\nEND:VCALENDAR\r\n"
+                )
+            }
+        )
+        store_events(storage, xalt_id, [meeting()])
+        result = await _run(storage, backend)
+        assert result.orphans_removed == 0
+        assert foreign_url in backend.foreign  # still there, never requested
+
     async def test_orphan_copy_without_mapping_is_removed(self, env) -> None:
         storage, _, _ = env
         backend = RecordingCaldav()
