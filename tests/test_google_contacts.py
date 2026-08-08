@@ -118,30 +118,54 @@ class TestBirthdayEvents:
         # No numeric age anywhere in the title when the birth year is unknown.
         assert not any(ch.isdigit() for ch in events[0].title)
 
-    def test_repeats_across_a_multi_year_window(self) -> None:
+    def test_only_the_first_occurrence_in_a_multi_year_window_is_emitted(self) -> None:
+        """One person, one event — no matter how long the window is.
+
+        The contact window spans more than a year (see app.sync_window), so a
+        naive "one event per year in the window" would hand out two events for
+        every person whose birthday falls into the overlap.
+        """
         events = birthday_events(
             "Kind", month=1, day=10, year=2015, resource="people/c3",
             window_start=datetime(2026, 1, 1, tzinfo=BERLIN),
             window_end=datetime(2028, 6, 1, tzinfo=BERLIN),
         )
-        assert [event.start for event in events] == [
-            date(2026, 1, 10),
-            date(2027, 1, 10),
-            date(2028, 1, 10),
-        ]
+        assert [event.start for event in events] == [date(2026, 1, 10)]
 
-    def test_feb_29_maps_to_feb_28_in_non_leap_years(self) -> None:
-        # 2026 and 2027 are not leap years; 2028 is.
+    def test_a_birthday_just_inside_both_window_edges_is_not_doubled(self) -> None:
+        # A 407-day window: the birthday is 4 days in (just past the start)
+        # AND, a year later, still 4 days short of the end. Exactly one event.
+        events = birthday_events(
+            "Doppelgänger", month=7, day=6, year=1980, resource="people/c6",
+            window_start=datetime(2026, 7, 2, tzinfo=BERLIN),
+            window_end=datetime(2027, 8, 13, tzinfo=BERLIN),
+        )
+        assert [event.start for event in events] == [date(2026, 7, 6)]
+        assert events[0].uid.endswith("|2026")
+
+    def test_a_birthday_just_outside_the_window_yields_nothing(self) -> None:
+        events = birthday_events(
+            "Knapp-daneben", month=7, day=1, year=1980, resource="people/c7",
+            window_start=datetime(2026, 7, 2, tzinfo=BERLIN),
+            window_end=datetime(2026, 7, 5, tzinfo=BERLIN),
+        )
+        assert events == []
+
+    def test_feb_29_maps_to_feb_28_in_a_non_leap_year(self) -> None:
         events = birthday_events(
             "Schaltkind", month=2, day=29, year=2000, resource="people/c4",
             window_start=datetime(2026, 1, 1, tzinfo=BERLIN),
+            window_end=datetime(2026, 12, 1, tzinfo=BERLIN),
+        )
+        assert [event.start for event in events] == [date(2026, 2, 28)]
+
+    def test_feb_29_stays_on_the_29th_in_a_leap_year(self) -> None:
+        events = birthday_events(
+            "Schaltkind", month=2, day=29, year=2000, resource="people/c4",
+            window_start=datetime(2028, 1, 1, tzinfo=BERLIN),
             window_end=datetime(2028, 12, 1, tzinfo=BERLIN),
         )
-        assert [event.start for event in events] == [
-            date(2026, 2, 28),
-            date(2027, 2, 28),
-            date(2028, 2, 29),
-        ]
+        assert [event.start for event in events] == [date(2028, 2, 29)]
 
     def test_window_crossing_year_boundary_yields_one_event(self) -> None:
         # Sync window spans a year turn (21 Dec - 28 Mar); the birthday
@@ -164,14 +188,16 @@ class TestBirthdayEvents:
             "Oma", month=9, day=15, year=1950, resource="people/c1",
             window_start=WINDOW_START, window_end=WINDOW_END,
         )
-        assert first[0].uid == again[0].uid
-        # Different year in window → different uid.
-        multi = birthday_events(
+        assert first[0].uid == again[0].uid == "people/c1|2026"
+        # Once the 2026 birthday has passed out of the window, the next
+        # occurrence carries the next year — the birthday sync strips that
+        # suffix again to keep one series per person (see app.birthday_sync).
+        later = birthday_events(
             "Oma", month=9, day=15, year=1950, resource="people/c1",
-            window_start=datetime(2026, 1, 1, tzinfo=BERLIN),
-            window_end=datetime(2028, 1, 1, tzinfo=BERLIN),
+            window_start=datetime(2026, 10, 1, tzinfo=BERLIN),
+            window_end=datetime(2027, 11, 1, tzinfo=BERLIN),
         )
-        assert multi[0].uid != multi[1].uid
+        assert later[0].uid == "people/c1|2027"
 
 
 @pytest.mark.anyio

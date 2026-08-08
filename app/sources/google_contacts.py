@@ -3,9 +3,15 @@
 The Google "Birthdays" calendar is not exposed through the Calendar API, so
 contact birthdays are fetched from the People API instead
 (``people.connections.list`` with ``personFields=names,birthdays``). Each
-contact birthday becomes one all-day CalendarEvent per year that falls into
-the sync window, so the existing storage, filter and feed layers handle it
-unchanged.
+contact birthday becomes exactly ONE all-day CalendarEvent — the next
+occurrence inside the sync window — so the existing storage, filter and feed
+layers handle it unchanged.
+
+Contact sources are synced with their own, wider window (a bit over a year,
+see app.sync_window): with the general -7/+90 days only the few people whose
+birthday happens to be near would exist at all. Because that window spans
+more than a year, a person can have TWO occurrences inside it — only the
+earlier one is emitted (see ``birthday_events``).
 
 Design decisions:
 
@@ -124,22 +130,33 @@ def birthday_events(
     window_start: datetime,
     window_end: datetime,
 ) -> list[CalendarEvent]:
-    """All-day birthday events for one contact within [window_start, window_end).
+    """The contact's next birthday within [window_start, window_end), if any.
 
-    One event per calendar year the birthday falls into. UIDs are stable per
-    (contact resource, year) so the feed and storage see updates as updates.
+    **At most ONE event per person**, namely the earliest occurrence inside
+    the window. The contact window deliberately spans more than a year (see
+    app.sync_window: a shorter one could miss a person entirely, because
+    consecutive occurrences are up to 366 days apart), and "one event per year
+    in the window" would therefore hand out a second, near-identical event to
+    everyone whose birthday falls into the overlap. A person is one birthday,
+    so exactly one event is emitted; the yearly repetition is what the
+    birthday sync writes as an RRULE, and the views only ever need the next
+    occurrence.
+
+    The UID stays ``<resource>|<year>`` and is stable for as long as that
+    occurrence is the one in the window; app.birthday_sync strips the year to
+    keep one series per person across the turn of the year.
+
     The birth ``year`` is accepted (the People API supplies it when known)
     but intentionally not used: no age is derived or shown (see module doc).
     """
     title = f"{BIRTHDAY_PREFIX}{name}"
-    events: list[CalendarEvent] = []
     for occ_year in range(window_start.year, window_end.year + 1):
         occurrence = occurrence_in_year(month, day, occ_year)
         if occurrence is None:
             continue
         if not (window_start.date() <= occurrence < window_end.date()):
             continue
-        events.append(
+        return [
             CalendarEvent(
                 uid=f"{resource}|{occ_year}",
                 title=title,
@@ -147,8 +164,8 @@ def birthday_events(
                 end=occurrence + _ONE_DAY,
                 all_day=True,
             )
-        )
-    return events
+        ]
+    return []
 
 
 def _events_for_person(
