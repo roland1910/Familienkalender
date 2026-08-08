@@ -7,34 +7,22 @@ source (last_sync_error) so the admin UI can surface them later.
 
 import asyncio
 import logging
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 
 from app import birthday_sync, busy_sync, mirror_sync
-from app.models import LOCAL_TZ, AuditEntry, CalendarEvent, EventChange, Source
+from app.models import AuditEntry, CalendarEvent, EventChange, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google, google_contacts, limits
 from app.storage import AUDIT_RETENTION_DAYS, Storage
+from app.sync_window import source_sync_window
 
 logger = logging.getLogger(__name__)
 
-SYNC_WINDOW_PAST_DAYS = 7
-SYNC_WINDOW_FUTURE_DAYS = 90
 DEFAULT_SYNC_INTERVAL_SECONDS = 300
 
 # Serializes sync runs: the periodic task and manual POST /api/sync must
 # never fetch and write concurrently (duplicate work, interleaved writes).
 SYNC_LOCK = asyncio.Lock()
-
-
-def sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
-    """The fetch window: local midnight 7 days back to 90 days ahead."""
-    now_local = (now or datetime.now(UTC)).astimezone(LOCAL_TZ)
-    start_day = now_local.date() - timedelta(days=SYNC_WINDOW_PAST_DAYS)
-    end_day = now_local.date() + timedelta(days=SYNC_WINDOW_FUTURE_DAYS)
-    return (
-        datetime.combine(start_day, time.min, tzinfo=LOCAL_TZ),
-        datetime.combine(end_day, time.min, tzinfo=LOCAL_TZ),
-    )
 
 
 async def _fetch_source_events(
@@ -107,7 +95,6 @@ async def sync_all(storage: Storage, *, now: datetime | None = None) -> dict[int
 async def _sync_all_locked(
     storage: Storage, *, now: datetime | None = None
 ) -> dict[int, str | None]:
-    window_start, window_end = sync_window(now)
     results: dict[int, str | None] = {}
     # One consistent timestamp for the whole run, not one per source.
     synced_at = now or datetime.now(UTC)
@@ -115,6 +102,10 @@ async def _sync_all_locked(
     for source in storage.list_sources():
         if not source.enabled:
             continue
+        # Per source type: contact sources cover a full year, calendars
+        # -7/+90 days. Fetch and prune MUST use the same range, hence one
+        # tuple for both calls below (see app.sync_window).
+        window_start, window_end = source_sync_window(source.type, synced_at)
         try:
             events = await _fetch_source_events(source, window_start, window_end)
             changes = storage.sync_events(

@@ -21,7 +21,7 @@ from app.filtering import filter_events
 from app.models import LOCAL_TZ, CalendarEvent, StoredEvent
 from app.settings import get_evening_boundary
 from app.storage import Storage
-from app.sync import sync_window
+from app.sync_window import sync_window
 
 _WHITESPACE_RUN = re.compile(r"\s+")
 

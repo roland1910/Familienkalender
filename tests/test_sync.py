@@ -1,7 +1,7 @@
 """Tests for the sync orchestration (fetch all sources, isolate errors)."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -11,11 +11,14 @@ import pytest
 from app.models import AuditEntry, CalendarEvent
 from app.sources import limits
 from app.storage import Storage
-from app.sync import (
-    SYNC_LOCK,
+from app.sync import SYNC_LOCK, sync_all
+from app.sync_window import (
+    CONTACTS_WINDOW_FUTURE_DAYS,
+    CONTACTS_WINDOW_PAST_DAYS,
     SYNC_WINDOW_FUTURE_DAYS,
     SYNC_WINDOW_PAST_DAYS,
-    sync_all,
+    contacts_sync_window,
+    source_sync_window,
     sync_window,
 )
 
@@ -101,6 +104,27 @@ class TestSyncWindow:
         assert window_start == datetime(2026, 6, 27, 0, 0, tzinfo=BERLIN)
 
 
+class TestContactsWindow:
+    """Contact sources look a full year ahead, calendars keep -7/+90."""
+
+    def test_contact_window_spans_more_than_a_year(self) -> None:
+        now = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
+        start, end = contacts_sync_window(now)
+        assert start == datetime(2026, 6, 26, 0, 0, tzinfo=BERLIN)
+        assert end == datetime(2027, 8, 7, 0, 0, tzinfo=BERLIN)
+        assert CONTACTS_WINDOW_PAST_DAYS == 7
+        assert CONTACTS_WINDOW_FUTURE_DAYS == 400
+        # More than 366 days: consecutive occurrences of the same birthday
+        # can be 366 days apart, so a shorter window could miss a person.
+        assert (end.date() - start.date()).days > 366
+
+    def test_window_is_chosen_by_source_type(self) -> None:
+        now = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
+        assert source_sync_window("caldav", now) == sync_window(now)
+        assert source_sync_window("google", now) == sync_window(now)
+        assert source_sync_window("google_contacts", now) == contacts_sync_window(now)
+
+
 @pytest.mark.anyio
 class TestSyncAll:
     async def test_caldav_source_is_fetched_and_stored(
@@ -184,6 +208,100 @@ class TestSyncAll:
         assert seen["token_file"] == tmp_path / f"google_token_{source_id}.json"
         events = storage.get_events(*sync_window(FIXED_NOW))
         assert [item.event.uid for item in events] == ["people/c1|2026"]
+
+    async def test_each_source_type_gets_its_own_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        storage.add_source(type="google_contacts", name="Geburtstage", config={})
+        seen: dict = {}
+
+        async def fake_caldav(config, window_start, window_end, *, client=None):
+            seen["caldav"] = (window_start, window_end)
+            return []
+
+        async def fake_contacts(config, window_start, window_end, *, token_file, client=None):
+            seen["contacts"] = (window_start, window_end)
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_caldav)
+        monkeypatch.setattr("app.sources.google_contacts.fetch_events", fake_contacts)
+
+        await sync_all(storage, now=FIXED_NOW)
+
+        assert seen["caldav"] == sync_window(FIXED_NOW)
+        assert seen["contacts"] == contacts_sync_window(FIXED_NOW)
+
+    async def test_a_birthday_almost_a_year_ahead_is_stored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The whole point of the wider window: everyone is in the database.
+
+        With -7/+90 days a contact whose birthday is ten months away simply
+        did not exist — neither in the views nor for the birthday sync.
+        """
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="google_contacts", name="Geburtstage", config={})
+        far_away = FIXED_NOW.date() + timedelta(days=300)
+
+        async def fake_contacts(config, window_start, window_end, *, token_file, client=None):
+            return [
+                CalendarEvent(
+                    uid=f"people/far|{far_away.year}",
+                    title="🎂 Opa",
+                    start=far_away,
+                    end=far_away + timedelta(days=1),
+                    all_day=True,
+                )
+            ]
+
+        monkeypatch.setattr("app.sources.google_contacts.fetch_events", fake_contacts)
+
+        await sync_all(storage, now=FIXED_NOW)
+
+        stored = storage.get_events(*contacts_sync_window(FIXED_NOW))
+        assert [item.event.start for item in stored] == [far_away]
+        # …and it is deliberately NOT part of the narrow calendar window.
+        assert storage.get_events(*sync_window(FIXED_NOW)) == []
+
+    async def test_fetch_and_prune_use_the_same_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A far-future contact event is pruned once the source drops it.
+
+        This is the consistency check between the fetch window and the window
+        storage.sync_events prunes with: a narrower prune would leave the row
+        forever, a wider one would delete what another run just wrote.
+        """
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="google_contacts", name="Geburtstage", config={})
+        far_away = FIXED_NOW.date() + timedelta(days=300)
+        emit = [
+            CalendarEvent(
+                uid=f"people/far|{far_away.year}",
+                title="🎂 Opa",
+                start=far_away,
+                end=far_away + timedelta(days=1),
+                all_day=True,
+            )
+        ]
+
+        async def fake_contacts(config, window_start, window_end, *, token_file, client=None):
+            return list(emit)
+
+        monkeypatch.setattr("app.sources.google_contacts.fetch_events", fake_contacts)
+
+        await sync_all(storage, now=FIXED_NOW)
+        assert len(storage.get_events(*contacts_sync_window(FIXED_NOW))) == 1
+
+        emit.clear()  # the contact lost its birthday
+        await sync_all(storage, now=FIXED_NOW)
+
+        assert storage.get_events(*contacts_sync_window(FIXED_NOW)) == []
 
     async def test_disabled_sources_are_skipped(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

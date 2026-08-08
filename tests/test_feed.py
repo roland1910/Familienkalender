@@ -214,6 +214,46 @@ class TestFeedContent:
         assert not any("Alte Dienstreise" in title for title in titles)
         assert not any("Ferne Klausur" in title for title in titles)
 
+    def test_birthdays_beyond_the_feed_window_do_not_inflate_the_feed(
+        self, storage: Storage
+    ) -> None:
+        """Contact sources are stored for a year — the feed keeps -7/+90.
+
+        The feed has its own window (app.sync_window.sync_window), so the
+        wider contact window must not push a year of birthdays into Marina's
+        subscription.
+        """
+        seed(storage)
+        contacts_id = storage.add_source(
+            type="google_contacts", name="Geburtstage", config={}, display_mode="full"
+        )
+        storage.update_source(contacts_id, include_in_feed=True)
+        storage.sync_events(
+            contacts_id,
+            [
+                CalendarEvent(
+                    uid="people/near|2026",
+                    title="🎂 Oma",
+                    start=date(2026, 7, 20),
+                    end=date(2026, 7, 21),
+                    all_day=True,
+                ),
+                CalendarEvent(
+                    uid="people/far|2027",
+                    title="🎂 Opa",
+                    start=date(2027, 4, 30),
+                    end=date(2027, 5, 1),
+                    all_day=True,
+                ),
+            ],
+            datetime(2026, 6, 26, tzinfo=BERLIN),
+            datetime(2027, 8, 7, tzinfo=BERLIN),
+            synced_at=NOW,
+        )
+        titles = summaries(parse_feed(build_feed(storage, now=NOW)))
+        assert any("Oma" in title for title in titles)
+        assert not any("Opa" in title for title in titles)
+
 
 class TestFeedDeduplication:
     """The feed collapses the same appointment appearing in several sources."""
