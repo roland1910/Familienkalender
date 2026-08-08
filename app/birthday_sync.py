@@ -6,10 +6,11 @@ calendar and/or his Nextcloud calendar. Both targets are optional and
 switched independently.
 
 **One yearly series per person, not one copy per year.** The contact source
-produces one all-day event per person *and year that falls into the sync
-window* (see app.sources.google_contacts). Writing those out one by one would
-mean re-writing every birthday every year and would fill the target calendars
-with near-duplicates. Instead this sync maintains exactly ONE all-day entry
+produces one all-day event per person, namely their next occurrence inside
+the contact window (see app.sources.google_contacts) — a different date every
+year. Writing those out one by one would mean re-writing every birthday every
+year and would fill the target calendars with near-duplicates. Instead this
+sync maintains exactly ONE all-day entry
 per person with ``RRULE:FREQ=YEARLY`` — birthdays are recurring by nature, and
 the series keeps working even if the add-on never writes again.
 
@@ -40,13 +41,15 @@ markers so it only ever sees, updates and deletes its OWN entries:
   and carry ``X-FAMILIENKALENDER-BIRTHDAY``; the mirror sync demands its own
   prefix, so neither can report the other's objects as an orphan.
 
-**Deleting only on knowledge, never on absence.** The events table only holds
-the sync window (-7/+90 days), so most people simply have no source event
-right now — their absence says nothing. A mapped series is therefore only
-deleted when its own date falls INSIDE the current window and the person is
-still missing from the desired set; outside the window it is left untouched.
-On top of that the shared data-loss guard (app.sync_guard) can hold a whole
-run back.
+**Deleting only on knowledge, never on absence.** A mapped series is only
+deleted when its own date falls INSIDE the window the events table actually
+covers and the person is still missing from the desired set; outside that
+window the source simply produced no event and nothing may be concluded.
+Since Etappe 43 contact sources are synced with their own window of a bit
+over a year (app.sync_window), so every person IS inside it and a removed
+contact loses its series on the next run — the rule stays in place as the
+invariant that protects against a narrower window. On top of that the shared
+data-loss guard (app.sync_guard) can hold a whole run back.
 
 Feedback protection: both read clients skip what the add-on wrote itself (the
 private marker in app.sources.google, the owner X-property in
@@ -80,7 +83,6 @@ from app.google_busy import (
 )
 from app.models import (
     BIRTHDAY_TARGETS,
-    LOCAL_TZ,
     AuditEntry,
     BirthdayBlock,
     CalendarEvent,
@@ -89,17 +91,18 @@ from app.models import (
 from app.sanitize import sanitize_error
 from app.sources.google_contacts import occurrence_in_year
 from app.storage import Storage
+from app.sync_window import CONTACTS_WINDOW_PAST_DAYS, contacts_sync_window
 from app.url_validation import SourceURLError
 
 logger = logging.getLogger(__name__)
 
 TARGET_GOOGLE, TARGET_CALDAV = BIRTHDAY_TARGETS
 
-# The window in which the events table actually holds birthday occurrences.
-# Mirrors SYNC_WINDOW_* in app.sync (imported there, not here, to keep the
-# dependency one-way: app.sync drives this module).
-BIRTHDAY_WINDOW_PAST_DAYS = 7
-BIRTHDAY_WINDOW_FUTURE_DAYS = 90
+# The window in which the events table actually holds birthday occurrences —
+# the very one the contact sources are fetched and pruned with (app.sync_window
+# holds it, so this module and app.sync can never disagree; importing app.sync
+# here would be circular).
+BIRTHDAY_WINDOW_PAST_DAYS = CONTACTS_WINDOW_PAST_DAYS
 
 # A recurring VEVENT only matches a CalDAV time-range query that one of its
 # OCCURRENCES falls into, so the listing window must span more than a year —
@@ -140,6 +143,11 @@ def occurs_in_window(day: date, window_start: date, window_end: date) -> bool:
     This is what makes "the person is gone" decidable: inside the window the
     desired set is complete, so a missing person really is missing. Outside
     it, the source simply produced no event and nothing may be concluded.
+
+    Since Etappe 43 the contact window spans more than a year, so in practice
+    this is true for everybody and deletions work for every person. The check
+    stays as the explicit invariant: narrowing the window again must not
+    silently turn "no event yet" into "delete the series".
     """
     for year in range(window_start.year, window_end.year + 1):
         occurrence = occurrence_in_year(day.month, day.day, year)
@@ -149,14 +157,8 @@ def occurs_in_window(day: date, window_start: date, window_end: date) -> bool:
 
 
 def birthday_sync_window(now: datetime | None = None) -> tuple[datetime, datetime]:
-    """The window the events table covers: local midnight -7 to +90 days."""
-    now_local = (now or datetime.now(UTC)).astimezone(LOCAL_TZ)
-    start_day = now_local.date() - timedelta(days=BIRTHDAY_WINDOW_PAST_DAYS)
-    end_day = now_local.date() + timedelta(days=BIRTHDAY_WINDOW_FUTURE_DAYS)
-    return (
-        datetime.combine(start_day, datetime.min.time(), tzinfo=LOCAL_TZ),
-        datetime.combine(end_day, datetime.min.time(), tzinfo=LOCAL_TZ),
-    )
+    """The window the events table covers for contact sources (-7/+400 days)."""
+    return contacts_sync_window(now)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,10 +211,9 @@ def desired_birthdays(
 ) -> dict[str, DesiredBirthday]:
     """One entry per person from the selected contact sources in the window.
 
-    The source emits one all-day event per person and year; they collapse
-    here into a single series per person (earliest occurrence wins — with a
-    97-day window there is at most one anyway, but "earliest" keeps the result
-    deterministic).
+    The source emits exactly one all-day event per person (its next
+    occurrence), so this is a straight mapping; "earliest wins" only keeps the
+    result deterministic should a source ever hand out more than one.
     """
     desired: dict[str, DesiredBirthday] = {}
     for item in storage.get_events(window_start, window_end):

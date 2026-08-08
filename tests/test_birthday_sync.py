@@ -50,6 +50,7 @@ from app.mirror_sync import run_mirror_sync
 from app.models import BirthdayBlock, CalendarEvent
 from app.sources.google import save_tokens
 from app.storage import Storage
+from app.sync_window import contacts_sync_window
 
 BERLIN = ZoneInfo("Europe/Berlin")
 NOW = datetime(2026, 7, 9, 12, 0, tzinfo=UTC)
@@ -89,6 +90,32 @@ def add_caldav_source(storage: Storage, name: str = "Roland MV") -> int:
     return storage.add_source(type="caldav", name=name, config=dict(CALDAV_CONFIG))
 
 
+def add_birthday_events(
+    storage: Storage, source_id: int, people: list[tuple[str, date, str]]
+) -> None:
+    """Store occurrences exactly as app.sources.google_contacts emits them.
+
+    One call replaces the source's stored events (that is what sync_events
+    does), so every person of a test case has to go in together.
+    """
+    storage.sync_events(
+        source_id,
+        [
+            CalendarEvent(
+                uid=f"{resource}|{when.year}",
+                title=f"🎂 {name}",
+                start=when,
+                end=when + timedelta(days=1),
+                all_day=True,
+            )
+            for resource, when, name in people
+        ],
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2028, 1, 1, tzinfo=UTC),
+        synced_at=NOW,
+    )
+
+
 def add_birthday_event(
     storage: Storage,
     source_id: int,
@@ -97,20 +124,7 @@ def add_birthday_event(
     name: str = "Oma",
 ) -> None:
     """Store one occurrence exactly as app.sources.google_contacts emits it."""
-    event = CalendarEvent(
-        uid=f"{resource}|{when.year}",
-        title=f"🎂 {name}",
-        start=when,
-        end=when + timedelta(days=1),
-        all_day=True,
-    )
-    storage.sync_events(
-        source_id,
-        [event],
-        datetime(2026, 1, 1, tzinfo=UTC),
-        datetime(2027, 1, 1, tzinfo=UTC),
-        synced_at=NOW,
-    )
+    add_birthday_events(storage, source_id, [(resource, when, name)])
 
 
 class FakeBackend:
@@ -365,6 +379,37 @@ class TestWritingTheSeries:
         assert storage.count_birthday_blocks(TARGET_GOOGLE) == 1
         assert storage.count_birthday_blocks(TARGET_CALDAV) == 1
 
+    async def test_every_contact_of_the_year_gets_a_series_not_only_the_near_ones(
+        self, tmp_path: Path, token: Path
+    ) -> None:
+        """The reason for Etappe 43: 21 of Roland's contacts were written.
+
+        With the old -7/+90 window only contacts whose birthday happened to be
+        near existed as events at all. The contact window now spans a year, so
+        a birthday ten months out is written just like next week's.
+        """
+        storage = make_storage(tmp_path)
+        source_id = add_contact_source(storage)
+        add_birthday_events(
+            storage,
+            source_id,
+            [
+                ("people/near", date(2026, 8, 20), "Oma"),
+                ("people/far", date(2027, 5, 4), "Opa"),
+            ],
+        )
+        enable(storage, source_ids=[source_id])
+        backend = FakeBackend()
+
+        async with backend.client() as http:
+            result = await run_birthday_sync(
+                storage, now=NOW, client=http, source_results={source_id: None}
+            )
+
+        assert result.inserted == 2
+        starts = {item["start"]["date"] for item in backend.google_birthdays()}
+        assert starts == {"2026-08-20", "2027-05-04"}
+
     async def test_only_the_selected_target_is_written(
         self, tmp_path: Path, token: Path
     ) -> None:
@@ -530,15 +575,58 @@ class TestDeletionOnlyOnKnowledge:
         assert backend.google_birthdays() == []
         assert storage.list_birthday_blocks() == []
 
-    async def test_a_person_outside_the_window_is_never_deleted(
+    async def test_a_distant_birthday_is_inside_the_year_window_and_is_deleted(
         self, tmp_path: Path, token: Path
     ) -> None:
-        """Absence outside the window says nothing — most people are absent.
+        """The contact window covers a year, so December is decidable in July.
 
-        The events table only holds -7/+90 days, so a December birthday has no
-        source event in July. Deleting on that basis would wipe almost every
-        series on every run.
+        Before Etappe 43 the events table only held -7/+90 days: a December
+        birthday had no source event in July, so its series had to be left
+        alone. Now every person is in the window and a removed contact really
+        loses its series on the next run.
         """
+        storage = make_storage(tmp_path)
+        source_id = add_contact_source(storage)
+        add_birthday_event(storage, source_id, "people/c1", date(2026, 8, 20))
+        enable(storage, source_ids=[source_id])
+        backend = FakeBackend()
+        winter_id = backend.seed_google_birthday(
+            "6|people/winter", "🎂 Opa", date(2025, 12, 24)
+        )
+        storage.upsert_birthday_block(
+            BirthdayBlock(
+                person_key="6|people/winter",
+                target=TARGET_GOOGLE,
+                remote_id=winter_id,
+                start=date(2025, 12, 24),
+                title="🎂 Opa",
+            ),
+            updated_at=NOW,
+        )
+
+        async with backend.client() as http:
+            result = await run_birthday_sync(
+                storage, now=NOW, client=http, source_results={source_id: None}
+            )
+
+        assert result.deleted == 1
+        assert winter_id not in backend.google
+        assert all(
+            row.person_key != "6|people/winter"
+            for row in storage.list_birthday_blocks()
+        )
+
+    async def test_absence_outside_the_window_still_never_deletes(
+        self, tmp_path: Path, token: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard itself stays load-bearing, whatever the window is.
+
+        Simulated by shrinking the contact window back to the old +90 days:
+        the December series must then be untouchable again — absence outside
+        the window says nothing, and that must never silently become a
+        deletion if the window is ever narrowed.
+        """
+        monkeypatch.setattr("app.sync_window.CONTACTS_WINDOW_FUTURE_DAYS", 90)
         storage = make_storage(tmp_path)
         source_id = add_contact_source(storage)
         add_birthday_event(storage, source_id, "people/c1", date(2026, 8, 20))
@@ -568,9 +656,10 @@ class TestDeletionOnlyOnKnowledge:
         assert winter_id in backend.google
 
     async def test_an_unmapped_series_outside_the_window_is_adopted(
-        self, tmp_path: Path, token: Path
+        self, tmp_path: Path, token: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A lost mapping must not turn every out-of-window series into a orphan."""
+        monkeypatch.setattr("app.sync_window.CONTACTS_WINDOW_FUTURE_DAYS", 90)
         storage = make_storage(tmp_path)
         source_id = add_contact_source(storage)
         add_birthday_event(storage, source_id, "people/c1", date(2026, 8, 20))
@@ -971,7 +1060,13 @@ class TestChangeLog:
 
 
 class TestWindow:
-    def test_window_matches_the_stored_event_range(self) -> None:
+    def test_window_matches_the_contact_sources_stored_event_range(self) -> None:
+        # Exactly the window the contact sources are fetched and pruned with —
+        # anything narrower would make people look "gone" who simply have no
+        # event yet, anything wider would look for events that do not exist.
+        assert birthday_sync_window(NOW) == contacts_sync_window(NOW)
         start, end = birthday_sync_window(NOW)
         assert start.date() == date(2026, 7, 2)
-        assert end.date() == date(2026, 10, 7)
+        # More than a year: every person with a birthday is inside it, so an
+        # absence from the desired set is real information (see occurs_in_window).
+        assert (end.date() - start.date()).days > 366
