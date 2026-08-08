@@ -779,9 +779,17 @@ async def delete_google_write_token() -> dict:
     google_event_ids would belong to a foreign calendar — reconciliation
     must start from an empty mapping rather than risk patching/deleting
     events in the newly connected account.
+
+    The birthday sync writes through the SAME token, so its Google mapping
+    is reset for exactly that reason too (only the ``google`` target — the
+    CalDAV target is a different calendar and stays as it is). Clearing it
+    is safe: a series still present in the calendar is rediscovered by its
+    marker on the next run and simply re-adopted.
     """
     google_busy.busy_write_token_path().unlink(missing_ok=True)
-    get_storage().clear_busy_blocks()
+    storage = get_storage()
+    storage.clear_busy_blocks()
+    storage.clear_birthday_blocks(birthday_sync.TARGET_GOOGLE)
     return _busy_sync_payload()
 
 

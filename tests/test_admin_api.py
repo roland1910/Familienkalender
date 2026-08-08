@@ -1380,6 +1380,43 @@ class TestBusySyncEndpoints:
         assert response.status_code == 200
         assert storage.count_busy_blocks() == 0
 
+    def test_disconnect_write_token_clears_the_google_birthday_mapping(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        # The birthday sync writes through the SAME write token, so its
+        # Google mapping is stale after a disconnect for exactly the reason
+        # the busy mapping is: the stored event ids belong to the account
+        # that was just disconnected. Clearing is safe (a series still in
+        # the calendar is rediscovered by its marker on the next run) and
+        # keeps "we only ever address our own ids" true after an account
+        # switch. The CalDAV target is a different calendar and untouched.
+        from datetime import date
+
+        from app.models import BirthdayBlock
+
+        storage.upsert_birthday_block(
+            BirthdayBlock(
+                "3|people/c1", "google", "gevt-b1", date(2026, 8, 20), "🎂 Oma"
+            ),
+            updated_at=NOW,
+        )
+        storage.upsert_birthday_block(
+            BirthdayBlock(
+                "3|people/c1",
+                "caldav",
+                "https://cloud.example.com/remote.php/dav/calendars/roland/mv/x.ics",
+                date(2026, 8, 20),
+                "🎂 Oma",
+            ),
+            updated_at=NOW,
+        )
+
+        response = client.delete("/api/admin/google/write-token")
+
+        assert response.status_code == 200
+        assert storage.count_birthday_blocks("google") == 0
+        assert storage.count_birthday_blocks("caldav") == 1
+
 
 class TestChangelogEndpoint:
     def test_returns_entries_newest_first(
