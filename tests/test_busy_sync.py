@@ -182,6 +182,45 @@ class TestWindow:
 
 
 @pytest.mark.anyio
+class TestContactSourcesAreNotBlocked:
+    async def test_birthdays_of_an_unselected_contact_source_stay_out(
+        self, env: Storage
+    ) -> None:
+        """Contact sources now fill the events table for a whole year.
+
+        The busy sync writes only the sources Roland selected, so the extra
+        birthday rows must not turn into "Busy MV" blocks in Xalt.
+        """
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        add_mv_event(storage, 1, "u1", datetime(2026, 7, 20, 15, tzinfo=UTC))
+        contacts_id = storage.add_source(
+            type="google_contacts", name="Geburtstage", config={}
+        )
+        storage.sync_events(
+            contacts_id,
+            [
+                CalendarEvent(
+                    uid="people/c1|2026",
+                    title="🎂 Oma",
+                    start=date(2026, 8, 20),
+                    end=date(2026, 8, 21),
+                    all_day=True,
+                )
+            ],
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2028, 1, 1, tzinfo=UTC),
+            synced_at=NOW,
+        )
+        backend = RecordingBackend()
+
+        result = await _run(storage, backend)
+
+        assert result.inserted == 1
+        assert len(backend.own_blocks) == 1
+
+
+@pytest.mark.anyio
 class TestDisabledOrNoToken:
     async def test_disabled_does_nothing(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("DATA_DIR", str(tmp_path))

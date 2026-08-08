@@ -198,6 +198,43 @@ class TestWindow:
 
 
 @pytest.mark.anyio
+class TestContactSourcesAreNotMirrored:
+    async def test_birthdays_of_an_unselected_contact_source_stay_out(
+        self, env
+    ) -> None:
+        """Contact sources now fill the events table for a whole year.
+
+        The mirror only ever writes the sources Roland selected, so the extra
+        birthday rows must not leak into MoreValue — not even the ones inside
+        the mirror's own 180-day window.
+        """
+        storage, xalt_id, _ = env
+        contacts_id = storage.add_source(
+            type="google_contacts", name="Geburtstage", config={}
+        )
+        store_events(storage, xalt_id, [meeting()])
+        store_events(
+            storage,
+            contacts_id,
+            [
+                CalendarEvent(
+                    uid="people/c1|2026",
+                    title="🎂 Oma",
+                    start=date(2026, 8, 20),
+                    end=date(2026, 8, 21),
+                    all_day=True,
+                )
+            ],
+        )
+        backend = RecordingCaldav()
+
+        result = await _run(storage, backend, source_results={xalt_id: None})
+
+        assert result.inserted == 1
+        assert backend.summaries() == {"Kundentermin"}
+
+
+@pytest.mark.anyio
 class TestDisabledOrUnconfigured:
     async def test_disabled_does_nothing(self, env) -> None:
         storage, xalt_id, _ = env
