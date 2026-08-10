@@ -21,12 +21,16 @@ Safety design (see also app.google_busy):
   sync. The last-run outcome (with a sanitized error) is persisted for the
   admin UI.
 
+Before the diff runs, the wanted appointments are MERGED per occupied time
+range (see ``merge_busy_events``) — several calendars holding the same slot
+must not produce several identical blocks in Xalt.
+
 The sync runs only when it is enabled AND a write token is connected.
 """
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 
@@ -78,6 +82,136 @@ class BusySyncResult:
     audit_entries: tuple[AuditEntry, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class BusySlot:
+    """One occupied time range and the appointments that occupy it."""
+
+    # Source key of the winning appointment — the key the mapping row uses.
+    key: str
+    # The winning appointment; only its times ever reach Google.
+    item: StoredEvent
+    # Every source key occupying this slot, winner first (rank order). Lets
+    # the reconciliation adopt an existing block when the winner changes.
+    members: tuple[str, ...]
+
+
+def _slot_moment(value: datetime | date) -> str:
+    """A comparable key for a start/end moment (UTC instant resp. date).
+
+    A tz-naive datetime is read in the family's local zone, never the
+    process zone — same rule as the feed's duplicate detection.
+    """
+    if isinstance(value, datetime) and value.tzinfo is None:
+        value = value.replace(tzinfo=LOCAL_TZ)
+    return _encode_moment(value)
+
+
+def _slot_key(item: StoredEvent) -> tuple[str, str, bool]:
+    """The identity that decides whether two appointments share a block."""
+    event = item.event
+    return (
+        _slot_moment(event.start),
+        _slot_moment(event.end),
+        event.all_day,
+    )
+
+
+def merge_busy_events(desired: dict[str, StoredEvent]) -> list[BusySlot]:
+    """Collapse the wanted appointments to one block per occupied time range.
+
+    Roland has the same appointment in "Roland MV" AND in "MV Team", and both
+    are selected as busy-sync sources — without merging, every source event
+    produced its own "Busy MV" block and Xalt showed the slot twice.
+
+    Identity is start + end + all_day ONLY. The title deliberately plays no
+    part: the written block is always called "Busy MV", so two DIFFERENT
+    parallel appointments still mean nothing more than "busy once" — merging
+    them loses no information in the target calendar. Times compare like the
+    feed's duplicate detection: timed events as a UTC instant (the same
+    moment in another zone is the same slot), all-day events by date, and an
+    all-day event never merges with a timed one.
+
+    The winner of a slot is picked DETERMINISTICALLY — lowest ``source_id``,
+    then the alphabetically smallest ``uid``, then the smallest source key.
+    Anything order-dependent would let the winner flip between runs and turn
+    the mapping into an endless delete/insert cycle in a real calendar.
+
+    Returns one ``BusySlot`` per range, ordered by winning key, with every
+    member key of the slot attached in the same rank order.
+    """
+    groups: dict[tuple[str, str, bool], list[tuple[tuple[int, str, str], str, StoredEvent]]]
+    groups = {}
+    for key, item in desired.items():
+        rank = (item.source_id, item.event.uid, key)
+        groups.setdefault(_slot_key(item), []).append((rank, key, item))
+    slots: list[BusySlot] = []
+    for members in groups.values():
+        members.sort(key=lambda member: member[0])
+        _, winner_key, winner_item = members[0]
+        slots.append(
+            BusySlot(winner_key, winner_item, tuple(member[1] for member in members))
+        )
+    slots.sort(key=lambda slot: slot.key)
+    return slots
+
+
+def _block_slot_key(block: BusyBlock) -> tuple[str, str, bool]:
+    """The slot a persisted mapping row's block occupies."""
+    return (_slot_moment(block.start), _slot_moment(block.end), block.all_day)
+
+
+def _adopt_existing_blocks(
+    storage: Storage,
+    slots: list[BusySlot],
+    mapping: dict[str, BusyBlock],
+    now: datetime,
+) -> None:
+    """Re-key a mapping row when a slot's winning appointment changed.
+
+    Two situations lead here, and both mean the very same block in Xalt:
+
+    - the winner of a slot vanishes while another appointment still occupies
+      the same range (the block should simply follow the new winner), and
+    - the merge is rolled out over an existing mapping, where the block that
+      survives may be the one of the appointment that lost the merge.
+
+    Without this the diff would delete the old key's block and insert an
+    identical one — a pointless change in Roland's real calendar plus two
+    entries of noise in the change log. Candidates are matched by the SLOT the
+    persisted block occupies (its stored start/end/all_day), which is exactly
+    what makes the two blocks interchangeable, and picked in sorted key order
+    so the outcome never depends on dictionary order.
+
+    Purely local: only the mapping row is renamed, the Google event id (and
+    therefore the block itself) is untouched. The block's private marker keeps
+    the old source key as its value; that value is self-description only —
+    listing and reconciliation go through the constant owner marker — so
+    rewriting it would cost a write into Xalt for no gain.
+    """
+    wanted = {slot.key for slot in slots}
+    # Mapping rows the diff would otherwise delete, grouped by their slot.
+    spare: dict[tuple[str, str, bool], list[str]] = {}
+    for key, block in mapping.items():
+        if key not in wanted:
+            spare.setdefault(_block_slot_key(block), []).append(key)
+    for keys in spare.values():
+        keys.sort()
+    for slot in slots:
+        if slot.key in mapping:
+            continue
+        candidates = spare.get(_slot_key(slot.item))
+        if not candidates:
+            continue
+        old_key = candidates.pop(0)
+        block = mapping.pop(old_key)
+        storage.delete_busy_block(old_key)
+        adopted = BusyBlock(
+            slot.key, block.google_event_id, block.start, block.end, block.all_day
+        )
+        storage.upsert_busy_block(adopted, updated_at=now)
+        mapping[slot.key] = adopted
+
+
 def _times_differ(block: BusyBlock, item: StoredEvent) -> bool:
     """Whether a mapped block's stored time range no longer matches the event."""
     event = item.event
@@ -96,6 +230,12 @@ async def _reconcile(
     now: datetime,
 ) -> BusySyncResult:
     inserted = updated = deleted = orphans = 0
+    # One block per occupied time range, not per source appointment (see
+    # merge_busy_events). Blocks of appointments that lost the merge are
+    # deleted by phase 2 like any other no-longer-wanted block.
+    slots = merge_busy_events(desired)
+    _adopt_existing_blocks(storage, slots, mapping, now)
+    desired = {slot.key: slot.item for slot in slots}
     # Every Google event id the add-on knows about after this run — a block
     # is legitimate (not an orphan) iff it is still mapped to a desired event.
     # Built as we go so a freshly inserted block is not mistaken for an orphan.

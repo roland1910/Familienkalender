@@ -17,10 +17,11 @@ from app import settings
 from app.busy_sync import (
     BUSY_SYNC_FUTURE_DAYS,
     busy_sync_window,
+    merge_busy_events,
     run_busy_sync,
 )
 from app.google_busy import MARKER_KEY, OWNER_KEY, OWNER_VALUE, busy_write_token_path
-from app.models import BusyBlock, CalendarEvent
+from app.models import BusyBlock, CalendarEvent, StoredEvent
 from app.sources.google import save_tokens
 from app.storage import Storage
 from app.sync_identity import source_key
@@ -77,6 +78,48 @@ def add_mv_event(storage: Storage, source_id: int, uid: str, start: datetime) ->
         datetime(2027, 1, 1, tzinfo=UTC),
         synced_at=NOW,
     )
+
+
+def mv_event(
+    uid: str,
+    start: datetime,
+    *,
+    title: str = "MoreValue-Meeting",
+    hours: int = 1,
+) -> CalendarEvent:
+    return CalendarEvent(
+        uid=uid,
+        title=title,
+        start=start,
+        end=start + timedelta(hours=hours),
+        all_day=False,
+    )
+
+
+def store_events(storage: Storage, source_id: int, events: list[CalendarEvent]) -> None:
+    """Replace one source's events (several at once, unlike add_mv_event)."""
+    ensure_source(storage, source_id)
+    storage.sync_events(
+        source_id,
+        events,
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2027, 1, 1, tzinfo=UTC),
+        synced_at=NOW,
+    )
+
+
+def stored(source_id: int, event: CalendarEvent) -> StoredEvent:
+    """A StoredEvent as get_events would return it (for the pure merge tests)."""
+    return StoredEvent(
+        source_id=source_id,
+        source_name=f"src{source_id}",
+        display_mode="full",
+        event=event,
+    )
+
+
+def desired_map(*items: StoredEvent) -> dict[str, StoredEvent]:
+    return {source_key(item.source_id, item.event): item for item in items}
 
 
 class RecordingBackend:
@@ -549,6 +592,227 @@ class TestErrorIsolation:
         assert result.error is not None
         status = settings.get_busy_sync_status(storage)
         assert status["error"] is not None
+
+
+class TestSlotMerging:
+    """Pure merge logic: one "Busy MV" block per occupied time range.
+
+    Roland had the same appointment in "Roland MV" AND "MV Team", so Xalt
+    showed two identical blocks at 10:00. Merging happens before the diff and
+    keys on start+end+all_day only — the title is irrelevant, because the
+    written block is always called "Busy MV" and two parallel appointments
+    still mean "busy once".
+    """
+
+    START = datetime(2026, 7, 20, 10, tzinfo=UTC)
+
+    def test_identical_range_from_two_sources_collapses(self) -> None:
+        first = mv_event("a", self.START, title="Jour fixe")
+        second = mv_event("b", self.START, title="Team-Abstimmung")
+        slots = merge_busy_events(desired_map(stored(1, first), stored(2, second)))
+        assert len(slots) == 1
+        assert slots[0].key == source_key(1, first)
+        assert set(slots[0].members) == {source_key(1, first), source_key(2, second)}
+
+    def test_parallel_appointments_of_one_source_also_collapse(self) -> None:
+        # Two genuinely different meetings at the same time still block the
+        # very same slot — one "Busy MV" is the truth for free/busy.
+        first = mv_event("a", self.START, title="Jour fixe")
+        second = mv_event("b", self.START, title="Kundencall")
+        slots = merge_busy_events(desired_map(stored(1, first), stored(1, second)))
+        assert len(slots) == 1
+        assert slots[0].key == source_key(1, first)  # uid "a" < "b"
+
+    def test_different_end_stays_separate(self) -> None:
+        first = mv_event("a", self.START, hours=1)
+        second = mv_event("b", self.START, hours=2)
+        slots = merge_busy_events(desired_map(stored(1, first), stored(2, second)))
+        assert len(slots) == 2
+
+    def test_different_start_stays_separate(self) -> None:
+        first = mv_event("a", self.START)
+        second = mv_event("b", self.START + timedelta(hours=3))
+        slots = merge_busy_events(desired_map(stored(1, first), stored(2, second)))
+        assert len(slots) == 2
+
+    def test_all_day_never_merges_with_a_timed_event(self) -> None:
+        timed = mv_event("a", datetime(2026, 7, 20, tzinfo=UTC), hours=24)
+        whole_day = CalendarEvent(
+            uid="b",
+            title="Ganztags",
+            start=date(2026, 7, 20),
+            end=date(2026, 7, 21),
+            all_day=True,
+        )
+        slots = merge_busy_events(desired_map(stored(1, timed), stored(2, whole_day)))
+        assert len(slots) == 2
+
+    def test_same_moment_in_another_zone_is_the_same_slot(self) -> None:
+        # Times compare as UTC instants (like the feed dedup), so the same
+        # moment expressed in Berlin and in UTC is one slot.
+        berlin = mv_event("a", datetime(2026, 7, 20, 12, tzinfo=BERLIN))
+        utc = mv_event("b", datetime(2026, 7, 20, 10, tzinfo=UTC))
+        slots = merge_busy_events(desired_map(stored(1, berlin), stored(2, utc)))
+        assert len(slots) == 1
+
+    def test_winner_is_deterministic_and_order_independent(self) -> None:
+        first = mv_event("z-uid", self.START)
+        second = mv_event("a-uid", self.START)
+        forward = merge_busy_events(desired_map(stored(2, first), stored(2, second)))
+        backward = merge_busy_events(desired_map(stored(2, second), stored(2, first)))
+        # Lowest source id first, then the alphabetically smallest uid.
+        assert forward[0].key == backward[0].key == source_key(2, second)
+
+    def test_lower_source_id_wins_over_the_smaller_uid(self) -> None:
+        low = mv_event("z-uid", self.START)
+        high = mv_event("a-uid", self.START)
+        slots = merge_busy_events(desired_map(stored(3, high), stored(1, low)))
+        assert slots[0].key == source_key(1, low)
+
+
+@pytest.mark.anyio
+class TestSlotMergingIntegration:
+    START = datetime(2026, 7, 20, 10, tzinfo=UTC)
+
+    def _seed_block(
+        self,
+        storage: Storage,
+        backend: RecordingBackend,
+        key: str,
+        event: CalendarEvent,
+        event_id: str,
+    ) -> None:
+        """A block as an earlier (pre-merge) run left it behind."""
+        storage.upsert_busy_block(
+            BusyBlock(key, event_id, event.start, event.end, event.all_day),
+            updated_at=NOW,
+        )
+        backend.own_blocks[event_id] = {
+            "id": event_id,
+            "summary": "Busy MV",
+            "visibility": "default",
+            "extendedProperties": {"private": {MARKER_KEY: key, OWNER_KEY: OWNER_VALUE}},
+        }
+
+    async def test_same_appointment_in_two_sources_writes_one_block(
+        self, env: Storage
+    ) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1, 2])
+        shared = mv_event("shared", self.START, title="Jour fixe")
+        store_events(storage, 1, [shared])
+        store_events(storage, 2, [mv_event("team-copy", self.START, title="Jour fixe")])
+        backend = RecordingBackend()
+
+        result = await _run(storage, backend)
+
+        assert result.inserted == 1
+        assert len(backend.own_blocks) == 1
+        assert storage.count_busy_blocks() == 1
+
+    async def test_own_appointments_of_both_sources_still_get_their_block(
+        self, env: Storage
+    ) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1, 2])
+        shared_at = self.START
+        store_events(
+            storage,
+            1,
+            [mv_event("mv-1", shared_at), mv_event("mv-only", shared_at + timedelta(days=1))],
+        )
+        store_events(
+            storage,
+            2,
+            [
+                mv_event("team-1", shared_at),
+                mv_event("team-only", shared_at + timedelta(days=2)),
+            ],
+        )
+        backend = RecordingBackend()
+
+        result = await _run(storage, backend)
+
+        # shared slot once + one exclusive appointment per source.
+        assert result.inserted == 3
+        assert len(backend.own_blocks) == 3
+
+    async def test_collapsing_existing_duplicates_leaves_the_survivor_alone(
+        self, env: Storage
+    ) -> None:
+        """Rolling the merge out must not churn the ~77 existing blocks.
+
+        Only the genuine duplicate disappears; the block that stays keeps its
+        Google event id and is neither patched nor recreated.
+        """
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1, 2])
+        mv = mv_event("mv-1", self.START, title="Jour fixe")
+        team = mv_event("team-1", self.START, title="Jour fixe")
+        store_events(storage, 1, [mv])
+        store_events(storage, 2, [team])
+        backend = RecordingBackend()
+        self._seed_block(storage, backend, source_key(1, mv), mv, "gevt-keep")
+        self._seed_block(storage, backend, source_key(2, team), team, "gevt-dup")
+
+        result = await _run(storage, backend)
+
+        assert result.inserted == 0
+        assert result.updated == 0
+        assert result.deleted == 1
+        assert set(backend.own_blocks) == {"gevt-keep"}
+        # Calendar traffic only (the token endpoint is a POST as well).
+        methods = [
+            r.method for r in backend.requests if "googleapis.com/calendar" in str(r.url)
+        ]
+        assert methods.count("POST") == 0
+        assert methods.count("PATCH") == 0
+        assert methods.count("DELETE") == 1
+
+    async def test_vanishing_winner_hands_its_block_to_the_next_one(
+        self, env: Storage
+    ) -> None:
+        """The block survives and is merely re-keyed — no delete + insert."""
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1, 2])
+        mv = mv_event("mv-1", self.START, title="Jour fixe")
+        team = mv_event("team-1", self.START, title="Jour fixe")
+        store_events(storage, 1, [mv])
+        store_events(storage, 2, [team])
+        backend = RecordingBackend()
+        await _run(storage, backend)
+        block_id = next(iter(backend.own_blocks))
+
+        # The winning source loses the appointment; the other keeps it.
+        store_events(storage, 1, [])
+        result = await _run(storage, backend)
+
+        assert result.inserted == 0
+        assert result.deleted == 0
+        assert result.orphans_removed == 0
+        assert set(backend.own_blocks) == {block_id}
+        keys = [block.source_key for block in storage.list_busy_blocks()]
+        assert keys == [source_key(2, team)]
+        assert storage.list_busy_blocks()[0].google_event_id == block_id
+
+    async def test_reassignment_is_not_written_to_the_change_log(
+        self, env: Storage
+    ) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1, 2])
+        mv = mv_event("mv-1", self.START, title="Jour fixe")
+        team = mv_event("team-1", self.START, title="Jour fixe")
+        store_events(storage, 1, [mv])
+        store_events(storage, 2, [team])
+        backend = RecordingBackend()
+        await _run(storage, backend)
+        before = len(storage.get_audit_entries("2026-01-01T00:00:00+00:00"))
+
+        store_events(storage, 1, [])
+        await _run(storage, backend)
+
+        after = len(storage.get_audit_entries("2026-01-01T00:00:00+00:00"))
+        assert before == after == 1
 
 
 class TestSourceKey:
