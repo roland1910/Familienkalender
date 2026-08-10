@@ -35,7 +35,7 @@ The sync runs only when it is enabled AND a target calendar is configured.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -61,6 +61,19 @@ MIRROR_SYNC_FUTURE_DAYS = 180
 
 # Change-log scope label for the outgoing writes into the MoreValue calendar.
 MIRROR_AUDIT_SCOPE = "MoreValue (Spiegel)"
+
+# How far around "now" the cleanup of a former target calendar looks for the
+# add-on's own copies. Deliberately wider than the mirror window: a copy may
+# have drifted into the past between runs, and a cleanup that leaves objects
+# behind is exactly the problem it exists to solve.
+CLEANUP_LIST_PAST_DAYS = 400
+CLEANUP_LIST_FUTURE_DAYS = 400
+
+# How often a queued cleanup is retried before it is given up on. A calendar
+# that is down for a while should not lose its cleanup, but retrying forever
+# would hide a permanent problem (wrong credentials, calendar deleted) — after
+# this many runs the queue entry is dropped and the admin UI says so.
+MAX_CLEANUP_ATTEMPTS = 5
 
 # Reasons the data-loss guard held a run back. Stored as codes (not German
 # text) in mirror_sync_status; the admin UI turns them into a sentence —
@@ -99,10 +112,17 @@ class MirrorSyncResult:
     # The data-loss guard held this run back; nothing was written or deleted.
     skipped: bool = False
     skip_reason: str | None = None
+    # Copies removed from a calendar that is no longer the target (queued by
+    # the admin on a target switch or a deliberate clean stop).
+    cleaned_up: int = 0
 
 
-def _empty_result(storage: Storage, error: str | None = None) -> MirrorSyncResult:
-    return MirrorSyncResult(0, 0, 0, 0, 0, storage.count_mirror_events(), error)
+def _empty_result(
+    storage: Storage, error: str | None = None, *, cleaned_up: int = 0
+) -> MirrorSyncResult:
+    return MirrorSyncResult(
+        0, 0, 0, 0, 0, storage.count_mirror_events(), error, cleaned_up=cleaned_up
+    )
 
 
 def _differs(row: MirrorEvent, item: StoredEvent) -> bool:
@@ -378,6 +398,151 @@ def _target_source(storage: Storage) -> Source | None:
     return source
 
 
+def _usable_caldav_source(storage: Storage, source_id: int) -> Source | None:
+    """A configured, complete CalDAV source, or None (same test as the target)."""
+    source = storage.get_source(source_id)
+    if source is None or source.type != "caldav":
+        return None
+    if not all(
+        source.config.get(key) for key in ("calendar_url", "username", "app_password")
+    ):
+        return None
+    return source
+
+
+async def _purge_own_copies(
+    config: dict,
+    client: httpx.AsyncClient,
+    now: datetime,
+) -> tuple[int, list[AuditEntry], int]:
+    """Delete every own mirror copy in one collection.
+
+    Returns (removed, audit entries, failures). The listing is the SAME
+    marker- and namespace-scoped discovery the normal run uses, so a foreign
+    Nextcloud appointment is never a deletion candidate here either — the
+    invariant does not weaken just because this is a bulk operation.
+
+    A single resource that refuses to go (conflict, transient error) only
+    counts as a failure; the rest is still removed and the caller retries the
+    remainder on the next run (deleting is idempotent).
+    """
+    write_client = CaldavWriteClient(config, client)
+    resources = await write_client.list_own_resources(
+        now - timedelta(days=CLEANUP_LIST_PAST_DAYS),
+        now + timedelta(days=CLEANUP_LIST_FUTURE_DAYS),
+    )
+    ts_iso = now.astimezone(UTC).isoformat()
+    removed = 0
+    failures = 0
+    audit: list[AuditEntry] = []
+    for resource in resources:
+        try:
+            await write_client.delete_event(resource.url, etag=resource.etag)
+        except (CaldavWriteError, httpx.HTTPError, OSError) as exc:
+            failures += 1
+            logger.warning(
+                "Mirror cleanup: a copy could not be removed (%s)", type(exc).__name__
+            )
+            continue
+        removed += 1
+        audit.append(
+            AuditEntry(
+                ts=ts_iso,
+                direction="out",
+                scope=MIRROR_AUDIT_SCOPE,
+                action="removed",
+                title=resource.summary,
+                event_start=None,
+            )
+        )
+    return removed, audit, failures
+
+
+async def _drain_cleanup_queue(
+    storage: Storage, client: httpx.AsyncClient, now: datetime
+) -> int:
+    """Remove the copies left in calendars that are no longer the target.
+
+    Runs BEFORE everything else in a mirror run, and deliberately before the
+    data-loss guard: this is not a conclusion drawn from calendar data but an
+    explicit instruction from the admin UI (target switched, or "remove the
+    copies" pressed), just like switching the sync off.
+
+    Doing it here rather than inside the admin request is a conscious choice:
+    a few hundred CalDAV DELETEs would keep the admin page waiting for
+    minutes, and a queued order also survives a restart in the middle of it.
+
+    Failure never propagates: a run must not break because a calendar Roland
+    no longer uses is unreachable. The entry is retried a few times and then
+    dropped with a note the admin UI turns into a German warning.
+    """
+    state = settings.get_mirror_sync_cleanup(storage)
+    if not state["pending"]:
+        return 0
+    enabled = settings.is_mirror_sync_enabled(storage)
+    current_target = settings.get_mirror_sync_target_source_id(storage)
+    failed = state["failed"]
+    remaining: list[dict] = []
+    removed_total = 0
+    audit: list[AuditEntry] = []
+
+    for entry in state["pending"]:
+        source_id = entry["source_id"]
+        if enabled and source_id == current_target:
+            # Switched away and back before the drain ran: the mirror is
+            # maintaining that calendar again, so the order is stale.
+            logger.info("Dropped a mirror cleanup for the active target calendar.")
+            continue
+        source = _usable_caldav_source(storage, source_id)
+        if source is None:
+            logger.warning(
+                "Mirror cleanup: source %s is gone or unusable — the copies in "
+                "that calendar have to be removed by hand.",
+                source_id,
+            )
+            failed = True
+            continue
+        try:
+            removed, entry_audit, failures = await _purge_own_copies(
+                source.config, client, now
+            )
+        except (
+            CaldavWriteError,
+            SourceURLError,
+            httpx.HTTPError,
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
+            removed, entry_audit, failures = 0, [], 1
+            logger.warning("Mirror cleanup failed: %s", sanitize_error(str(exc)))
+        removed_total += removed
+        audit.extend(entry_audit)
+        if not failures:
+            continue
+        attempts = entry["attempts"] + 1
+        if attempts >= MAX_CLEANUP_ATTEMPTS:
+            logger.warning(
+                "Mirror cleanup for source %s given up after %d attempts.",
+                source_id,
+                attempts,
+            )
+            failed = True
+            continue
+        remaining.append({"source_id": source_id, "attempts": attempts})
+
+    settings.set_mirror_sync_cleanup(storage, pending=remaining, failed=failed)
+    if audit:
+        try:
+            storage.add_audit_entries(audit)
+        except Exception:  # pragma: no cover - audit must never break the sync
+            logger.exception("Failed to record the mirror cleanup in the change log")
+    if removed_total:
+        logger.info("Mirror cleanup removed %d leftover copies.", removed_total)
+    return removed_total
+
+
 def _skip_reason(
     source_ids: set[int],
     source_results: dict[int, str | None] | None,
@@ -402,7 +567,9 @@ def _skip_reason(
     )
 
 
-def _skipped_result(storage: Storage, reason: str, run_at: datetime) -> MirrorSyncResult:
+def _skipped_result(
+    storage: Storage, reason: str, run_at: datetime, *, cleaned_up: int = 0
+) -> MirrorSyncResult:
     active = storage.count_mirror_events()
     settings.set_mirror_sync_status(
         storage,
@@ -414,7 +581,17 @@ def _skipped_result(storage: Storage, reason: str, run_at: datetime) -> MirrorSy
         skip_reason=reason,
     )
     return MirrorSyncResult(
-        0, 0, 0, 0, 0, active, None, (), skipped=True, skip_reason=reason
+        0,
+        0,
+        0,
+        0,
+        0,
+        active,
+        None,
+        (),
+        skipped=True,
+        skip_reason=reason,
+        cleaned_up=cleaned_up,
     )
 
 
@@ -438,16 +615,13 @@ async def run_mirror_sync(
     taken as permission to delete.
     """
     run_at = now or datetime.now(UTC)
-    if not settings.is_mirror_sync_enabled(storage):
+    enabled = settings.is_mirror_sync_enabled(storage)
+    target = _target_source(storage) if enabled else None
+    # A queued cleanup of a FORMER target calendar must run even when the
+    # mirror itself is switched off — that is exactly the "stop cleanly" case.
+    has_cleanup = bool(settings.get_mirror_sync_cleanup(storage)["pending"])
+    if not has_cleanup and (not enabled or target is None):
         return _empty_result(storage)
-    target = _target_source(storage)
-    if target is None:
-        return _empty_result(storage)
-
-    source_ids = set(settings.get_mirror_sync_source_ids(storage))
-    # Mirroring the target calendar into itself would copy the copies.
-    source_ids.discard(target.id)
-    window_start, window_end = mirror_sync_window(run_at)
 
     if client is None:
         async with httpx.AsyncClient(timeout=30) as own_client:
@@ -455,20 +629,29 @@ async def run_mirror_sync(
                 storage, now=run_at, client=own_client, source_results=source_results
             )
 
+    cleaned_up = await _drain_cleanup_queue(storage, client, run_at)
+    if not enabled or target is None:
+        return _empty_result(storage, cleaned_up=cleaned_up)
+
+    source_ids = set(settings.get_mirror_sync_source_ids(storage))
+    # Mirroring the target calendar into itself would copy the copies.
+    source_ids.discard(target.id)
+    window_start, window_end = mirror_sync_window(run_at)
+
     try:
         desired = desired_source_events(storage, source_ids, window_start, window_end)
         mapping = {row.source_key: row for row in storage.list_mirror_events()}
         # Guards that need no network run before the client is even built.
         reason = _skip_reason(source_ids, source_results, desired, mapping, None)
         if reason is not None:
-            return _skipped_result(storage, reason, run_at)
+            return _skipped_result(storage, reason, run_at, cleaned_up=cleaned_up)
         write_client = CaldavWriteClient(target.config, client)
         resources = await write_client.list_own_resources(window_start, window_end)
         # The listing can reveal copies the (lost) mapping no longer knows —
         # they hold the run back just as mapped ones do.
         reason = _skip_reason(source_ids, source_results, desired, mapping, resources)
         if reason is not None:
-            return _skipped_result(storage, reason, run_at)
+            return _skipped_result(storage, reason, run_at, cleaned_up=cleaned_up)
         reconciler = _Reconciler(
             storage, write_client, target.config["calendar_url"], run_at
         )
@@ -492,7 +675,7 @@ async def run_mirror_sync(
             conflicts=0,
             error=error,
         )
-        return _empty_result(storage, error)
+        return _empty_result(storage, error, cleaned_up=cleaned_up)
 
     # Record what was written into MoreValue — isolated so an audit failure
     # never turns a successful mirror run into an error.
@@ -516,4 +699,4 @@ async def run_mirror_sync(
         result.conflicts,
         result.active_mirrors,
     )
-    return result
+    return replace(result, cleaned_up=cleaned_up)

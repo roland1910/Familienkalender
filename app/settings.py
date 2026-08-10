@@ -48,6 +48,12 @@ MIRROR_SYNC_ENABLED_KEY = "mirror_sync_enabled"
 MIRROR_SYNC_SOURCE_IDS_KEY = "mirror_sync_source_ids"
 MIRROR_SYNC_TARGET_KEY = "mirror_sync_target_source_id"
 MIRROR_SYNC_STATUS_KEY = "mirror_sync_status"
+# Copies waiting to be removed from a calendar that is no longer the mirror
+# target (target switched, or Roland asked for a clean stop). Persisted rather
+# than done inside the admin request: removing a few hundred CalDAV resources
+# takes far too long to keep an admin page waiting, and a queue survives a
+# restart in the middle of it. Drained at the start of the next mirror run.
+MIRROR_SYNC_CLEANUP_KEY = "mirror_sync_cleanup"
 # Birthday sync (contact birthdays → Xalt and/or a CalDAV calendar, see
 # app.birthday_sync): master on/off switch, the google_contacts source ids
 # whose birthdays are written out, the two independently switchable targets
@@ -454,6 +460,80 @@ def set_mirror_sync_status(
                 "skip_reason": skip_reason,
             }
         ),
+    )
+
+
+def get_mirror_sync_cleanup(storage: Storage) -> dict:
+    """The pending mirror-cleanup queue.
+
+    Shape: ``{"pending": [{"source_id": int, "attempts": int}, …],
+    "failed": bool}``. ``pending`` names the CalDAV SOURCES whose calendars
+    still hold copies the add-on should remove (never a URL — the cleanup
+    writes into an existing source's already validated collection, exactly
+    like the mirror itself). ``failed`` marks that a queued cleanup was given
+    up on, so the admin UI can ask Roland to look into the old calendar.
+
+    Defensive on read like every other stored setting: unparseable JSON and
+    entries without a numeric source id are dropped instead of breaking the
+    drain (which deletes in a real calendar).
+    """
+    empty: dict = {"pending": [], "failed": False}
+    raw = storage.get_setting(MIRROR_SYNC_CLEANUP_KEY)
+    if not raw:
+        return empty
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    pending = []
+    for entry in data.get("pending") or []:
+        if not isinstance(entry, dict):
+            continue
+        source_id = entry.get("source_id")
+        if not isinstance(source_id, int) or isinstance(source_id, bool):
+            continue
+        attempts = entry.get("attempts")
+        pending.append(
+            {
+                "source_id": source_id,
+                "attempts": attempts if isinstance(attempts, int) else 0,
+            }
+        )
+    return {"pending": pending, "failed": bool(data.get("failed"))}
+
+
+def set_mirror_sync_cleanup(
+    storage: Storage, *, pending: list[dict], failed: bool
+) -> None:
+    """Persist the pending mirror-cleanup queue."""
+    storage.set_setting(
+        MIRROR_SYNC_CLEANUP_KEY,
+        json.dumps({"pending": pending, "failed": failed}),
+    )
+
+
+def queue_mirror_sync_cleanup(storage: Storage, source_id: int) -> None:
+    """Remember that ``source_id``'s calendar still holds copies to remove.
+
+    Idempotent (queueing the same source twice keeps one entry) and clears a
+    previous failure note: a fresh order deserves a fresh verdict.
+    """
+    state = get_mirror_sync_cleanup(storage)
+    pending = state["pending"]
+    if not any(entry["source_id"] == source_id for entry in pending):
+        pending.append({"source_id": source_id, "attempts": 0})
+    set_mirror_sync_cleanup(storage, pending=pending, failed=False)
+
+
+def drop_mirror_sync_cleanup(storage: Storage, source_id: int) -> None:
+    """Forget a queued cleanup (the source itself is gone — unreachable)."""
+    state = get_mirror_sync_cleanup(storage)
+    set_mirror_sync_cleanup(
+        storage,
+        pending=[e for e in state["pending"] if e["source_id"] != source_id],
+        failed=state["failed"],
     )
 
 

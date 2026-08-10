@@ -21,6 +21,7 @@ import pytest
 from app import settings
 from app.caldav_write import build_ical, resource_name, resource_url
 from app.mirror_sync import (
+    MAX_CLEANUP_ATTEMPTS,
     MIRROR_SYNC_FUTURE_DAYS,
     mirror_sync_window,
     run_mirror_sync,
@@ -40,6 +41,11 @@ TARGET_CONFIG = {
     "calendar_url": COLLECTION,
 }
 
+# A second Nextcloud calendar — Roland created "XALT Termine" and wants the
+# copies MOVED there, not duplicated.
+OTHER_COLLECTION = "https://cloud.example.com/remote.php/dav/calendars/roland/xalt/"
+OTHER_CONFIG = {**TARGET_CONFIG, "calendar_url": OTHER_COLLECTION}
+
 
 def make_storage(tmp_path: Path) -> Storage:
     return Storage(tmp_path / "test.db")
@@ -53,17 +59,24 @@ class RecordingCaldav:
     turns the invariant into an assertion instead of a comment.
     """
 
-    def __init__(self, foreign: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        foreign: dict[str, str] | None = None,
+        *,
+        collection: str = COLLECTION,
+    ) -> None:
+        self.collection = collection
         # url -> (etag, ics text) for the add-on's own copies
         self.own: dict[str, tuple[str, str]] = {}
         # url -> ics text for real Nextcloud appointments
         self.foreign: dict[str, str] = dict(foreign or {})
         self.requests: list[httpx.Request] = []
         self.conflict_urls: set[str] = set()
+        self.report_status = 207
         self._etag = 0
 
     def seed_own(self, key: str, event: CalendarEvent, *, url: str | None = None) -> str:
-        target = url or resource_url(COLLECTION, key)
+        target = url or resource_url(self.collection, key)
         self._etag += 1
         self.own[target] = (f'"e{self._etag}"', build_ical(key, event).decode())
         return target
@@ -84,6 +97,8 @@ class RecordingCaldav:
         return httpx.Response(405)
 
     def _report(self) -> httpx.Response:
+        if self.report_status != 207:
+            return httpx.Response(self.report_status)
         entries = [(url, etag, ics) for url, (etag, ics) in self.own.items()]
         entries += [(url, '"f"', ics) for url, ics in self.foreign.items()]
         responses = "".join(
@@ -123,8 +138,32 @@ class RecordingCaldav:
         }
 
 
+class CaldavCluster:
+    """Routes mock requests to the collection they address.
+
+    Needed as soon as two calendars are in play (target switch): the old
+    target must be cleaned up while the new one receives the copies.
+    """
+
+    def __init__(self, *backends: RecordingCaldav) -> None:
+        self.backends = backends
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        for backend in self.backends:
+            if url.startswith(backend.collection):
+                return backend.handler(request)
+        raise AssertionError(f"request outside every known collection: {url}")
+
+
 def add_target_source(storage: Storage) -> int:
     return storage.add_source(type="caldav", name="Roland MV", config=TARGET_CONFIG)
+
+
+def add_other_target_source(storage: Storage) -> int:
+    return storage.add_source(
+        type="caldav", name="XALT Termine", config=OTHER_CONFIG
+    )
 
 
 def add_xalt_source(storage: Storage) -> int:
@@ -943,6 +982,166 @@ class TestNoFeedbackLoop:
                 datetime(2026, 7, 1, tzinfo=UTC), datetime(2026, 8, 1, tzinfo=UTC)
             )
         )
+
+
+@pytest.mark.anyio
+class TestPendingCleanup:
+    """Copies left behind in a calendar that is no longer the target.
+
+    Roland created a new Nextcloud calendar and wants the mirrored copies
+    MOVED there. Merely repointing the target used to leave the old 155
+    copies lying around and create 155 more — duplicating, not moving. The
+    admin therefore QUEUES a cleanup for the old calendar; the next mirror run
+    drains it before doing anything else.
+    """
+
+    async def test_queued_cleanup_removes_the_copies_of_the_old_calendar(
+        self, env
+    ) -> None:
+        storage, xalt_id, target_id = env
+        old = RecordingCaldav()
+        old.seed_own(source_key(xalt_id, meeting("a")), meeting("a"))
+        old.seed_own(source_key(xalt_id, meeting("b")), meeting("b"))
+        # The admin's side of a target switch / clean stop.
+        settings.queue_mirror_sync_cleanup(storage, target_id)
+        storage.clear_mirror_events()
+        settings.set_mirror_sync_enabled(storage, False)
+
+        result = await _run(storage, old)
+
+        assert result.cleaned_up == 2
+        assert old.own == {}
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] == []
+
+    async def test_switching_the_target_moves_the_copies(self, env) -> None:
+        storage, xalt_id, target_id = env
+        old = RecordingCaldav()
+        new_target_id = add_other_target_source(storage)
+        new = RecordingCaldav(collection=OTHER_COLLECTION)
+        store_events(storage, xalt_id, [meeting()])
+        await _run(storage, old, source_results={xalt_id: None})
+        assert len(old.own) == 1
+
+        # What the admin PUT does when the target changes.
+        settings.queue_mirror_sync_cleanup(storage, target_id)
+        storage.clear_mirror_events()
+        settings.set_mirror_sync_target_source_id(storage, new_target_id)
+
+        cluster = CaldavCluster(old, new)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(cluster.handler)
+        ) as http:
+            result = await run_mirror_sync(
+                storage, now=NOW, client=http, source_results={xalt_id: None}
+            )
+
+        assert result.cleaned_up == 1
+        assert old.own == {}
+        assert new.summaries() == {"Kundentermin"}
+
+    async def test_cleanup_never_touches_foreign_resources(self, env) -> None:
+        storage, xalt_id, target_id = env
+        foreign_url = f"{COLLECTION}echter-termin.ics"
+        old = RecordingCaldav(
+            foreign={
+                foreign_url: build_ical("x", meeting("real"))
+                .decode()
+                .replace("X-FAMILIENKALENDER-OWNER:1\r\n", "")
+                .replace("X-FAMILIENKALENDER-MIRROR:x\r\n", "")
+            }
+        )
+        old.seed_own(source_key(xalt_id, meeting("a")), meeting("a"))
+        settings.queue_mirror_sync_cleanup(storage, target_id)
+        storage.clear_mirror_events()
+        settings.set_mirror_sync_enabled(storage, False)
+
+        result = await _run(storage, old)  # the mock raises on a foreign target
+
+        assert result.cleaned_up == 1
+        assert old.own == {}
+        assert foreign_url in old.foreign
+
+    async def test_vanished_old_target_never_blocks_the_run(self, env) -> None:
+        """Source deleted / credentials gone: warn, drop, carry on."""
+        storage, xalt_id, _ = env
+        settings.queue_mirror_sync_cleanup(storage, 9999)
+        store_events(storage, xalt_id, [meeting()])
+        backend = RecordingCaldav()
+
+        result = await _run(storage, backend, source_results={xalt_id: None})
+
+        # The normal mirror run happened regardless.
+        assert result.inserted == 1
+        assert result.error is None
+        state = settings.get_mirror_sync_cleanup(storage)
+        assert state["pending"] == []
+        assert state["failed"] is True
+
+    async def test_unreachable_old_target_is_retried_then_given_up(self, env) -> None:
+        storage, _xalt_id, target_id = env
+        settings.queue_mirror_sync_cleanup(storage, target_id)
+        storage.clear_mirror_events()
+        settings.set_mirror_sync_enabled(storage, False)
+        backend = RecordingCaldav()
+        backend.report_status = 503
+
+        for attempt in range(1, MAX_CLEANUP_ATTEMPTS):
+            result = await _run(storage, backend)
+            assert result.error is None
+            state = settings.get_mirror_sync_cleanup(storage)
+            assert state["pending"] == [
+                {"source_id": target_id, "attempts": attempt}
+            ]
+            assert state["failed"] is False
+
+        result = await _run(storage, backend)
+        state = settings.get_mirror_sync_cleanup(storage)
+        assert state["pending"] == []
+        assert state["failed"] is True
+
+    async def test_cleanup_for_the_active_target_is_dropped(self, env) -> None:
+        """Target switched away and back before the drain ran.
+
+        The mirror is actively maintaining that calendar again, so the stale
+        order must not delete what the sync just wrote.
+        """
+        storage, xalt_id, target_id = env
+        settings.queue_mirror_sync_cleanup(storage, target_id)
+        store_events(storage, xalt_id, [meeting()])
+        backend = RecordingCaldav()
+
+        result = await _run(storage, backend, source_results={xalt_id: None})
+
+        assert result.cleaned_up == 0
+        assert result.inserted == 1
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] == []
+
+    async def test_cleanup_removals_are_written_to_the_change_log(self, env) -> None:
+        storage, xalt_id, target_id = env
+        old = RecordingCaldav()
+        old.seed_own(source_key(xalt_id, meeting("a")), meeting("a"))
+        settings.queue_mirror_sync_cleanup(storage, target_id)
+        storage.clear_mirror_events()
+        settings.set_mirror_sync_enabled(storage, False)
+
+        await _run(storage, old)
+
+        entries = storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+        assert [(e.direction, e.scope, e.action) for e in entries] == [
+            ("out", "MoreValue (Spiegel)", "removed")
+        ]
+        assert entries[0].title == "Kundentermin"
+
+    async def test_without_a_queue_a_disabled_mirror_still_does_nothing(
+        self, env
+    ) -> None:
+        storage, xalt_id, _ = env
+        settings.set_mirror_sync_enabled(storage, False)
+        store_events(storage, xalt_id, [meeting()])
+        backend = RecordingCaldav()
+        result = await _run(storage, backend)
+        assert result.cleaned_up == 0
+        assert backend.requests == []
 
 
 class TestResourceNaming:

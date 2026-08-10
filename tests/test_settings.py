@@ -14,6 +14,7 @@ from app.settings import (
     DEFAULT_VIEW_KEY,
     EVENING_BOUNDARY_KEY,
     FEED_PUBLIC_HOST_KEY,
+    MIRROR_SYNC_CLEANUP_KEY,
     MIRROR_SYNC_SOURCE_IDS_KEY,
     MIRROR_SYNC_STATUS_KEY,
     MIRROR_SYNC_TARGET_KEY,
@@ -26,6 +27,7 @@ from app.settings import (
     get_default_view,
     get_evening_boundary,
     get_feed_public_host,
+    get_mirror_sync_cleanup,
     get_mirror_sync_source_ids,
     get_mirror_sync_status,
     get_mirror_sync_target_source_id,
@@ -37,6 +39,7 @@ from app.settings import (
     is_valid_default_view,
     is_valid_public_host,
     is_valid_screensaver_default,
+    queue_mirror_sync_cleanup,
     set_birthday_sync_caldav_target_id,
     set_birthday_sync_enabled,
     set_birthday_sync_google_enabled,
@@ -44,6 +47,7 @@ from app.settings import (
     set_birthday_sync_status,
     set_default_view,
     set_feed_public_host,
+    set_mirror_sync_cleanup,
     set_mirror_sync_enabled,
     set_mirror_sync_source_ids,
     set_mirror_sync_status,
@@ -328,6 +332,47 @@ class TestMirrorSyncSettings:
     def test_broken_stored_status_falls_back(self, storage: Storage) -> None:
         storage.set_setting(MIRROR_SYNC_STATUS_KEY, "{kaputt")
         assert get_mirror_sync_status(storage)["active_mirrors"] == 0
+
+    def test_cleanup_queue_is_empty_by_default(self, storage: Storage) -> None:
+        assert get_mirror_sync_cleanup(storage) == {"pending": [], "failed": False}
+
+    def test_queueing_a_cleanup_records_the_source(self, storage: Storage) -> None:
+        queue_mirror_sync_cleanup(storage, 4)
+        assert get_mirror_sync_cleanup(storage)["pending"] == [
+            {"source_id": 4, "attempts": 0}
+        ]
+
+    def test_queueing_the_same_source_twice_keeps_one_entry(
+        self, storage: Storage
+    ) -> None:
+        queue_mirror_sync_cleanup(storage, 4)
+        queue_mirror_sync_cleanup(storage, 4)
+        assert len(get_mirror_sync_cleanup(storage)["pending"]) == 1
+
+    def test_queueing_clears_a_previous_failure_note(self, storage: Storage) -> None:
+        set_mirror_sync_cleanup(storage, pending=[], failed=True)
+        queue_mirror_sync_cleanup(storage, 4)
+        assert get_mirror_sync_cleanup(storage)["failed"] is False
+
+    def test_cleanup_round_trip(self, storage: Storage) -> None:
+        set_mirror_sync_cleanup(
+            storage, pending=[{"source_id": 2, "attempts": 3}], failed=True
+        )
+        stored = get_mirror_sync_cleanup(storage)
+        assert stored["pending"] == [{"source_id": 2, "attempts": 3}]
+        assert stored["failed"] is True
+
+    def test_broken_or_hostile_cleanup_state_falls_back(self, storage: Storage) -> None:
+        storage.set_setting(MIRROR_SYNC_CLEANUP_KEY, "{kaputt")
+        assert get_mirror_sync_cleanup(storage) == {"pending": [], "failed": False}
+        # Non-numeric entries are dropped rather than crashing the drain.
+        storage.set_setting(
+            MIRROR_SYNC_CLEANUP_KEY,
+            '{"pending": ["x", {"source_id": "y"}, {"source_id": 6}], "failed": 1}',
+        )
+        stored = get_mirror_sync_cleanup(storage)
+        assert stored["pending"] == [{"source_id": 6, "attempts": 0}]
+        assert stored["failed"] is True
 
 
 class TestBirthdaySyncSettings:
