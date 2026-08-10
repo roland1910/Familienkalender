@@ -106,6 +106,32 @@ export function skipWarningText(status) {
     : "Letzter Lauf übersprungen — es wurde nichts geändert.";
 }
 
+// Pure label for the "remove the copies" button. Destructive and hard to
+// undo, so it takes two taps: the first one arms it, the second acts.
+export function cleanupButtonLabel(armed) {
+  return armed
+    ? "Wirklich alle Kopien entfernen? Zum Bestätigen erneut tippen"
+    : "Kopien im Zielkalender entfernen";
+}
+
+// Pure German note about a queued (or given-up) cleanup of a calendar that is
+// no longer the target. The backend only reports counts/flags.
+export function cleanupNoteText(data) {
+  if (data?.cleanup_failed) {
+    return (
+      "Die bisherigen Kopien konnten nicht entfernt werden — bitte im alten " +
+      "Kalender manuell prüfen und dort aufräumen."
+    );
+  }
+  if (data?.cleanup_pending) {
+    return (
+      "Aufräumen vorgemerkt: Die Kopien im bisherigen Ziel-Kalender werden " +
+      "beim nächsten Sync entfernt."
+    );
+  }
+  return "";
+}
+
 function renderToggleButton(enabled) {
   const button = byId("btn-mirror-toggle");
   button.textContent = toggleButtonLabel(enabled);
@@ -118,11 +144,24 @@ export async function loadMirrorSync() {
   currentEnabled = Boolean(data.enabled);
   lastSources = data.sources;
   renderToggleButton(currentEnabled);
+  renderCleanupButton(false);
   renderTargets(byId("mirror-target"), data.targets, data.target_source_id);
   renderSources(byId("mirror-source-list"), lastSources, data.source_ids, data.target_source_id);
   showMessage(byId("mirror-status"), formatStatus(data.status), Boolean(data.status?.error));
   // A held-back run is not an error — shown as its own, dezente warning line.
   showMessage(byId("mirror-skip"), skipWarningText(data.status), true);
+  showMessage(byId("mirror-cleanup-note"), cleanupNoteText(data), true);
+}
+
+// Whether the destructive cleanup button is armed (waiting for the second,
+// confirming tap). Reset on every reload of the section.
+let cleanupArmed = false;
+
+function renderCleanupButton(armed) {
+  cleanupArmed = armed;
+  const button = byId("btn-mirror-cleanup");
+  button.textContent = cleanupButtonLabel(armed);
+  button.classList.toggle("danger", armed);
 }
 
 async function save(enabled) {
@@ -154,6 +193,27 @@ export function initMirrorSync() {
           : "Auswahl gespeichert.",
       );
     } catch (error) {
+      showMessage(byId("mirror-message"), error.message, true);
+    }
+  });
+
+  byId("btn-mirror-cleanup").addEventListener("click", async () => {
+    showMessage(byId("mirror-message"), "");
+    // First tap only arms the button — removing every copy from a real
+    // calendar must never be one stray tap away.
+    if (!cleanupArmed) {
+      renderCleanupButton(true);
+      return;
+    }
+    try {
+      await api.cleanupMirrorSync();
+      await loadMirrorSync();
+      showMessage(
+        byId("mirror-message"),
+        "Der Spiegel-Sync wurde ausgeschaltet. Die Kopien werden beim nächsten Sync entfernt.",
+      );
+    } catch (error) {
+      renderCleanupButton(false);
       showMessage(byId("mirror-message"), error.message, true);
     }
   });

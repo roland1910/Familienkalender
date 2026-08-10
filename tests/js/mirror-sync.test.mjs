@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  cleanupButtonLabel,
+  cleanupNoteText,
   formatStatus,
   skipWarningText,
   toggleButtonLabel,
@@ -70,4 +72,30 @@ test("an unknown skip reason still explains that nothing was changed", () => {
   const text = skipWarningText({ skipped: true, skip_reason: "voellig-neu" });
   assert.ok(text.length > 0);
   assert.match(text, /(ü|ue)bersprungen/i);
+});
+
+test("the cleanup button asks for a second tap before it acts", () => {
+  const idle = cleanupButtonLabel(false);
+  const armed = cleanupButtonLabel(true);
+  assert.match(idle, /Kopien/);
+  assert.ok(!/erneut/i.test(idle));
+  assert.match(armed, /erneut/i);
+  assert.notEqual(idle, armed);
+});
+
+test("no cleanup queued means no note at all", () => {
+  assert.equal(cleanupNoteText(null), "");
+  assert.equal(cleanupNoteText({ cleanup_pending: 0, cleanup_failed: false }), "");
+});
+
+test("a queued cleanup says when it happens", () => {
+  const text = cleanupNoteText({ cleanup_pending: 1, cleanup_failed: false });
+  assert.match(text, /Sync/);
+  assert.match(text, /entfernt/i);
+});
+
+test("a given-up cleanup asks Roland to check the old calendar himself", () => {
+  const text = cleanupNoteText({ cleanup_pending: 0, cleanup_failed: true });
+  assert.match(text, /nicht entfernt/i);
+  assert.match(text, /manuell|selbst|von Hand/i);
 });

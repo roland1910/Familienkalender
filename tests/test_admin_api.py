@@ -1642,6 +1642,120 @@ class TestMirrorSyncEndpoints:
         assert settings.get_mirror_sync_source_ids(storage) == []
 
 
+class TestMirrorTargetCleanup:
+    """Switching the target must MOVE the copies, not duplicate them.
+
+    The admin only queues the cleanup (a few hundred CalDAV deletes are far
+    too slow for a request); the next mirror run drains the queue.
+    """
+
+    def _caldav(self, storage: Storage, name: str) -> int:
+        return storage.add_source(type="caldav", name=name, config=CALDAV_CONFIG)
+
+    def _select(self, client: TestClient, target: int) -> None:
+        client.put(
+            "/api/admin/mirror-sync",
+            json={"enabled": True, "source_ids": [], "target_source_id": target},
+        )
+
+    def test_switching_the_target_queues_the_old_calendar_for_cleanup(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        first = self._caldav(storage, "Roland MV")
+        second = self._caldav(storage, "XALT Termine")
+        self._select(client, first)
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] == []
+
+        self._select(client, second)
+
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] == [
+            {"source_id": first, "attempts": 0}
+        ]
+        assert storage.count_mirror_events() == 0
+
+    def test_saving_the_same_target_again_queues_nothing(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        target = self._caldav(storage, "Roland MV")
+        self._select(client, target)
+        self._select(client, target)
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] == []
+
+    def test_payload_reports_a_pending_cleanup(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        first = self._caldav(storage, "Roland MV")
+        second = self._caldav(storage, "XALT Termine")
+        self._select(client, first)
+        payload = client.get("/api/admin/mirror-sync").json()["mirror_sync"]
+        assert payload["cleanup_pending"] == 0
+        assert payload["cleanup_failed"] is False
+
+        self._select(client, second)
+
+        payload = client.get("/api/admin/mirror-sync").json()["mirror_sync"]
+        assert payload["cleanup_pending"] == 1
+
+    def test_cleanup_button_queues_switches_off_and_clears_the_mapping(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+        from app.models import MirrorEvent
+
+        target = self._caldav(storage, "Roland MV")
+        self._select(client, target)
+        storage.upsert_mirror_event(
+            MirrorEvent(
+                source_key="3|u|2026-07-20T08:00:00+00:00",
+                resource_url=f"{CALDAV_CONFIG['calendar_url']}x.ics",
+                etag='"e"',
+                start=datetime(2026, 7, 20, 8, tzinfo=UTC),
+                end=datetime(2026, 7, 20, 9, tzinfo=UTC),
+                all_day=False,
+                title="Termin",
+            ),
+            updated_at=NOW,
+        )
+
+        response = client.post("/api/admin/mirror-sync/cleanup")
+
+        assert response.status_code == 200
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] == [
+            {"source_id": target, "attempts": 0}
+        ]
+        # Leaving the mirror on would recreate every copy it just removed.
+        assert settings.is_mirror_sync_enabled(storage) is False
+        assert storage.count_mirror_events() == 0
+        assert response.json()["mirror_sync"]["cleanup_pending"] == 1
+
+    def test_cleanup_button_without_a_target_is_rejected(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        response = client.post("/api/admin/mirror-sync/cleanup")
+        assert response.status_code == 400
+        assert "Ziel" in response.json()["detail"]
+
+    def test_deleting_the_target_source_forgets_its_queued_cleanup(
+        self, client: TestClient, storage: Storage
+    ) -> None:
+        from app import settings
+
+        first = self._caldav(storage, "Roland MV")
+        second = self._caldav(storage, "XALT Termine")
+        self._select(client, first)
+        self._select(client, second)
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] != []
+
+        # The old calendar's source is deleted — nothing can be cleaned there.
+        client.delete(f"/api/admin/sources/{first}")
+
+        assert settings.get_mirror_sync_cleanup(storage)["pending"] == []
+
+
 class TestBirthdaySyncEndpoints:
     """Admin API of the birthday sync (app.birthday_sync)."""
 

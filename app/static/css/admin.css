@@ -189,6 +189,13 @@ body {
   color: var(--text-muted);
 }
 
+/* Armed state of a two-tap destructive button (mirror cleanup): the second
+   tap really deletes, so the button must stop looking like the others. */
+.action-button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 /* -- source list -------------------------------------------------------- */
 
 .source-list {

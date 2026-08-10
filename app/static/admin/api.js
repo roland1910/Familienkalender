@@ -131,6 +131,12 @@ export function saveMirrorSync(enabled, sourceIds, targetSourceId) {
   });
 }
 
+// Remove every mirrored copy from the current target calendar and stop the
+// mirror. The backend only queues the work; the next sync run does it.
+export function cleanupMirrorSync() {
+  return request("POST", "api/admin/mirror-sync/cleanup");
+}
+
 export function getBirthdaySync() {
   return request("GET", "api/admin/birthday-sync");
 }

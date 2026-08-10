@@ -489,6 +489,7 @@ class TestAdminGate:
             ("GET", "/api/admin/changelog"),
             ("GET", "/api/admin/mirror-sync"),
             ("PUT", "/api/admin/mirror-sync"),
+            ("POST", "/api/admin/mirror-sync/cleanup"),
             ("GET", "/api/admin/birthday-sync"),
             ("PUT", "/api/admin/birthday-sync"),
             ("POST", "/api/admin/sources"),

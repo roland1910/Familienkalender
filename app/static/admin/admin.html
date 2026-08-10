@@ -424,8 +424,17 @@
               aria-pressed="false">
         Spiegel-Sync ist AUS &#8211; einschalten
       </button>
+      <p class="hint">Beim Wechsel des Ziel-Kalenders werden die Kopien im
+        bisherigen Kalender beim n&auml;chsten Sync entfernt &#8211; die
+        Termine werden also verschoben, nicht verdoppelt.</p>
+      <div class="button-row">
+        <button id="btn-mirror-cleanup" class="action-button subtle" type="button">
+          Kopien im Zielkalender entfernen
+        </button>
+      </div>
       <p id="mirror-status" class="message" hidden></p>
       <p id="mirror-skip" class="message" hidden></p>
+      <p id="mirror-cleanup-note" class="message" hidden></p>
       <p id="mirror-message" class="message" hidden></p>
     </section>
 

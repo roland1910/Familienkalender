@@ -571,6 +571,7 @@ def _mirror_sync_payload() -> dict:
     """Current mirror-sync configuration + status for the admin UI."""
     storage = get_storage()
     sources = storage.list_sources()
+    cleanup = settings.get_mirror_sync_cleanup(storage)
     return {
         "mirror_sync": {
             "enabled": settings.is_mirror_sync_enabled(storage),
@@ -588,6 +589,11 @@ def _mirror_sync_payload() -> dict:
                 if source.type == "caldav"
             ],
             "status": settings.get_mirror_sync_status(storage),
+            # Copies still waiting to be removed from a calendar that is no
+            # longer the target (drained by the next sync run), and whether a
+            # queued cleanup had to be given up on.
+            "cleanup_pending": len(cleanup["pending"]),
+            "cleanup_failed": cleanup["failed"],
         }
     }
 
@@ -606,7 +612,10 @@ async def update_mirror_sync(update: MirrorSyncUpdate) -> dict:
     CalDAV source, and the target must not be one of the mirrored sources
     (mirroring a calendar into itself would copy the copies). Changing the
     target resets the local mapping — its resource URLs point into the old
-    collection and must never drive a delete in the new one.
+    collection and must never drive a delete in the new one — and queues the
+    OLD calendar for cleanup, so the copies are moved rather than duplicated.
+    The cleanup itself happens in the next sync run: several hundred CalDAV
+    deletes would keep this request (and the admin page) waiting for minutes.
     """
     storage = get_storage()
     known = {source.id: source for source in storage.list_sources()}
@@ -629,11 +638,36 @@ async def update_mirror_sync(update: MirrorSyncUpdate) -> dict:
                 status_code=400,
                 detail="Der Ziel-Kalender darf nicht gleichzeitig Quelle sein.",
             )
-    if target_id != settings.get_mirror_sync_target_source_id(storage):
+    previous_target = settings.get_mirror_sync_target_source_id(storage)
+    if target_id != previous_target:
+        if previous_target is not None:
+            settings.queue_mirror_sync_cleanup(storage, previous_target)
         storage.clear_mirror_events()
     settings.set_mirror_sync_target_source_id(storage, target_id)
     settings.set_mirror_sync_source_ids(storage, update.source_ids)
     settings.set_mirror_sync_enabled(storage, update.enabled)
+    return _mirror_sync_payload()
+
+
+@router.post("/mirror-sync/cleanup")
+async def cleanup_mirror_sync() -> dict:
+    """Remove every mirrored copy from the current target calendar.
+
+    The clean way to stop the mirror without leaving anything behind. Queues
+    the cleanup (drained by the next sync run — the deletes are far too slow
+    for a request), drops the local mapping and switches the mirror OFF:
+    leaving it on would make the very next run recreate every copy that was
+    just removed.
+    """
+    storage = get_storage()
+    target_id = settings.get_mirror_sync_target_source_id(storage)
+    if target_id is None:
+        raise HTTPException(
+            status_code=400, detail="Es ist kein Ziel-Kalender gewählt."
+        )
+    settings.queue_mirror_sync_cleanup(storage, target_id)
+    storage.clear_mirror_events()
+    settings.set_mirror_sync_enabled(storage, False)
     return _mirror_sync_payload()
 
 
@@ -984,6 +1018,9 @@ async def delete_source(source_id: int) -> dict:
         settings.set_mirror_sync_target_source_id(storage, None)
         settings.set_mirror_sync_enabled(storage, False)
         storage.clear_mirror_events()
+    # A queued cleanup for this source can never run either — without the
+    # source there are no credentials and no collection URL to clean up with.
+    settings.drop_mirror_sync_cleanup(storage, source_id)
     # Same for the birthday sync: drop the deleted source from the selection
     # and, if it was the CalDAV target, clear the target plus that target's
     # mapping (its resource URLs address a calendar we no longer reach).

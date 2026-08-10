@@ -693,6 +693,29 @@ class TestMirrorSync:
         section.locator("#btn-mirror-save").click()
         expect(section.locator("#mirror-message")).to_contain_text("gespeichert")
 
+    def test_cleanup_button_needs_a_second_tap(
+        self, page: Page, server_url: str
+    ) -> None:
+        """Der Aufräum-Knopf löscht Kopien — ein Fehltipp darf das nicht.
+
+        Der erste Tipp schärft nur, der zweite handelt. Ohne gewähltes Ziel
+        antwortet das Backend mit einer deutschen Meldung, und der Knopf
+        entschärft sich wieder (die gemeinsame Demo-DB bleibt unberührt).
+        """
+        goto_admin(page, server_url)
+        section = page.locator("section[aria-labelledby='mirror-heading']")
+        button = section.locator("#btn-mirror-cleanup")
+        expect(button).to_contain_text("Kopien im Zielkalender entfernen")
+
+        button.click()
+        expect(button).to_contain_text("erneut tippen")
+
+        button.click()
+        expect(section.locator("#mirror-message")).to_contain_text(
+            "kein Ziel-Kalender"
+        )
+        expect(button).to_contain_text("Kopien im Zielkalender entfernen")
+
 
 class TestBirthdaySync:
     """Admin-Sektion des Geburtstags-Syncs.
