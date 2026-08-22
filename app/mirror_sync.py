@@ -11,6 +11,13 @@ meetings. The family filter (evening boundary, weekends, holidays) governs
 what is DISPLAYED and what goes into the ICS feed — it deliberately has no
 say here, because Roland needs his complete work day in MoreValue.
 
+Content: title, times, location and — since Etappe 45, at Roland's explicit
+request — the appointment's details (who invited, the participants and the
+original description), all in one DESCRIPTION (see
+app.caldav_write.mirror_description). The ICS feed Marina subscribes to over
+the internet deliberately does NOT gain any of this; it keeps carrying title,
+time and place only (app.feed builds its VEVENTs property by property).
+
 Safety design (see also app.caldav_write):
 
 - Every copy carries the marker properties and lives under the add-on's own
@@ -128,18 +135,27 @@ def _empty_result(
 def _differs(row: MirrorEvent, item: StoredEvent) -> bool:
     """Whether a mapped copy no longer matches its source appointment.
 
-    Compares everything the copy actually carries: title, location, the time
+    Compares everything the copy actually carries: title, location, the
+    detail fields (description, organizer, attendees — Etappe 45), the time
     range and the all-day flag. A pure time SHIFT changes the source key and
     therefore surfaces as delete(old)+insert(new) rather than an update —
     the same identity rule the events table and the busy sync follow.
+
+    None and "" compare equal throughout: the copies written before the
+    detail columns existed map to None, so the comparison is what rewrites
+    each of them exactly ONCE (with the details) and then reports a null diff
+    — an appointment that genuinely has no details is never touched at all.
     """
     event = item.event
     return (
         row.title != event.title
-        or (row.location or "") != (event.location or "")
         or row.all_day != event.all_day
         or _encode_moment(row.start) != _encode_moment(event.start)
         or _encode_moment(row.end) != _encode_moment(event.end)
+        or any(
+            (getattr(row, field) or "") != (getattr(event, field) or "")
+            for field in ("location", "description", "organizer", "attendees")
+        )
     )
 
 
@@ -155,6 +171,9 @@ def _mapping_row(
         all_day=item.event.all_day,
         title=item.event.title,
         location=item.event.location,
+        description=item.event.description,
+        organizer=item.event.organizer,
+        attendees=item.event.attendees,
     )
 
 

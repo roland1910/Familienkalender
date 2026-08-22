@@ -111,6 +111,9 @@ CREATE TABLE IF NOT EXISTS mirror_events (
     all_day INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL DEFAULT '',
     location TEXT,
+    description TEXT,
+    organizer TEXT,
+    attendees TEXT,
     updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS birthday_blocks (
@@ -267,6 +270,17 @@ class Storage:
                 # The column name is spliced from the literal tuple above,
                 # never from input — not an injection surface.
                 conn.execute(f"ALTER TABLE events ADD COLUMN {column} TEXT")
+
+        mirror_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(mirror_events)")
+        }
+        for column in ("description", "organizer", "attendees"):
+            if column not in mirror_columns:
+                # Etappe 45: the mapping remembers the details the copy
+                # carries. NULL on the existing rows means "not known yet",
+                # which makes the mirror diff rewrite each live copy once
+                # with the details and then compare equal again.
+                conn.execute(f"ALTER TABLE mirror_events ADD COLUMN {column} TEXT")
 
         photo_columns = {row["name"] for row in conn.execute("PRAGMA table_info(photos)")}
         if "kind" not in photo_columns:
@@ -903,7 +917,8 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT source_key, resource_url, etag, start, end, all_day,"
-                " title, location FROM mirror_events ORDER BY source_key"
+                " title, location, description, organizer, attendees"
+                " FROM mirror_events ORDER BY source_key"
             ).fetchall()
         return [_row_to_mirror_event(row) for row in rows]
 
@@ -913,13 +928,16 @@ class Storage:
             conn.execute(
                 "INSERT INTO mirror_events"
                 " (source_key, resource_url, etag, start, end, all_day,"
-                " title, location, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " title, location, description, organizer, attendees, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (source_key) DO UPDATE SET"
                 " resource_url = excluded.resource_url, etag = excluded.etag,"
                 " start = excluded.start, end = excluded.end,"
                 " all_day = excluded.all_day, title = excluded.title,"
-                " location = excluded.location, updated_at = excluded.updated_at",
+                " location = excluded.location,"
+                " description = excluded.description,"
+                " organizer = excluded.organizer, attendees = excluded.attendees,"
+                " updated_at = excluded.updated_at",
                 (
                     entry.source_key,
                     entry.resource_url,
@@ -929,6 +947,9 @@ class Storage:
                     int(entry.all_day),
                     entry.title,
                     entry.location,
+                    entry.description,
+                    entry.organizer,
+                    entry.attendees,
                     updated_at.astimezone(UTC).isoformat(),
                 ),
             )
@@ -1053,6 +1074,9 @@ def _row_to_mirror_event(row: sqlite3.Row) -> MirrorEvent:
         all_day=all_day,
         title=row["title"],
         location=row["location"],
+        description=row["description"],
+        organizer=row["organizer"],
+        attendees=row["attendees"],
     )
 
 

@@ -3,6 +3,7 @@
 import os
 import sqlite3
 import stat
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -1093,6 +1094,60 @@ class TestMirrorEvents:
             entry, updated_at=datetime(2026, 7, 3, tzinfo=UTC)
         )
         assert make_storage(tmp_path).list_mirror_events() == [entry]
+
+    def test_detail_fields_roundtrip(self, tmp_path: Path) -> None:
+        """The mapping remembers what the copy carries, so the diff can compare."""
+        storage = make_storage(tmp_path)
+        entry = replace(
+            mirror_event(),
+            description="Agenda",
+            organizer="Chef <c@x>",
+            attendees="Chef <c@x>\nRoland <r@x>",
+        )
+        storage.upsert_mirror_event(entry, updated_at=datetime(2026, 7, 3, tzinfo=UTC))
+        assert storage.list_mirror_events() == [entry]
+
+    def test_existing_mapping_without_the_columns_is_migrated(
+        self, tmp_path: Path
+    ) -> None:
+        """The 192 live copies were mapped before the columns existed.
+
+        They must read back as "details unknown" (None) — that is exactly what
+        makes the mirror diff rewrite each of them exactly once.
+        """
+        db_path = tmp_path / "familienkalender.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE mirror_events (
+                source_key TEXT PRIMARY KEY,
+                resource_url TEXT NOT NULL,
+                etag TEXT NOT NULL DEFAULT '',
+                start TEXT NOT NULL,
+                end TEXT NOT NULL,
+                all_day INTEGER NOT NULL DEFAULT 0,
+                title TEXT NOT NULL DEFAULT '',
+                location TEXT,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO mirror_events
+                (source_key, resource_url, etag, start, end, all_day, title,
+                 location, updated_at)
+            VALUES ('3|u|2026-07-10T16:00:00+00:00', 'https://c/x.ics', '"e1"',
+                    '2026-07-10T18:00:00+00:00', '2026-07-10T19:00:00+00:00',
+                    0, 'Kundentermin', NULL, '2026-07-03T00:00:00+00:00');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        stored = Storage(db_path).list_mirror_events()[0]
+        assert stored.title == "Kundentermin"
+        assert stored.description is None
+        assert stored.organizer is None
+        assert stored.attendees is None
+        # Restarting the add-on repeatedly must stay a no-op.
+        assert Storage(db_path).list_mirror_events() == [stored]
 
 
 def birthday_block(

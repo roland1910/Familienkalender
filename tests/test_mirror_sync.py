@@ -189,6 +189,9 @@ def meeting(
     start: datetime | None = None,
     hours: int = 1,
     location: str | None = None,
+    description: str | None = None,
+    organizer: str | None = None,
+    attendees: str | None = None,
 ) -> CalendarEvent:
     begin = start or datetime(2026, 7, 20, 8, 15, tzinfo=UTC)
     return CalendarEvent(
@@ -198,6 +201,9 @@ def meeting(
         end=begin + timedelta(hours=hours),
         all_day=False,
         location=location,
+        description=description,
+        organizer=organizer,
+        attendees=attendees,
     )
 
 
@@ -463,6 +469,137 @@ class TestUpdate:
         result = await _run(storage, backend)
         assert result.inserted == 1
         assert len(backend.own) == 1
+
+
+@pytest.mark.anyio
+class TestCopiedDetails:
+    """Details reach the copy and stay in sync (Etappe 45, part B).
+
+    Includes the one-off migration of the copies that already live in
+    Roland's calendar: their mapping rows predate the columns, so they read
+    as "details unknown" and must be rewritten exactly once.
+    """
+
+    def descriptions(self, backend: RecordingCaldav) -> str:
+        (_, ics), = list(backend.own.values())
+        return ics.replace("\r\n ", "")
+
+    async def test_details_are_written_into_the_copy(self, env) -> None:
+        storage, xalt_id, _ = env
+        store_events(
+            storage,
+            xalt_id,
+            [
+                meeting(
+                    description="Agenda",
+                    organizer="Chef <c@x>",
+                    attendees="Chef <c@x>\nRoland <r@x>",
+                )
+            ],
+        )
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+
+        ics = self.descriptions(backend)
+        assert "DESCRIPTION:Eingeladen von: Chef <c@x>" in ics
+        assert "Teilnehmer:\\n- Chef <c@x>\\n- Roland <r@x>" in ics
+        assert "Agenda" in ics
+
+    async def test_changed_description_updates_the_copy(self, env) -> None:
+        storage, xalt_id, _ = env
+        store_events(storage, xalt_id, [meeting(description="Alte Agenda")])
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+
+        store_events(storage, xalt_id, [meeting(description="Neue Agenda")])
+        result = await _run(storage, backend)
+
+        assert result.updated == 1
+        assert "Neue Agenda" in self.descriptions(backend)
+
+    async def test_changed_attendees_update_the_copy(self, env) -> None:
+        storage, xalt_id, _ = env
+        store_events(storage, xalt_id, [meeting(attendees="A <a@x>")])
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+
+        store_events(storage, xalt_id, [meeting(attendees="A <a@x>\nB <b@x>")])
+        result = await _run(storage, backend)
+
+        assert result.updated == 1
+        assert "- B <b@x>" in self.descriptions(backend)
+
+    async def test_changed_organizer_updates_the_copy(self, env) -> None:
+        storage, xalt_id, _ = env
+        store_events(storage, xalt_id, [meeting(organizer="A <a@x>")])
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+
+        store_events(storage, xalt_id, [meeting(organizer="B <b@x>")])
+        result = await _run(storage, backend)
+
+        assert result.updated == 1
+        assert "Eingeladen von: B <b@x>" in self.descriptions(backend)
+
+    async def test_unchanged_details_are_a_null_diff(self, env) -> None:
+        storage, xalt_id, _ = env
+        event = meeting(description="Agenda", organizer="Chef <c@x>")
+        store_events(storage, xalt_id, [event])
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+        puts_after_insert = len([r for r in backend.requests if r.method == "PUT"])
+
+        result = await _run(storage, backend)
+
+        assert (result.inserted, result.updated, result.deleted) == (0, 0, 0)
+        assert len([r for r in backend.requests if r.method == "PUT"]) == (
+            puts_after_insert
+        )
+
+    async def test_an_event_without_details_is_never_rewritten(self, env) -> None:
+        """Most private appointments carry nothing — they must stay untouched."""
+        storage, xalt_id, _ = env
+        store_events(storage, xalt_id, [meeting()])
+        backend = RecordingCaldav()
+        await _run(storage, backend)
+
+        result = await _run(storage, backend)
+        assert (result.inserted, result.updated) == (0, 0)
+
+    async def test_existing_copies_are_migrated_exactly_once(self, env) -> None:
+        """The 192 live copies: one rewrite, then a null diff forever.
+
+        Simulated the way it will really happen — a mapping row and a copy
+        written before the columns existed (hence no details anywhere), while
+        the source event now carries them.
+        """
+        storage, xalt_id, _ = env
+        detailed = meeting(description="Agenda", organizer="Chef <c@x>")
+        plain = meeting()  # same key, no details: what was written back then
+        key = source_key(xalt_id, detailed)
+        backend = RecordingCaldav()
+        url = backend.seed_own(key, plain)
+        storage.upsert_mirror_event(
+            MirrorEvent(
+                source_key=key,
+                resource_url=url,
+                etag=backend.own[url][0],
+                start=plain.start,
+                end=plain.end,
+                all_day=False,
+                title=plain.title,
+                location=None,
+            ),
+            updated_at=NOW,
+        )
+        store_events(storage, xalt_id, [detailed])
+
+        first = await _run(storage, backend)
+        assert (first.updated, first.inserted, first.deleted) == (1, 0, 0)
+        assert "Agenda" in self.descriptions(backend)
+
+        second = await _run(storage, backend)
+        assert (second.updated, second.inserted, second.deleted) == (0, 0, 0)
 
 
 @pytest.mark.anyio

@@ -271,10 +271,14 @@ class MirrorEvent:
     Maps a source event (identified by ``source_key`` = source_id|uid|start,
     the same identity the events table and the busy sync use) to the CalDAV
     resource that mirrors it. ``etag`` is the server's last known validator
-    and drives the conditional ``If-Match`` requests; ``title``/``location``
-    and the time range are what the diff compares against the source event,
-    and the stored title is what the change log shows when a copy is deleted
-    (the source appointment is gone by then).
+    and drives the conditional ``If-Match`` requests; ``title``/``location``,
+    the detail fields and the time range are what the diff compares against
+    the source event, and the stored title is what the change log shows when
+    a copy is deleted (the source appointment is gone by then).
+
+    The detail fields default to None, which reads as "not known yet" — that
+    is what makes every copy written before Etappe 45 differ from its source
+    exactly once, get rewritten with the details, and then compare equal.
 
     Every update/delete goes through ``resource_url`` from this table, so a
     write always targets a resource the add-on created itself.
@@ -288,6 +292,9 @@ class MirrorEvent:
     all_day: bool
     title: str = ""
     location: str | None = None
+    description: str | None = None
+    organizer: str | None = None
+    attendees: str | None = None
 
 
 # The two calendars the birthday sync can write into. Both are optional and
