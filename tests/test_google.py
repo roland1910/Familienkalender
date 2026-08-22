@@ -266,6 +266,122 @@ class TestFetchEvents:
         assert dict(captured[1].url.params)["pageToken"] == "page-2"
 
 
+def attendee_item(
+    uid: str, *, attendees: list[dict] | None = None, hour: int = 9
+) -> dict:
+    """A confirmed timed event with an arbitrary attendee list."""
+    item = {
+        "id": uid,
+        "status": "confirmed",
+        "summary": "Serientermin",
+        "start": {"dateTime": f"2026-07-13T{hour:02d}:00:00+02:00"},
+        "end": {"dateTime": f"2026-07-13T{hour + 1:02d}:00:00+02:00"},
+    }
+    if attendees is not None:
+        item["attendees"] = attendees
+    return item
+
+
+@pytest.mark.anyio
+class TestDeclinedEvents:
+    """Roland declining an invitation must remove it everywhere.
+
+    An event he declined stays in Google (struck through) but is no longer an
+    appointment of his — it must vanish from the views, the feed and, via the
+    normal mirror diff, from the MoreValue copy.
+    """
+
+    async def _fetch(self, tmp_path: Path, items: list[dict]) -> list[str]:
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        async with make_client([], pages=[{"items": items}]) as client:
+            events = await fetch_events(
+                CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+            )
+        return [event.uid for event in events]
+
+    async def test_own_declined_attendee_skips_the_event(self, tmp_path: Path) -> None:
+        item = attendee_item(
+            "evt-declined",
+            attendees=[
+                {"email": "chef@example.com", "responseStatus": "accepted"},
+                {
+                    "email": "roland@example.com",
+                    "self": True,
+                    "responseStatus": "declined",
+                },
+            ],
+        )
+        assert await self._fetch(tmp_path, [item, TIMED_ITEM]) == ["evt-timed"]
+
+    @pytest.mark.parametrize(
+        "status", ["accepted", "tentative", "needsAction", "unknown-future-value"]
+    )
+    async def test_every_other_own_response_keeps_the_event(
+        self, tmp_path: Path, status: str
+    ) -> None:
+        item = attendee_item(
+            "evt-kept",
+            attendees=[{"email": "r@x", "self": True, "responseStatus": status}],
+        )
+        assert await self._fetch(tmp_path, [item]) == ["evt-kept"]
+
+    async def test_own_attendee_without_response_status_is_kept(
+        self, tmp_path: Path
+    ) -> None:
+        item = attendee_item("evt-no-status", attendees=[{"email": "r@x", "self": True}])
+        assert await self._fetch(tmp_path, [item]) == ["evt-no-status"]
+
+    async def test_event_without_attendees_is_kept(self, tmp_path: Path) -> None:
+        """Self-created appointments carry no attendee list at all."""
+        assert await self._fetch(tmp_path, [attendee_item("evt-solo")]) == ["evt-solo"]
+
+    async def test_someone_elses_decline_never_removes_the_event(
+        self, tmp_path: Path
+    ) -> None:
+        """Only Roland's OWN entry (self=true) decides — a colleague's does not."""
+        item = attendee_item(
+            "evt-foreign-decline",
+            attendees=[
+                {"email": "kollege@example.com", "responseStatus": "declined"},
+                {"email": "r@x", "self": True, "responseStatus": "accepted"},
+            ],
+        )
+        assert await self._fetch(tmp_path, [item]) == ["evt-foreign-decline"]
+
+    async def test_declined_without_self_flag_is_kept(self, tmp_path: Path) -> None:
+        """No self entry means no statement about Roland — never filter."""
+        item = attendee_item(
+            "evt-no-self",
+            attendees=[{"email": "kollege@example.com", "responseStatus": "declined"}],
+        )
+        assert await self._fetch(tmp_path, [item]) == ["evt-no-self"]
+
+    async def test_malformed_attendee_list_does_not_filter(self, tmp_path: Path) -> None:
+        item = attendee_item("evt-broken-attendees")
+        item["attendees"] = "declined"  # not a list — foreign data may be anything
+        assert await self._fetch(tmp_path, [item]) == ["evt-broken-attendees"]
+
+    async def test_single_declined_occurrence_of_a_series(self, tmp_path: Path) -> None:
+        """singleEvents=true expands a series; only the declined one goes.
+
+        Google hands back each occurrence as its own item with its own
+        attendee list, so declining one appointment of a series removes
+        exactly that one.
+        """
+        accepted = {"email": "r@x", "self": True, "responseStatus": "accepted"}
+        declined = {"email": "r@x", "self": True, "responseStatus": "declined"}
+        items = [
+            attendee_item("series_20260713T070000Z", attendees=[accepted], hour=9),
+            attendee_item("series_20260720T070000Z", attendees=[declined], hour=10),
+            attendee_item("series_20260727T070000Z", attendees=[accepted], hour=11),
+        ]
+        assert await self._fetch(tmp_path, items) == [
+            "series_20260713T070000Z",
+            "series_20260727T070000Z",
+        ]
+
+
 @pytest.mark.anyio
 class TestFetchLimits:
     async def test_pagination_is_capped(self, tmp_path: Path) -> None:

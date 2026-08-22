@@ -171,6 +171,40 @@ def _is_own_busy_block(item: dict[str, Any]) -> bool:
     return is_busy_block_title(item.get("summary"))
 
 
+def _is_declined(item: dict[str, Any]) -> bool:
+    """Whether the connected account DECLINED this invitation.
+
+    A declined appointment stays in Google (struck through) but is no longer
+    one of Roland's appointments, so it must not enter the events table at
+    all: it then disappears from the views, from the ICS feed and — through
+    the ordinary mirror diff — from its MoreValue copy. The rule applies to
+    every Google source alike (an appointment somebody declined is not an
+    appointment, whoever's calendar it sits in).
+
+    The decision rests on the OWN attendee entry only, i.e. the one Google
+    flags with ``self: true``. Two pitfalls this guards against:
+
+    - Self-created appointments and appointments without an attendee list
+      carry no own entry at all. "No statement" must never mean "declined",
+      so anything but an explicit own ``declined`` keeps the event —
+      ``accepted``, ``tentative``, ``needsAction``, a missing status and any
+      future value alike.
+    - A COLLEAGUE declining says nothing about Roland; only the ``self``
+      entry counts.
+
+    Foreign data may be shaped arbitrarily, hence the defensive type checks.
+    """
+    attendees = item.get("attendees")
+    if not isinstance(attendees, list):
+        return False
+    return any(
+        isinstance(attendee, dict)
+        and attendee.get("self") is True
+        and attendee.get("responseStatus") == "declined"
+        for attendee in attendees
+    )
+
+
 def _item_to_event(item: dict[str, Any]) -> CalendarEvent:
     all_day = "date" in item["start"]
     if all_day:
@@ -265,6 +299,11 @@ async def fetch_events(
             # _is_own_busy_block): they mirror MoreValue appointments and
             # would otherwise duplicate them in the calendar and feed.
             if _is_own_busy_block(item):
+                continue
+            # An invitation the account itself declined is not an appointment
+            # any more (see _is_declined) — skipping it here is what removes
+            # it from the views, the feed and the MoreValue mirror.
+            if _is_declined(item):
                 continue
             # A malformed item (missing start/end fields) must not abort
             # the whole fetch: skip it and keep the rest.

@@ -27,6 +27,8 @@ from app.mirror_sync import (
     run_mirror_sync,
 )
 from app.models import CalendarEvent, MirrorEvent
+from app.sources import google
+from app.sources.google import save_tokens
 from app.storage import Storage
 from app.sync_identity import source_key
 
@@ -1150,3 +1152,79 @@ class TestResourceNaming:
         name = resource_name(source_key(3, event))
         assert name.startswith("familienkalender-mirror-")
         assert "foreign-uid" not in name
+
+
+@pytest.mark.anyio
+class TestDeclinedAppointmentDisappears:
+    """Declining a Google invitation must remove the MoreValue copy.
+
+    Roland's report: an appointment he declines stays (struck through) in
+    Google, "aber im MV Kalender ist der Termin weiterhin unverändert, hier
+    müsste er entfernt werden". The read client drops declined items, so the
+    ordinary mirror diff does the removal — this test wires both halves
+    together instead of assuming they meet.
+    """
+
+    async def _google_events(self, tmp_path: Path, item: dict) -> list[CalendarEvent]:
+        token_file = tmp_path / "google.json"
+        save_tokens(
+            token_file,
+            {
+                "client_id": "c",
+                "client_secret": "s",
+                "refresh_token": "r",
+                "access_token": "a",
+                "access_token_expires_at": (
+                    datetime.now(UTC) + timedelta(hours=5)
+                ).isoformat(),
+            },
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"items": [item]})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await google.fetch_events(
+                {"calendar_id": "roland@xalt.example"},
+                datetime(2026, 1, 1, tzinfo=UTC),
+                datetime(2028, 1, 1, tzinfo=UTC),
+                token_file=token_file,
+                client=http,
+            )
+
+    async def test_copy_is_deleted_after_the_invitation_is_declined(
+        self, env, tmp_path: Path
+    ) -> None:
+        storage, xalt_id, _ = env
+        invitation = {
+            "id": "u-invite",
+            "status": "confirmed",
+            "summary": "Kundentermin",
+            "start": {"dateTime": "2026-07-20T08:15:00+00:00"},
+            "end": {"dateTime": "2026-07-20T09:15:00+00:00"},
+            "attendees": [
+                {"email": "r@xalt.example", "self": True, "responseStatus": "accepted"}
+            ],
+        }
+        accepted = await self._google_events(tmp_path, invitation)
+        store_events(storage, xalt_id, accepted)
+        backend = RecordingCaldav()
+        first = await _run(storage, backend, source_results={xalt_id: None})
+        assert first.inserted == 1
+        assert backend.summaries() == {"Kundentermin"}
+
+        declined_item = {
+            **invitation,
+            "attendees": [
+                {"email": "r@xalt.example", "self": True, "responseStatus": "declined"}
+            ],
+        }
+        declined = await self._google_events(tmp_path, declined_item)
+        assert declined == []  # the read client already dropped it
+        store_events(storage, xalt_id, declined)
+
+        second = await _run(storage, backend, source_results={xalt_id: None})
+
+        assert second.deleted == 1
+        assert backend.own == {}
+        assert storage.count_mirror_events() == 0
