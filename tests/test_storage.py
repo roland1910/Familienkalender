@@ -1361,3 +1361,153 @@ class TestSyncEventsDiff:
             source_id, [shifted], WINDOW_START, WINDOW_END, synced_at=NOW
         )
         assert sorted(c.action for c in changes) == ["added", "removed"]
+
+
+class TestEventDetails:
+    """Description, organizer and attendees (Etappe 45, part B).
+
+    Roland asked for more detail in the MoreValue copies ("wer eingeladen hat
+    und die teilnehmer und falls es im google termin eine beschreibung gibt").
+    The events table carries the three fields so the mirror diff can compare
+    them; they are plain text (one attendee per line).
+    """
+
+    def detailed(self, **overrides) -> CalendarEvent:
+        base = {
+            "uid": "uid-detail",
+            "title": "Kundentermin",
+            "start": datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+            "end": datetime(2026, 7, 10, 9, 0, tzinfo=UTC),
+            "all_day": False,
+            "description": "Agenda:\n- Rückblick",
+            "organizer": "Chef Chefin <chef@example.com>",
+            "attendees": "Chef Chefin <chef@example.com>\nRoland <r@x>",
+        }
+        return CalendarEvent(**{**base, **overrides})
+
+    def test_defaults_are_empty(self) -> None:
+        event = timed_event()
+        assert event.description is None
+        assert event.organizer is None
+        assert event.attendees is None
+
+    def test_roundtrip_through_storage(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="google", name="Xalt", config={})
+        storage.sync_events(
+            source_id, [self.detailed()], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        stored = storage.get_events(WINDOW_START, WINDOW_END)[0].event
+        assert stored.description == "Agenda:\n- Rückblick"
+        assert stored.organizer == "Chef Chefin <chef@example.com>"
+        assert stored.attendees == "Chef Chefin <chef@example.com>\nRoland <r@x>"
+
+    def test_upsert_writes_the_new_values(self, tmp_path: Path) -> None:
+        """A changed description must actually reach the table.
+
+        The upsert — not the returned diff — is what persists; without the
+        columns in the SET clause a changed description would never make it
+        into MoreValue.
+        """
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="google", name="Xalt", config={})
+        storage.sync_events(
+            source_id, [self.detailed()], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        storage.sync_events(
+            source_id,
+            [self.detailed(description="Neue Agenda", attendees="Roland <r@x>")],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        stored = storage.get_events(WINDOW_START, WINDOW_END)
+        assert len(stored) == 1
+        assert stored[0].event.description == "Neue Agenda"
+        assert stored[0].event.attendees == "Roland <r@x>"
+
+    def test_detail_changes_are_not_change_log_noise(self, tmp_path: Path) -> None:
+        """The incoming diff deliberately ignores the three detail fields.
+
+        Every Google event carries an organizer, so counting them would have
+        flooded the change log with one "updated" entry per appointment on the
+        single sync that introduced the columns. Title/time/location remain the
+        appointment-level changes Roland tracks; the mirror sync compares the
+        details itself and logs the copies it rewrites.
+        """
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="google", name="Xalt", config={})
+        storage.sync_events(
+            source_id, [self.detailed()], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        changes = storage.sync_events(
+            source_id,
+            [self.detailed(description="ganz anders", organizer="X <x@y>")],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        assert changes == []
+
+    def test_title_change_is_still_logged(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        source_id = storage.add_source(type="google", name="Xalt", config={})
+        storage.sync_events(
+            source_id, [self.detailed()], WINDOW_START, WINDOW_END, synced_at=NOW
+        )
+        changes = storage.sync_events(
+            source_id,
+            [self.detailed(title="Anderer Titel")],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        assert [(c.action, c.title) for c in changes] == [("updated", "Anderer Titel")]
+
+    def test_existing_db_without_the_columns_is_migrated(self, tmp_path: Path) -> None:
+        """A pre-Etappe-45 database gains the columns; old rows read as None."""
+        db_path = tmp_path / "familienkalender.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                display_mode TEXT NOT NULL DEFAULT 'full',
+                last_sync_at TEXT,
+                last_sync_error TEXT
+            );
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                uid TEXT NOT NULL,
+                title TEXT NOT NULL,
+                start TEXT NOT NULL,
+                end TEXT NOT NULL,
+                all_day INTEGER NOT NULL DEFAULT 0,
+                location TEXT,
+                last_synced TEXT NOT NULL,
+                UNIQUE (source_id, uid, start)
+            );
+            INSERT INTO sources (type, name) VALUES ('google', 'Xalt');
+            INSERT INTO events (source_id, uid, title, start, end, all_day, last_synced)
+            VALUES (1, 'alt', 'Alter Termin', '2026-07-10T08:00:00+00:00',
+                    '2026-07-10T09:00:00+00:00', 0, '2026-07-03T12:00:00+00:00');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        storage = Storage(db_path)
+        stored = storage.get_events(WINDOW_START, WINDOW_END)[0].event
+        assert stored.title == "Alter Termin"
+        assert stored.description is None
+        assert stored.organizer is None
+        assert stored.attendees is None
+        # And a second start (the add-on restarts often) stays a no-op.
+        assert Storage(db_path).get_events(WINDOW_START, WINDOW_END)[0].event.title == (
+            "Alter Termin"
+        )

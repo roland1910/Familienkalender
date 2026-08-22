@@ -67,6 +67,44 @@ class TestTextLimits:
         assert stored[0].event.title == "T" * limits.MAX_TEXT_LENGTH
         assert stored[0].event.location == "L" * limits.MAX_TEXT_LENGTH
 
+    async def test_detail_fields_are_truncated_on_sync(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Description and attendee list get the longer, but still hard, cap.
+
+        A meeting body or a large distribution list legitimately exceeds the
+        1000 characters that bound a title, so they have their own limit —
+        but they are still foreign text and must stay bounded.
+        """
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(
+            type="caldav", name="Firma", config={"calendar_url": "https://x/cal/"}
+        )
+        hostile = CalendarEvent(
+            uid="uid-details",
+            title="Termin",
+            start=datetime(2026, 7, 10, 18, 0, tzinfo=UTC),
+            end=datetime(2026, 7, 10, 19, 0, tzinfo=UTC),
+            all_day=False,
+            description="D" * 50000,
+            organizer="O" * 5000,
+            attendees="A" * 50000,
+        )
+
+        async def fake_fetch(config, window_start, window_end, *, client=None):
+            return [hostile]
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        await sync_all(storage, now=FIXED_NOW)
+
+        stored = storage.get_events(
+            datetime(2026, 7, 1, tzinfo=UTC), datetime(2026, 8, 1, tzinfo=UTC)
+        )[0].event
+        assert stored.description == "D" * limits.MAX_LONG_TEXT_LENGTH
+        assert stored.attendees == "A" * limits.MAX_LONG_TEXT_LENGTH
+        # The organizer is a single person line — the ordinary text cap.
+        assert stored.organizer == "O" * limits.MAX_TEXT_LENGTH
+
     async def test_short_texts_and_missing_location_stay_unchanged(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

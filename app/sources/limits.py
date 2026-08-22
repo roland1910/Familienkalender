@@ -27,18 +27,39 @@ MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 # and API payload size. The frontend additionally caps what it displays.
 MAX_TEXT_LENGTH = 1000
 
+# The description and the attendee list legitimately run longer than a title
+# (a meeting body, a department-wide invitation), so they get their own cap
+# instead of being cut at 1000 characters. Still a hard bound: the text is
+# foreign, it is stored per event AND copied into the mirrored CalDAV
+# resource, so an unbounded value would hit the database twice over.
+MAX_LONG_TEXT_LENGTH = 4000
+
 
 class SyncLimitExceededError(Exception):
     """A protective limit was exceeded while fetching a source."""
 
 
+def _clip(value: str | None, limit: int) -> str | None:
+    return value[:limit] if value else value
+
+
 def clamp_event_text(event: CalendarEvent) -> CalendarEvent:
-    """Truncate title and location to MAX_TEXT_LENGTH characters."""
-    title = event.title[:MAX_TEXT_LENGTH]
-    location = event.location[:MAX_TEXT_LENGTH] if event.location else event.location
-    if title == event.title and location == event.location:
-        return event
-    return dataclasses.replace(event, title=title, location=location)
+    """Truncate every foreign text field of an event to its limit.
+
+    Title, location and organizer share MAX_TEXT_LENGTH; the description and
+    the attendee list use the longer MAX_LONG_TEXT_LENGTH (see above).
+    """
+    clamped = dataclasses.replace(
+        event,
+        title=event.title[:MAX_TEXT_LENGTH],
+        location=_clip(event.location, MAX_TEXT_LENGTH),
+        organizer=_clip(event.organizer, MAX_TEXT_LENGTH),
+        description=_clip(event.description, MAX_LONG_TEXT_LENGTH),
+        attendees=_clip(event.attendees, MAX_LONG_TEXT_LENGTH),
+    )
+    # Returning the original when nothing changed keeps the common case
+    # allocation-free (and identity-stable for callers comparing objects).
+    return event if clamped == event else clamped
 
 
 def check_event_count(count: int) -> None:

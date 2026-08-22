@@ -176,6 +176,15 @@ class CalendarEvent:
     Timed events carry timezone-aware datetimes; all-day events carry plain
     dates with an exclusive end date (iCalendar semantics: a one-day all-day
     event on 2026-07-12 has end 2026-07-13).
+
+    ``description``, ``organizer`` and ``attendees`` are the detail fields the
+    mirror sync copies into Roland's MoreValue calendar (Etappe 45, his
+    explicit request). All three are plain, already display-ready text —
+    ``attendees`` holds one participant per line — rather than structured
+    objects: nothing in the add-on reasons ABOUT them, everything just stores,
+    compares and renders them, so a single string keeps the model hashable,
+    the storage column trivial and the diff a plain comparison. Only the
+    Google read client fills them today; every other source leaves them None.
     """
 
     uid: str
@@ -184,6 +193,9 @@ class CalendarEvent:
     end: datetime | date
     all_day: bool
     location: str | None = None
+    description: str | None = None
+    organizer: str | None = None
+    attendees: str | None = None
 
     def start_as_datetime(self) -> datetime:
         """Start as an aware datetime (all-day: local midnight)."""

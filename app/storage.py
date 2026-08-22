@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS events (
     end TEXT NOT NULL,
     all_day INTEGER NOT NULL DEFAULT 0,
     location TEXT,
+    description TEXT,
+    organizer TEXT,
+    attendees TEXT,
     last_synced TEXT NOT NULL,
     UNIQUE (source_id, uid, start)
 );
@@ -179,6 +182,9 @@ def _row_to_event(row: sqlite3.Row) -> CalendarEvent:
         end=_decode_moment(row["end"], all_day),
         all_day=all_day,
         location=row["location"],
+        description=row["description"],
+        organizer=row["organizer"],
+        attendees=row["attendees"],
     )
 
 
@@ -250,6 +256,17 @@ class Storage:
                 "ALTER TABLE sources ADD COLUMN feed_priority"
                 " INTEGER NOT NULL DEFAULT 0"
             )
+
+        event_columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
+        for column in ("description", "organizer", "attendees"):
+            if column not in event_columns:
+                # Etappe 45: the mirror sync now carries the appointment
+                # details into MoreValue. Nullable and without a backfill —
+                # an existing row simply has no details known yet, and the
+                # next sync fills them in from the source.
+                # The column name is spliced from the literal tuple above,
+                # never from input — not an injection surface.
+                conn.execute(f"ALTER TABLE events ADD COLUMN {column} TEXT")
 
         photo_columns = {row["name"] for row in conn.execute("PRAGMA table_info(photos)")}
         if "kind" not in photo_columns:
@@ -652,6 +669,14 @@ class Storage:
           thus shows as removed(old)+added(new). When nothing changed the diff
           is empty (no change-log noise); a first sync against an already
           populated DB (e.g. right after a redeploy) therefore logs nothing.
+
+        The detail fields (description, organizer, attendees) are persisted but
+        deliberately do NOT count as a change here: virtually every Google event
+        carries an organizer, so the single sync that introduced the columns
+        would have logged one "updated" entry per existing appointment and
+        pushed the real four weeks of history out of the capped log. The change
+        log stays on the appointment-level facts (title, time, place); the
+        mirror sync compares the details itself and logs the copies it rewrites.
         """
         fetched_keys = {(event.uid, _encode_moment(event.start)) for event in events}
         synced_at_raw = synced_at.astimezone(UTC).isoformat()
@@ -696,11 +721,14 @@ class Storage:
                 )
             conn.executemany(
                 "INSERT INTO events"
-                " (source_id, uid, title, start, end, all_day, location, last_synced)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                " (source_id, uid, title, start, end, all_day, location,"
+                " description, organizer, attendees, last_synced)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (source_id, uid, start) DO UPDATE SET"
                 " title = excluded.title, end = excluded.end,"
                 " all_day = excluded.all_day, location = excluded.location,"
+                " description = excluded.description,"
+                " organizer = excluded.organizer, attendees = excluded.attendees,"
                 " last_synced = excluded.last_synced",
                 [
                     (
@@ -711,6 +739,9 @@ class Storage:
                         _encode_moment(event.end),
                         int(event.all_day),
                         event.location,
+                        event.description,
+                        event.organizer,
+                        event.attendees,
                         synced_at_raw,
                     )
                     for event in events
