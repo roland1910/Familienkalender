@@ -183,6 +183,41 @@ def resource_url(
     )
 
 
+# Labels of the two detail blocks in the copy's description. German, because
+# this text is calendar CONTENT Roland reads in Nextcloud, not code.
+_ORGANIZER_LABEL = "Eingeladen von: "
+_ATTENDEES_LABEL = "Teilnehmer:"
+
+
+def mirror_description(event: CalendarEvent) -> str:
+    """The copy's DESCRIPTION: organizer, attendees and the original body.
+
+    Etappe 45, and a deliberate reversal of the earlier "details are not
+    copied" rule: Roland asked for exactly this ("wer eingeladen hat und die
+    teilnehmer und falls es im google termin eine beschreibung gibt sollte
+    diese ebenfalls gesynct werden"). It is his own calendar, and the copy is
+    the working view of his own work day.
+
+    Everything goes into ONE description rather than into ORGANIZER/ATTENDEE
+    properties on purpose: Nextcloud's CalDAV server implements iTIP
+    scheduling, so a resource carrying those properties can make it send
+    invitation mails to the listed addresses. A one-way private copy must
+    never talk to Roland's colleagues, and a description is inert.
+
+    Returns "" when the event has no details at all — the caller then writes
+    no DESCRIPTION property.
+    """
+    blocks: list[str] = []
+    if organizer := (event.organizer or "").strip():
+        blocks.append(f"{_ORGANIZER_LABEL}{organizer}")
+    people = [line.strip() for line in (event.attendees or "").splitlines()]
+    if lines := [f"- {person}" for person in people if person]:
+        blocks.append("\n".join([_ATTENDEES_LABEL, *lines]))
+    if description := (event.description or "").strip():
+        blocks.append(description)
+    return "\n\n".join(blocks)
+
+
 def build_ical(
     source_key: str,
     event: CalendarEvent,
@@ -193,13 +228,16 @@ def build_ical(
 ) -> bytes:
     """The complete VCALENDAR document for one written object.
 
-    Carries title, times and location only. Description and attendees are
-    deliberately NOT copied: the mirror exists so Roland sees his Xalt
-    appointments in MoreValue, and copying meeting bodies/participant lists
-    into a second system would spread data that nobody needs there.
+    Carries title, times, location and — since Etappe 45 — the appointment's
+    details in a single DESCRIPTION (see ``mirror_description``). Every value
+    goes through icalendar's own property encoding, which escapes newlines,
+    commas, semicolons and backslashes; a foreign title or body therefore
+    cannot inject a second component into the document.
 
     ``yearly`` adds ``RRULE:FREQ=YEARLY``: birthdays are recurring by nature,
-    so one series per person replaces a fresh copy every year.
+    so one series per person replaces a fresh copy every year. A birthday
+    series carries no details (the title is all there is), so it never gets a
+    description either.
     """
     calendar = icalendar.Calendar()
     calendar.add("prodid", PRODID)
@@ -220,6 +258,8 @@ def build_ical(
         component.add("rrule", {"freq": "yearly"})
     if event.location:
         component.add("location", event.location)
+    if description := mirror_description(event):
+        component.add("description", description)
     component.add(namespace.marker_prop, source_key)
     component.add(MIRROR_OWNER_PROP, MIRROR_OWNER_VALUE)
     calendar.add_component(component)

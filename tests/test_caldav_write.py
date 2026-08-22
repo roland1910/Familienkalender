@@ -8,10 +8,12 @@ configured collection, and only reports components carrying its own marker
 as its own.
 """
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from xml.sax.saxutils import escape
 
 import httpx
+import icalendar
 import pytest
 
 from app.caldav_write import (
@@ -118,11 +120,9 @@ class TestIcalGeneration:
         assert "DTEND:20260720T110000Z" in text
         assert "LOCATION:Besprechungsraum 2" in text
 
-    def test_description_and_attendees_are_not_copied(self) -> None:
+    def test_an_event_without_details_has_no_description(self) -> None:
         text = build_ical(SOURCE_KEY, TIMED_EVENT).decode()
         assert "DESCRIPTION" not in text
-        assert "ATTENDEE" not in text
-        assert "ORGANIZER" not in text
 
     def test_all_day_event_uses_exclusive_date_range(self) -> None:
         text = build_ical("1|d|2026-07-20", ALL_DAY_EVENT).decode()
@@ -154,6 +154,126 @@ class TestIcalGeneration:
     def test_collection_without_trailing_slash_is_normalized(self) -> None:
         url = resource_url(COLLECTION.rstrip("/"), SOURCE_KEY)
         assert url == COLLECTION + resource_name(SOURCE_KEY)
+
+
+DETAILED_EVENT = CalendarEvent(
+    uid="foreign-uid@xalt.example",
+    title="Kundentermin",
+    start=datetime(2026, 7, 20, 10, 15, tzinfo=UTC),
+    end=datetime(2026, 7, 20, 11, 0, tzinfo=UTC),
+    all_day=False,
+    location="Besprechungsraum 2",
+    description="Agenda:\nRückblick; Planung, Termine",
+    organizer="Chef Chefin <chef@example.com>",
+    attendees="Chef Chefin <chef@example.com>\nRoland <r@xalt.example>",
+)
+
+
+def only_vevent(text: str) -> icalendar.Event:
+    """Re-parse a generated document and return its single VEVENT.
+
+    Parsing back is the point: it proves the generator escaped everything,
+    because a broken escape would show up as extra components or lost text.
+    """
+    components = list(icalendar.Calendar.from_ical(text).walk("VEVENT"))
+    assert len(components) == 1
+    return components[0]
+
+
+class TestCopiedDetails:
+    """The mirrored copy carries the appointment's details (Etappe 45).
+
+    Roland asked for it in so many words: "wäre es super wenn in dem MV
+    kalender etwas mehr details zu den google terminen stehen würde. z.b. wer
+    eingeladen hat und die teilnehmer und falls es im google termin eine
+    beschreibung gibt sollte diese ebenfalls gesynct werden." It is his own
+    calendar and his own request, which is why the earlier "do not copy
+    meeting bodies" rule no longer applies.
+    """
+
+    def test_organizer_attendees_and_description_end_up_in_one_description(
+        self,
+    ) -> None:
+        value = str(only_vevent(build_ical(SOURCE_KEY, DETAILED_EVENT).decode())["DESCRIPTION"])
+        assert value == (
+            "Eingeladen von: Chef Chefin <chef@example.com>\n"
+            "\n"
+            "Teilnehmer:\n"
+            "- Chef Chefin <chef@example.com>\n"
+            "- Roland <r@xalt.example>\n"
+            "\n"
+            "Agenda:\n"
+            "Rückblick; Planung, Termine"
+        )
+
+    def test_no_scheduling_properties_are_written(self) -> None:
+        """ORGANIZER/ATTENDEE stay out on purpose.
+
+        Nextcloud's CalDAV server implements iTIP scheduling: a PUT carrying
+        those properties can make it send invitation mails to the listed
+        addresses. The copy is a private read-only view of Roland's Xalt
+        calendar, so it must never talk to his colleagues — the same people
+        are named in the (inert) description instead.
+        """
+        text = build_ical(SOURCE_KEY, DETAILED_EVENT).decode()
+        assert "\nATTENDEE" not in text
+        assert "\nORGANIZER" not in text
+
+    def test_each_detail_can_stand_alone(self) -> None:
+        only_body = build_ical(
+            SOURCE_KEY, replace(TIMED_EVENT, description="Nur Text")
+        ).decode()
+        assert str(only_vevent(only_body)["DESCRIPTION"]) == "Nur Text"
+
+        only_people = build_ical(
+            SOURCE_KEY, replace(TIMED_EVENT, attendees="A <a@x>")
+        ).decode()
+        assert str(only_vevent(only_people)["DESCRIPTION"]) == "Teilnehmer:\n- A <a@x>"
+
+    def test_blank_details_add_no_description(self) -> None:
+        text = build_ical(
+            SOURCE_KEY, replace(TIMED_EVENT, description="   ", attendees="\n \n")
+        ).decode()
+        assert "DESCRIPTION" not in text
+
+    def test_ical_special_characters_are_escaped(self) -> None:
+        """Newlines, commas, semicolons and backslashes must not break out."""
+        event = replace(TIMED_EVENT, description="Zeile 1\nZeile;2, drei\\vier")
+        text = build_ical(SOURCE_KEY, event).decode()
+        # Escaped on the wire ...
+        assert "\\nZeile\\;2\\, drei\\\\vier" in text.replace("\r\n ", "")
+        # ... and identical again after parsing.
+        assert str(only_vevent(text)["DESCRIPTION"]).endswith(
+            "Zeile 1\nZeile;2, drei\\vier"
+        )
+
+    def test_a_description_cannot_inject_a_second_component(self) -> None:
+        hostile = (
+            "harmlos\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n"
+            "UID:pwned@example.com\r\nSUMMARY:Eingeschleust\r\nEND:VEVENT\r\n"
+        )
+        text = build_ical(SOURCE_KEY, replace(TIMED_EVENT, description=hostile)).decode()
+        component = only_vevent(text)  # exactly one VEVENT survives
+        assert str(component["UID"]) == derived_uid(SOURCE_KEY)
+        assert str(component["SUMMARY"]) == "Kundentermin"
+        assert "Eingeschleust" in str(component["DESCRIPTION"])
+
+    def test_a_hostile_title_or_location_cannot_inject_either(self) -> None:
+        event = replace(
+            TIMED_EVENT,
+            title="Ende\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:Fake\r\nEND:VEVENT",
+            location="Raum\r\nX-EVIL:1",
+        )
+        component = only_vevent(build_ical(SOURCE_KEY, event).decode())
+        assert component.get("X-EVIL") is None
+        assert "Fake" in str(component["SUMMARY"])
+
+    def test_a_birthday_series_carries_no_description(self) -> None:
+        """The birthday sync is untouched: the title is all there is."""
+        text = build_ical(
+            PERSON_KEY, BIRTHDAY_EVENT, namespace=BIRTHDAY_NAMESPACE, yearly=True
+        ).decode()
+        assert "DESCRIPTION" not in text
 
 
 @pytest.mark.anyio
