@@ -87,6 +87,34 @@ class TestEventBody:
         assert body["start"]["dateTime"] == "2026-07-10T13:30:00+00:00"
         assert body["end"]["dateTime"] == "2026-07-10T14:30:00+00:00"
 
+    def test_block_stays_neutral_even_for_a_detailed_appointment(self) -> None:
+        """Hard constraint (Etappe 45): the busy block never gains details.
+
+        The mirror sync now copies description/organizer/attendees into
+        Roland's own MoreValue calendar, but a "Busy MV" block sits in his
+        employer's calendar and only says "unavailable" — nothing about the
+        appointment may leak there.
+        """
+        detailed = CalendarEvent(
+            uid="uid-3",
+            title="MoreValue-Meeting",
+            start=datetime(2026, 7, 10, 15, 30, tzinfo=BERLIN),
+            end=datetime(2026, 7, 10, 16, 30, tzinfo=BERLIN),
+            all_day=False,
+            location="Büro",
+            description="Vertrauliche Agenda",
+            organizer="Kunde Kundin <k@example.com>",
+            attendees="Kunde Kundin <k@example.com>",
+        )
+        body = event_body("3|uid-3|2026-07-10", detailed)
+        assert body["summary"] == BUSY_TITLE
+        assert "description" not in body
+        assert "attendees" not in body
+        assert "organizer" not in body
+        rendered = str(body)
+        assert "Vertrauliche" not in rendered
+        assert "k@example.com" not in rendered
+
     def test_all_day_block_uses_dates(self) -> None:
         body = event_body("3|uid-2|2026-07-12", all_day_event())
         assert body["start"]["date"] == "2026-07-12"

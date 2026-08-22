@@ -413,3 +413,56 @@ class TestFeedFormat:
         calendar = parse_feed(build_feed(storage, now=NOW))
         assert str(calendar["X-WR-CALNAME"]) == CALENDAR_NAME
         assert list(calendar.walk("VEVENT")) == []
+
+
+class TestFeedCarriesNoDetails:
+    """Hard constraint (Etappe 45): the feed stays title/time/place only.
+
+    Marina's phone subscribes to this feed over the internet, and the URL
+    token is the only thing protecting it. The details the mirror sync now
+    copies into Roland's own MoreValue calendar (description, organizer,
+    attendees) must therefore never appear here — build_feed adds its VEVENT
+    properties one by one, and this test nails that down.
+    """
+
+    def _feed_with_details(self, storage: Storage) -> str:
+        work_id = storage.add_source(
+            type="caldav", name="Firma", config={}, display_mode="filtered"
+        )
+        storage.sync_events(
+            work_id,
+            [
+                CalendarEvent(
+                    uid="work-evening",
+                    title="Kundentermin",
+                    start=datetime(2026, 7, 10, 16, 0, tzinfo=BERLIN),
+                    end=datetime(2026, 7, 10, 18, 0, tzinfo=BERLIN),
+                    all_day=False,
+                    location="Raum 2",
+                    description="Vertrauliche Agenda",
+                    organizer="Chef Chefin <chef@example.com>",
+                    attendees="Chef Chefin <chef@example.com>\nRoland <r@x>",
+                )
+            ],
+            WINDOW_START,
+            WINDOW_END,
+            synced_at=NOW,
+        )
+        return build_feed(storage, now=NOW).decode()
+
+    def test_no_description_organizer_or_attendees_in_the_feed(
+        self, storage: Storage
+    ) -> None:
+        text = self._feed_with_details(storage)
+        assert "DESCRIPTION" not in text
+        assert "ORGANIZER" not in text
+        assert "ATTENDEE" not in text
+        assert "Vertrauliche Agenda" not in text
+        assert "chef@example.com" not in text
+
+    def test_the_event_itself_is_still_there_with_title_and_place(
+        self, storage: Storage
+    ) -> None:
+        text = self._feed_with_details(storage)
+        assert "SUMMARY:Kundentermin" in text
+        assert "LOCATION:Raum 2" in text
