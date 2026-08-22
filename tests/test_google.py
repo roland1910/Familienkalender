@@ -476,6 +476,56 @@ class TestEventDetails:
         event = await self._fetch_one(tmp_path, {**TIMED_ITEM, "description": "  \n "})
         assert event.description is None
 
+    async def test_html_description_is_read_as_plain_text(self, tmp_path: Path) -> None:
+        """Etappe 45b, live finding: Google sends HTML, Nextcloud showed it raw."""
+        item = {
+            **TIMED_ITEM,
+            "description": (
+                '<div id="loom-description">\n'
+                "<b>This meeting will be recorded by Loom.</b><br>"
+                'Set up <a href="https://www.loom.com/notes?w=1&amp;x=2">Loom</a>.'
+                "\n</div>"
+            ),
+        }
+        event = await self._fetch_one(tmp_path, item)
+        assert event.description == (
+            "This meeting will be recorded by Loom.\n"
+            "Set up Loom (https://www.loom.com/notes?w=1&x=2)."
+        )
+
+    async def test_plain_text_description_is_not_mangled(self, tmp_path: Path) -> None:
+        item = {**TIMED_ITEM, "description": "Budget < 500 EUR\nAgenda:\n  1. Start"}
+        event = await self._fetch_one(tmp_path, item)
+        assert event.description == "Budget < 500 EUR\nAgenda:\n  1. Start"
+
+    async def test_markup_without_any_text_is_ignored(self, tmp_path: Path) -> None:
+        event = await self._fetch_one(
+            tmp_path, {**TIMED_ITEM, "description": "<div><br></div>"}
+        )
+        assert event.description is None
+
+    async def test_the_length_cap_applies_after_the_conversion(
+        self, tmp_path: Path
+    ) -> None:
+        """Order on purpose: unwrap here, clamp later (limits, in app.sync).
+
+        The markup below is far longer than the 4000-character cap while its
+        readable text is well under it — clamping first would have thrown away
+        real content in favour of tags.
+        """
+        paragraphs = "".join(
+            f'<p style="margin:0;padding:0;font-family:Arial">Zeile {i}</p>'
+            for i in range(200)
+        )
+        assert len(paragraphs) > 2 * limits.MAX_LONG_TEXT_LENGTH
+        event = await self._fetch_one(tmp_path, {**TIMED_ITEM, "description": paragraphs})
+
+        assert len(event.description) < limits.MAX_LONG_TEXT_LENGTH
+        assert event.description.startswith("Zeile 0")
+        assert event.description.endswith("Zeile 199")
+        # The clamp that runs afterwards has nothing left to cut.
+        assert limits.clamp_event_text(event).description == event.description
+
 
 @pytest.mark.anyio
 class TestFetchLimits:

@@ -29,6 +29,7 @@ import httpx
 
 from app.models import CalendarEvent, is_busy_block_title
 from app.sources import limits
+from app.sources.html_text import html_to_text
 from app.storage import resolve_data_dir
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,24 @@ def _clean_text(value: Any) -> str | None:
     return trimmed or None
 
 
+def _description_text(value: Any) -> str | None:
+    """The appointment body as READABLE text, or None.
+
+    Google delivers ``description`` as HTML more often than not (Etappe 45b,
+    live finding: the mirrored copies in Nextcloud showed ``<div …><b>…</b>``
+    as source code). ``html_to_text`` unwraps it while keeping the line
+    structure and the meeting links, and leaves a description that is already
+    plain text untouched. Converting HERE, at the only place that knows
+    Google's payload shape, means everything downstream — the events table,
+    the mirrored copy, the change-log diff — carries the same ready-made text.
+
+    The 4000-character cap comes later (``limits.clamp_event_text`` in
+    app.sync), deliberately: after the conversion the budget holds readable
+    text instead of markup.
+    """
+    return _clean_text(html_to_text(_clean_text(value)))
+
+
 def _person_label(person: Any) -> str | None:
     """One display line for an organizer/attendee: "Name <mail>".
 
@@ -266,7 +285,7 @@ def _item_to_event(item: dict[str, Any]) -> CalendarEvent:
         # request). Read here rather than in the mirror because this is the
         # only place that knows Google's payload shape; everything downstream
         # just carries the ready-made text.
-        description=_clean_text(item.get("description")),
+        description=_description_text(item.get("description")),
         organizer=_person_label(item.get("organizer")),
         attendees=_attendee_lines(item),
     )

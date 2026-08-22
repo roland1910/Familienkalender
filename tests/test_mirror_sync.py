@@ -601,6 +601,47 @@ class TestCopiedDetails:
         second = await _run(storage, backend)
         assert (second.updated, second.inserted, second.deleted) == (0, 0, 0)
 
+    async def test_copies_holding_raw_html_are_migrated_exactly_once(
+        self, env
+    ) -> None:
+        """Etappe 45b: the ~192 live copies carry Google's HTML source.
+
+        Same mechanism as the migration above, one step later: the mapping row
+        remembers the RAW markup that was written, while the source event now
+        holds the converted plain text. One rewrite, then a null diff.
+        """
+        storage, xalt_id, _ = env
+        raw_html = '<div><b>Loom</b><br>Siehe <a href="https://l.example/x">Link</a></div>'
+        clean = "Loom\nSiehe Link (https://l.example/x)"
+        old = meeting(description=raw_html)
+        key = source_key(xalt_id, old)
+        backend = RecordingCaldav()
+        url = backend.seed_own(key, old)
+        storage.upsert_mirror_event(
+            MirrorEvent(
+                source_key=key,
+                resource_url=url,
+                etag=backend.own[url][0],
+                start=old.start,
+                end=old.end,
+                all_day=False,
+                title=old.title,
+                location=None,
+                description=raw_html,
+            ),
+            updated_at=NOW,
+        )
+        store_events(storage, xalt_id, [meeting(description=clean)])
+
+        first = await _run(storage, backend)
+        assert (first.updated, first.inserted, first.deleted) == (1, 0, 0)
+        ics = self.descriptions(backend)
+        assert "Siehe Link (https://l.example/x)" in ics
+        assert "<div>" not in ics
+
+        second = await _run(storage, backend)
+        assert (second.updated, second.inserted, second.deleted) == (0, 0, 0)
+
 
 @pytest.mark.anyio
 class TestDelete:
