@@ -205,6 +205,48 @@ def _is_declined(item: dict[str, Any]) -> bool:
     )
 
 
+def _clean_text(value: Any) -> str | None:
+    """A trimmed foreign string, or None when there is nothing to show.
+
+    Google omits empty fields, but a whitespace-only description or display
+    name would otherwise end up as an empty line in the mirrored copy.
+    """
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def _person_label(person: Any) -> str | None:
+    """One display line for an organizer/attendee: "Name <mail>".
+
+    Falls back to whichever half exists; returns None when neither does, so
+    an unusable entry is dropped instead of rendered as an empty line.
+    """
+    if not isinstance(person, dict):
+        return None
+    name = _clean_text(person.get("displayName"))
+    email = _clean_text(person.get("email"))
+    if name and email:
+        return f"{name} <{email}>"
+    return name or email
+
+
+def _attendee_lines(item: dict[str, Any]) -> str | None:
+    """The attendee list as one display line per person, or None.
+
+    The response status is deliberately left out: it changes every time any
+    colleague accepts or declines, which would rewrite the mirrored copy (and
+    log an outgoing change) for something Roland did not ask for — he asked
+    for "wer eingeladen hat und die teilnehmer".
+    """
+    attendees = item.get("attendees")
+    if not isinstance(attendees, list):
+        return None
+    lines = [label for person in attendees if (label := _person_label(person))]
+    return "\n".join(lines) or None
+
+
 def _item_to_event(item: dict[str, Any]) -> CalendarEvent:
     all_day = "date" in item["start"]
     if all_day:
@@ -220,6 +262,13 @@ def _item_to_event(item: dict[str, Any]) -> CalendarEvent:
         end=end,
         all_day=all_day,
         location=item.get("location"),
+        # Detail fields for the MoreValue mirror (Etappe 45, Roland's own
+        # request). Read here rather than in the mirror because this is the
+        # only place that knows Google's payload shape; everything downstream
+        # just carries the ready-made text.
+        description=_clean_text(item.get("description")),
+        organizer=_person_label(item.get("organizer")),
+        attendees=_attendee_lines(item),
     )
 
 
@@ -239,6 +288,10 @@ async def _list_events_page(
     }
     if page_token:
         params["pageToken"] = page_token
+    # No "fields" mask is sent, so the response already carries the detail
+    # fields (description/organizer/attendees) the mirror copies — nothing to
+    # extend when a new field is needed. The response stays bounded by the
+    # streamed size limit in app.sources.limits and by MAX_PAGES.
     url = EVENTS_URL_TEMPLATE.format(calendar_id=quote(calendar_id, safe=""))
     request = client.build_request(
         "GET", url, params=params, headers={"Authorization": f"Bearer {access_token}"}

@@ -383,6 +383,101 @@ class TestDeclinedEvents:
 
 
 @pytest.mark.anyio
+class TestEventDetails:
+    """Description, organizer and attendees (Etappe 45, part B).
+
+    Roland asked for them explicitly: "wäre es super wenn in dem MV kalender
+    etwas mehr details zu den google terminen stehen würde. z.b. wer
+    eingeladen hat und die teilnehmer und falls es im google termin eine
+    beschreibung gibt sollte diese ebenfalls gesynct werden."
+    """
+
+    async def _fetch_one(self, tmp_path: Path, item: dict):
+        tokens_file = tmp_path / "tokens.json"
+        write_tokens(tokens_file)
+        async with make_client([], pages=[{"items": [item]}]) as client:
+            events = await fetch_events(
+                CONFIG, WINDOW_START, WINDOW_END, token_file=tokens_file, client=client
+            )
+        return events[0]
+
+    async def test_description_organizer_and_attendees_are_read(
+        self, tmp_path: Path
+    ) -> None:
+        item = {
+            **TIMED_ITEM,
+            "description": "Agenda:\n- Rückblick\n- Planung",
+            "organizer": {"email": "chef@example.com", "displayName": "Chef Chefin"},
+            "attendees": [
+                {"email": "chef@example.com", "displayName": "Chef Chefin"},
+                {"email": "roland@example.com", "self": True},
+                {"email": "raum-2@example.com", "displayName": "Besprechungsraum 2"},
+            ],
+        }
+        event = await self._fetch_one(tmp_path, item)
+        assert event.description == "Agenda:\n- Rückblick\n- Planung"
+        assert event.organizer == "Chef Chefin <chef@example.com>"
+        assert event.attendees == (
+            "Chef Chefin <chef@example.com>\n"
+            "roland@example.com\n"
+            "Besprechungsraum 2 <raum-2@example.com>"
+        )
+
+    async def test_missing_details_stay_empty(self, tmp_path: Path) -> None:
+        event = await self._fetch_one(tmp_path, TIMED_ITEM)
+        assert event.description is None
+        assert event.organizer is None
+        assert event.attendees is None
+
+    async def test_organizer_without_a_display_name_uses_the_address(
+        self, tmp_path: Path
+    ) -> None:
+        item = {**TIMED_ITEM, "organizer": {"email": "chef@example.com"}}
+        event = await self._fetch_one(tmp_path, item)
+        assert event.organizer == "chef@example.com"
+
+    async def test_response_status_is_deliberately_not_included(
+        self, tmp_path: Path
+    ) -> None:
+        """Statuses churn constantly; including them would rewrite the copy
+        on every colleague's accept/decline. Roland asked for the people."""
+        item = {
+            **TIMED_ITEM,
+            "attendees": [
+                {"email": "a@example.com", "responseStatus": "accepted"},
+                {"email": "b@example.com", "responseStatus": "declined"},
+            ],
+        }
+        event = await self._fetch_one(tmp_path, item)
+        assert event.attendees == "a@example.com\nb@example.com"
+
+    async def test_unusable_entries_are_dropped_not_rendered_empty(
+        self, tmp_path: Path
+    ) -> None:
+        item = {
+            **TIMED_ITEM,
+            "organizer": {"displayName": "   "},
+            "attendees": [
+                "kaputt",
+                {},
+                {"displayName": "  Nur Name  "},
+                {"email": "b@example.com"},
+            ],
+        }
+        event = await self._fetch_one(tmp_path, item)
+        assert event.organizer is None
+        assert event.attendees == "Nur Name\nb@example.com"
+
+    async def test_non_string_description_is_ignored(self, tmp_path: Path) -> None:
+        event = await self._fetch_one(tmp_path, {**TIMED_ITEM, "description": {"x": 1}})
+        assert event.description is None
+
+    async def test_blank_description_is_ignored(self, tmp_path: Path) -> None:
+        event = await self._fetch_one(tmp_path, {**TIMED_ITEM, "description": "  \n "})
+        assert event.description is None
+
+
+@pytest.mark.anyio
 class TestFetchLimits:
     async def test_pagination_is_capped(self, tmp_path: Path) -> None:
         tokens_file = tmp_path / "tokens.json"
