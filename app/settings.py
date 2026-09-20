@@ -70,6 +70,11 @@ BIRTHDAY_SYNC_STATUS_KEY = "birthday_sync_status"
 # decides "is a refresh due" from — persisted rather than in-memory because
 # the Pi restarts often and every boot would otherwise cost a fresh scrape.
 GROUNDWATER_STATUS_KEY = "groundwater_status"
+# Outcome of the last history backfill (JSON, error already sanitized). See
+# app.groundwater_history: the same trick as above — this is the persisted
+# timer the hourly gate measures against, so a reboot cannot turn the
+# backfill into a scrape-on-every-boot.
+GROUNDWATER_HISTORY_STATUS_KEY = "groundwater_history_status"
 # Server-side default calendar view (month/week) for devices without a
 # per-device choice in localStorage — the kiosk browser loses its storage
 # on every restart, so the initial view must come from the server.
@@ -697,6 +702,49 @@ def set_groundwater_status(
     storage.set_setting(
         GROUNDWATER_STATUS_KEY,
         json.dumps({"last_run": last_run, "stations": stations, "error": error}),
+    )
+
+
+def get_groundwater_history_status(storage: Storage) -> dict:
+    """The last history-backfill status dict (zeroed when it never ran).
+
+    Shape: {"last_run": iso|None, "stations": int, "readings": int,
+    "error": str|None} — ``stations``/``readings`` count what the LAST run
+    added, and ``last_run`` is set on every attempt (successful or not)
+    because it is the gate the hourly interval is measured against.
+    """
+    empty: dict = {"last_run": None, "stations": 0, "readings": 0, "error": None}
+    raw = storage.get_setting(GROUNDWATER_HISTORY_STATUS_KEY)
+    if not raw:
+        return empty
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    return {
+        "last_run": data.get("last_run"),
+        "stations": int(data.get("stations", 0) or 0),
+        "readings": int(data.get("readings", 0) or 0),
+        "error": data.get("error"),
+    }
+
+
+def set_groundwater_history_status(
+    storage: Storage, *, last_run: str, stations: int, readings: int, error: str | None
+) -> None:
+    """Persist the history-backfill status (error must already be sanitized)."""
+    storage.set_setting(
+        GROUNDWATER_HISTORY_STATUS_KEY,
+        json.dumps(
+            {
+                "last_run": last_run,
+                "stations": stations,
+                "readings": readings,
+                "error": error,
+            }
+        ),
     )
 
 

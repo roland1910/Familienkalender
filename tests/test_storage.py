@@ -1719,3 +1719,52 @@ class TestGroundwater:
         storage.replace_groundwater_stations([station("1"), station("2")])
 
         assert storage.count_groundwater_stations() == 2
+
+    def test_readings_of_many_stations_are_written_in_one_batch(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+
+        written = storage.add_groundwater_readings(
+            [("1", "2026-09-19", 1.0), ("2", "2026-09-19", 2.0)]
+        )
+
+        assert written == 2
+        assert storage.list_groundwater_readings("2") == [("2026-09-19", 2.0)]
+
+    def test_a_batch_write_is_idempotent(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        rows = [("1", "2026-09-19", 1.0), ("1", "2026-09-20", 1.5)]
+        storage.add_groundwater_readings(rows)
+
+        storage.add_groundwater_readings(rows)
+
+        assert storage.list_groundwater_readings("1") == [
+            ("2026-09-19", 1.0),
+            ("2026-09-20", 1.5),
+        ]
+
+    def test_count_readings(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        assert storage.count_groundwater_readings() == 0
+
+        storage.add_groundwater_readings([("1", "2026-09-19", 1.0), ("2", "2026-09-19", 2.0)])
+
+        assert storage.count_groundwater_readings() == 2
+
+    def test_the_coverage_reports_count_and_period_per_station(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_groundwater_readings(
+            [
+                ("1", "2026-07-18", 1.0),
+                ("1", "2026-09-19", 1.2),
+                ("1", "2026-08-01", 1.1),
+                ("2", "2026-09-19", 2.0),
+            ]
+        )
+
+        coverage = storage.groundwater_reading_coverage()
+
+        assert coverage["1"] == (3, "2026-07-18", "2026-09-19")
+        assert coverage["2"] == (1, "2026-09-19", "2026-09-19")
+
+    def test_the_coverage_of_an_empty_table_is_empty(self, tmp_path: Path) -> None:
+        assert make_storage(tmp_path).groundwater_reading_coverage() == {}

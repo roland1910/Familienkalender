@@ -31,6 +31,7 @@ from app.models import (
     EventChange,
     GroundwaterStation,
     MirrorEvent,
+    ReadingCoverage,
     Source,
     StoredEvent,
     TagLimitError,
@@ -1083,24 +1084,60 @@ class Storage:
             ).fetchone()
         return int(row["n"])
 
-    def upsert_groundwater_readings(
-        self, number: str, readings: list[tuple[str, float]]
-    ) -> None:
-        """Add or replace daily water levels (``[(ISO date, m ü. NN), …]``).
+    def add_groundwater_readings(self, rows: list[tuple[str, str, float]]) -> int:
+        """Add or replace daily levels given as ``(number, ISO day, m ü. NN)``.
 
-        Additive on purpose: the history is filled in per station and must not
-        be lost when a later import covers a shorter period.
+        One transaction for the whole batch — the daily station refresh files
+        a value for every one of the ~165 stations at once, and a connection
+        per row would be absurd. The upsert on the (number, day) primary key
+        is what makes BOTH filling paths (the scraped table page and the
+        manually imported ZIP) idempotent: re-reading the same period can
+        neither duplicate a row nor change one.
         """
-        if not readings:
-            return
+        if not rows:
+            return 0
         with self._connect() as conn:
             conn.executemany(
                 "INSERT INTO groundwater_readings (number, day, level_m_nn)"
                 " VALUES (?, ?, ?)"
                 " ON CONFLICT (number, day) DO UPDATE SET"
                 " level_m_nn = excluded.level_m_nn",
-                [(number, day, level) for day, level in readings],
+                rows,
             )
+        return len(rows)
+
+    def upsert_groundwater_readings(
+        self, number: str, readings: list[tuple[str, float]]
+    ) -> None:
+        """Add or replace one station's daily levels (``[(ISO date, m ü. NN), …]``).
+
+        Additive on purpose: the history is filled in per station and must not
+        be lost when a later import covers a shorter period.
+        """
+        self.add_groundwater_readings([(number, day, level) for day, level in readings])
+
+    def count_groundwater_readings(self) -> int:
+        """Total number of stored daily readings (all stations)."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM groundwater_readings").fetchone()
+        return int(row["n"])
+
+    def groundwater_reading_coverage(self) -> dict[str, ReadingCoverage]:
+        """Per station: how many readings it has and which period they span.
+
+        One grouped query for all stations — the backfill has to make this
+        decision for ~165 stations on every run, and a query per station
+        would turn that into a needless storm of round trips.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT number, COUNT(*) AS n, MIN(day) AS oldest, MAX(day) AS newest"
+                " FROM groundwater_readings GROUP BY number"
+            ).fetchall()
+        return {
+            row["number"]: ReadingCoverage(int(row["n"]), row["oldest"], row["newest"])
+            for row in rows
+        }
 
     def list_groundwater_readings(self, number: str) -> list[tuple[str, float]]:
         """One station's daily levels as ``[(ISO date, m ü. NN), …]``, oldest first.

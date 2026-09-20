@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from typing import Any
+from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 # The family lives in Germany; all display and filtering decisions are made
@@ -427,3 +427,18 @@ class GroundwaterStation:
     uri: str = ""
     situation: str | None = None
     situation_class: int | None = None
+
+
+class ReadingCoverage(NamedTuple):
+    """How much daily history one station already has in the database.
+
+    ``oldest``/``newest`` are ISO dates. The SPAN between them — not the row
+    count — is what decides whether the history still needs to be fetched
+    (see app/groundwater_history.py): the daily station list files one value
+    per day, so a station that has only ever been seen by that path has a
+    span of a few days and still wants its two months of table page.
+    """
+
+    count: int
+    oldest: str
+    newest: str
