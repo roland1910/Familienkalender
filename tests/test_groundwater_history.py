@@ -6,21 +6,24 @@ covered here:
 * **path A** (``app.groundwater_history``) scrapes the per-station table
   page of the GKD, which carries roughly the last 62 daily values, and lets
   the daily station list file its current value as that day's reading;
-Path B (importing the manually downloaded ZIP) follows in its own commit.
+* **path B** (``app.groundwater_import``) imports the full history out of a
+  ZIP Roland downloads by hand from the GKD download centre.
 
-Filling must be idempotent — the primary key is ``(number, day)`` and a second
+Both must be idempotent — the primary key is ``(number, day)`` and a second
 run may neither duplicate a row nor change one. Every external call is
 mocked; no test here touches the network.
 """
 
 import datetime as dt
+import io
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 import pytest
 
-from app import groundwater, groundwater_history
+from app import groundwater, groundwater_history, groundwater_import
 from app.models import GroundwaterStation
 from app.settings import get_groundwater_history_status
 from app.storage import Storage
@@ -568,3 +571,375 @@ class TestDailyReadingFromTheStationList:
         # reading belongs to the local day the GKD published it for.
         station = make_station(measured="20.09.2026 00:30", level=505.5)
         assert groundwater.daily_readings([station]) == {"16277": ("2026-09-20", 505.5)}
+
+
+# -- path B: importing the manually downloaded ZIP ---------------------------
+
+CSV_HEADER = (
+    'Quelle:;"Bayerisches Landesamt für Umwelt, www.gkd.bayern.de"\r\n'
+    'Datenbankabfrage:;"20.09.2026 00:00"\r\n'
+    "Zeitbezug:;MEZ\r\n"
+    'Messstellen-Name:;"JOHANNESKIRCHEN KPA 222"\r\n'
+    "Messstellen-Nr.:;{number}\r\n"
+    'Ostwert:;696784;Nordwert:;5338502;"ETRS89 / UTM Zone 32N"\r\n'
+    "\r\n"
+    'Datum;"Grundwasserstand [m ü. NN]";Prüfstatus\r\n'
+)
+
+
+def csv_text(number: str, rows: list[tuple[str, str]], *, status: str = "Rohdaten") -> str:
+    """One GKD export file: UTF-8 (BOM added when zipped), semicolons, comma."""
+    body = "".join(f"{day};{value};{status}\r\n" for day, value in rows)
+    return CSV_HEADER.format(number=number) + body
+
+
+def make_zip(path: Path, files: dict[str, str]) -> Path:
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, text in files.items():
+            # The real export is UTF-8 WITH a BOM.
+            archive.writestr(name, "﻿" + text)
+    return path
+
+
+@pytest.fixture
+def import_storage(tmp_path: Path) -> Storage:
+    store = Storage(tmp_path / "import.db")
+    store.replace_groundwater_stations([make_station("16277"), make_station("16704")])
+    return store
+
+
+class TestZipImport:
+    def test_the_readings_are_stored(self, tmp_path: Path, import_storage: Storage) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                "16277_1.csv": csv_text(
+                    "16277", [("2026-09-01", "506,04"), ("2026-09-02", "506,08")]
+                )
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.readings == 2
+        assert result.stations == 1
+        assert import_storage.list_groundwater_readings("16277") == [
+            ("2026-09-01", 506.04),
+            ("2026-09-02", 506.08),
+        ]
+
+    def test_the_number_comes_from_the_header_not_the_filename(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {"irgendwas-16704.csv": csv_text("16277", [("2026-09-01", "506,04")])},
+        )
+
+        groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert import_storage.list_groundwater_readings("16277") == [("2026-09-01", 506.04)]
+        assert import_storage.list_groundwater_readings("16704") == []
+
+    def test_several_files_of_one_station_are_merged(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                "teil1.csv": csv_text("16277", [("1979-05-02", "505,10")]),
+                "teil2.csv": csv_text("16277", [("2026-09-01", "506,04")]),
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.stations == 1
+        assert [day for day, _ in import_storage.list_groundwater_readings("16277")] == [
+            "1979-05-02",
+            "2026-09-01",
+        ]
+
+    def test_several_stations_land_in_their_own_rows(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                "a.csv": csv_text("16277", [("2026-09-01", "506,04")]),
+                "b.csv": csv_text("16704", [("2026-09-01", "508,98")]),
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.stations == 2
+        assert import_storage.list_groundwater_readings("16704") == [("2026-09-01", 508.98)]
+
+    def test_a_checked_status_is_imported_just_like_raw_data(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {"a.csv": csv_text("16277", [("1999-01-01", "505,10")], status="Geprueft")},
+        )
+
+        groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert import_storage.list_groundwater_readings("16277") == [("1999-01-01", 505.10)]
+
+    def test_an_unknown_station_is_skipped_and_counted(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip", {"a.csv": csv_text("99999", [("2026-09-01", "506,04")])}
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.unknown_stations == ["99999"]
+        assert result.readings == 0
+
+    def test_broken_rows_are_skipped_one_by_one(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                "a.csv": csv_text(
+                    "16277",
+                    [
+                        ("2026-09-01", "506,04"),
+                        ("2026-13-45", "506,00"),
+                        ("2026-09-03", "keine Zahl"),
+                        ("2026-09-04", ""),
+                        ("2026-09-05", "506,10"),
+                    ],
+                )
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.readings == 2
+        assert result.skipped_rows == 3
+
+    def test_a_file_without_a_station_number_is_skipped(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(tmp_path / "gkd.zip", {"a.csv": "Datum;Wert\r\n2026-09-01;506,04\r\n"})
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.readings == 0
+        assert result.skipped_files == 1
+
+    def test_a_non_csv_entry_is_ignored(self, tmp_path: Path, import_storage: Storage) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                "logo.png": "nicht wirklich ein Bild",
+                "a.csv": csv_text("16277", [("2026-09-01", "506,04")]),
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.files == 1
+        assert result.readings == 1
+
+    def test_zip_slip_entries_are_never_read(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                "../../etc/passwd.csv": csv_text("16277", [("2026-09-01", "506,04")]),
+                "/absolut.csv": csv_text("16277", [("2026-09-02", "506,08")]),
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.readings == 0
+        assert result.skipped_files == 2
+        assert import_storage.list_groundwater_readings("16277") == []
+        assert not (tmp_path.parent / "etc").exists()
+
+    def test_too_many_entries_are_refused(
+        self, tmp_path: Path, import_storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(groundwater_import, "MAX_ENTRIES", 2)
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                f"teil{index}.csv": csv_text("16277", [(f"2026-09-0{index + 1}", "506,04")])
+                for index in range(4)
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.files == 2
+
+    def test_an_oversized_member_is_skipped(
+        self, tmp_path: Path, import_storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(groundwater_import, "MAX_MEMBER_BYTES", 64)
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {"a.csv": csv_text("16277", [("2026-09-01", "506,04")])},
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.readings == 0
+        assert result.skipped_files == 1
+
+    def test_the_total_size_is_capped(
+        self, tmp_path: Path, import_storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(groundwater_import, "MAX_TOTAL_BYTES", 100)
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {
+                f"teil{index}.csv": csv_text("16277", [(f"2026-09-0{index + 1}", "506,04")])
+                for index in range(4)
+            },
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert result.files < 4
+
+    def test_importing_twice_changes_nothing(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {"a.csv": csv_text("16277", [("2026-09-01", "506,04"), ("2026-09-02", "506,08")])},
+        )
+        groundwater_import.import_zip_archives(import_storage, [archive])
+        first = import_storage.list_groundwater_readings("16277")
+
+        groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert import_storage.list_groundwater_readings("16277") == first
+
+    def test_the_backfill_and_the_import_share_the_table(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        import_storage.upsert_groundwater_readings("16277", [("2026-09-01", 1.0)])
+        archive = make_zip(
+            tmp_path / "gkd.zip",
+            {"a.csv": csv_text("16277", [("2026-09-01", "506,04"), ("1979-05-02", "505,10")])},
+        )
+
+        groundwater_import.import_zip_archives(import_storage, [archive])
+
+        assert import_storage.list_groundwater_readings("16277") == [
+            ("1979-05-02", 505.10),
+            ("2026-09-01", 506.04),
+        ]
+
+    def test_a_broken_archive_is_reported_not_raised(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        broken = tmp_path / "kaputt.zip"
+        broken.write_bytes(b"das ist kein ZIP")
+
+        result = groundwater_import.import_zip_archives(import_storage, [broken])
+
+        assert result.errors
+        assert result.readings == 0
+
+    def test_a_missing_archive_is_reported_not_raised(
+        self, tmp_path: Path, import_storage: Storage
+    ) -> None:
+        result = groundwater_import.import_zip_archives(
+            import_storage, [tmp_path / "gibtesnicht.zip"]
+        )
+
+        assert result.errors
+
+    def test_several_archives_are_merged(self, tmp_path: Path, import_storage: Storage) -> None:
+        first = make_zip(
+            tmp_path / "a.zip", {"a.csv": csv_text("16277", [("1979-05-02", "505,10")])}
+        )
+        second = make_zip(
+            tmp_path / "b.zip", {"b.csv": csv_text("16277", [("2026-09-01", "506,04")])}
+        )
+
+        result = groundwater_import.import_zip_archives(import_storage, [first, second])
+
+        assert result.archives == 2
+        assert len(import_storage.list_groundwater_readings("16277")) == 2
+
+
+class TestSummaryText:
+    def test_a_successful_import_is_summarized_in_german(self) -> None:
+        result = groundwater_import.ImportResult(
+            archives=1, files=3, stations=2, readings=17368
+        )
+        text = groundwater_import.summary_text(result)
+        assert "1 Archiv" in text
+        assert "3 Dateien" in text
+        assert "2 Messstellen" in text
+        assert "17368 Werte" in text
+
+    def test_skipped_items_are_named(self) -> None:
+        result = groundwater_import.ImportResult(
+            archives=1, skipped_files=2, skipped_rows=5, unknown_stations=["99999"]
+        )
+        text = groundwater_import.summary_text(result)
+        assert "2 Dateien übersprungen" in text
+        assert "5 Zeilen übersprungen" in text
+        assert "99999" in text
+
+
+class TestParseCsv:
+    def test_the_bom_does_not_hide_the_first_header(self) -> None:
+        number, readings, _ = groundwater_import.parse_csv(
+            "﻿" + csv_text("16277", [("2026-09-01", "506,04")])
+        )
+        assert number == "16277"
+        assert readings == {"2026-09-01": 506.04}
+
+    def test_a_quoted_number_is_read(self) -> None:
+        text = csv_text("16277", []).replace("Messstellen-Nr.:;16277", 'Messstellen-Nr.:;"16277"')
+        number, _, _ = groundwater_import.parse_csv(text)
+        assert number == "16277"
+
+    def test_a_non_numeric_number_is_refused(self) -> None:
+        text = csv_text("16277", []).replace(
+            "Messstellen-Nr.:;16277", "Messstellen-Nr.:;../../etc"
+        )
+        number, _, _ = groundwater_import.parse_csv(text)
+        assert number is None
+
+    def test_an_implausible_year_is_skipped(self) -> None:
+        _, readings, skipped = groundwater_import.parse_csv(
+            csv_text("16277", [("1492-09-01", "506,04")])
+        )
+        assert readings == {}
+        assert skipped == 1
+
+    def test_a_file_that_is_not_a_csv_at_all_yields_nothing(self) -> None:
+        number, readings, _ = groundwater_import.parse_csv("irgendein Text ohne Struktur")
+        assert number is None
+        assert readings == {}
+
+
+def test_a_stream_without_a_bom_is_read_too(tmp_path: Path) -> None:
+    # Defensive: the export carries a BOM today, a relaunch might drop it.
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.csv", csv_text("16277", [("2026-09-01", "506,04")]))
+    path = tmp_path / "nobom.zip"
+    path.write_bytes(buffer.getvalue())
+    store = Storage(tmp_path / "s.db")
+    store.replace_groundwater_stations([make_station("16277")])
+
+    result = groundwater_import.import_zip_archives(store, [path])
+
+    assert result.readings == 1
