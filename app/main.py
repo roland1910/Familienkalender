@@ -17,6 +17,7 @@ from app import sync as sync_module
 from app.admin import router as admin_router
 from app.auth import is_admin_request
 from app.filtering import filter_events
+from app.groundwater import router as groundwater_router
 from app.models import LOCAL_TZ, StoredEvent
 from app.power import router as power_router
 from app.settings import get_default_view, get_evening_boundary, get_screensaver_default
@@ -286,6 +287,7 @@ app.include_router(admin_router)
 app.include_router(tags_router)
 app.include_router(power_router)
 app.include_router(weather_router)
+app.include_router(groundwater_router)
 app.include_router(slideshow_router)
 app.include_router(slideshow_admin_router)
 # Innermost (added first): needs the root_path that IngressPathMiddleware

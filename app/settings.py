@@ -64,6 +64,12 @@ BIRTHDAY_SYNC_SOURCE_IDS_KEY = "birthday_sync_source_ids"
 BIRTHDAY_SYNC_GOOGLE_KEY = "birthday_sync_google"
 BIRTHDAY_SYNC_CALDAV_TARGET_KEY = "birthday_sync_caldav_target_id"
 BIRTHDAY_SYNC_STATUS_KEY = "birthday_sync_status"
+# Outcome of the last groundwater station refresh (JSON, error already
+# sanitized). See app.groundwater: the scrape runs once a day out of the
+# periodic sync, and this is both its status readout and the timer it
+# decides "is a refresh due" from — persisted rather than in-memory because
+# the Pi restarts often and every boot would otherwise cost a fresh scrape.
+GROUNDWATER_STATUS_KEY = "groundwater_status"
 # Server-side default calendar view (month/week) for devices without a
 # per-device choice in localStorage — the kiosk browser loses its storage
 # on every restart, so the initial view must come from the server.
@@ -657,6 +663,40 @@ def set_birthday_sync_status(
                 "skip_reason": skip_reason,
             }
         ),
+    )
+
+
+def get_groundwater_status(storage: Storage) -> dict:
+    """The last groundwater-refresh status dict (zeroed when it never ran).
+
+    Shape: {"last_run": iso|None, "stations": int, "error": str|None}.
+    ``last_run`` is set on every attempt (successful or not) — it is what the
+    refresh interval and the error backoff are measured against.
+    """
+    empty: dict = {"last_run": None, "stations": 0, "error": None}
+    raw = storage.get_setting(GROUNDWATER_STATUS_KEY)
+    if not raw:
+        return empty
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    return {
+        "last_run": data.get("last_run"),
+        "stations": int(data.get("stations", 0) or 0),
+        "error": data.get("error"),
+    }
+
+
+def set_groundwater_status(
+    storage: Storage, *, last_run: str, stations: int, error: str | None
+) -> None:
+    """Persist the groundwater-refresh status (error must already be sanitized)."""
+    storage.set_setting(
+        GROUNDWATER_STATUS_KEY,
+        json.dumps({"last_run": last_run, "stations": stations, "error": error}),
     )
 
 
