@@ -385,3 +385,45 @@ class StoredEvent:
     include_in_feed: bool = False
     # Source precedence for de-duplicating events in the ICS feed.
     feed_priority: int = 0
+
+
+# Groundwater monitoring stations (GKD Bayern, see app/groundwater.py).
+# "upper" = oberes Stockwerk, "deep" = tieferes Stockwerk. Two stations can
+# share the exact same coordinates (an upper and a deep one drilled at the
+# same spot), so the station NUMBER is the identity — never the position.
+GROUNDWATER_TIERS = ("upper", "deep")
+
+
+@dataclass(frozen=True, slots=True)
+class GroundwaterStation:
+    """One groundwater monitoring station with its latest reading.
+
+    Two measurements come with every station and they run in OPPOSITE
+    directions: ``level_m_nn`` is the water table above sea level (m ü. NN,
+    rises when the groundwater rises) while ``depth_m`` is the distance from
+    the surface down to it (Flurabstand, m unter Gelände, GROWS when the
+    groundwater falls). They must therefore never share a chart axis — the
+    history curve plots ``level_m_nn`` only and ``depth_m`` is shown as a
+    plain number in the detail view (Roland's decision). Both are kept here,
+    strictly separated. ``level_m_nn + depth_m`` is the ground elevation,
+    which makes a useful plausibility check.
+
+    ``measured_at`` is an ISO-8601 UTC timestamp (the source publishes local
+    Europe/Berlin time), ``None`` when the source gave no readable date.
+    ``situation``/``situation_class`` are the low-water classification joined
+    in from the NID (0 = kein Niedrigwasser … 3 = neuer Niedrigstwert) and are
+    ``None`` for stations the NID does not classify.
+    """
+
+    number: str
+    name: str
+    lat: float
+    lon: float
+    tier: str
+    aquifer: str = ""
+    level_m_nn: float | None = None
+    depth_m: float | None = None
+    measured_at: str | None = None
+    uri: str = ""
+    situation: str | None = None
+    situation_class: int | None = None

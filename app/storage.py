@@ -29,6 +29,7 @@ from app.models import (
     BusyBlock,
     CalendarEvent,
     EventChange,
+    GroundwaterStation,
     MirrorEvent,
     Source,
     StoredEvent,
@@ -125,6 +126,27 @@ CREATE TABLE IF NOT EXISTS birthday_blocks (
     title TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL,
     PRIMARY KEY (person_key, target)
+);
+CREATE TABLE IF NOT EXISTS groundwater_stations (
+    number TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    aquifer TEXT NOT NULL DEFAULT '',
+    tier TEXT NOT NULL,
+    level_m_nn REAL,
+    depth_m REAL,
+    measured_at TEXT,
+    uri TEXT NOT NULL DEFAULT '',
+    situation TEXT,
+    situation_class INTEGER,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS groundwater_readings (
+    number TEXT NOT NULL,
+    day TEXT NOT NULL,
+    level_m_nn REAL NOT NULL,
+    PRIMARY KEY (number, day)
 );
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -978,6 +1000,122 @@ class Storage:
         with self._connect() as conn:
             conn.execute("DELETE FROM mirror_events")
 
+    # -- groundwater (GKD Bayern monitoring stations) ---------------------
+
+    def replace_groundwater_stations(self, stations: list[GroundwaterStation]) -> int:
+        """Replace the station list wholesale; returns the number of rows stored.
+
+        PROTECTION RULE (same lesson as the photo index in Etappe 31 and the
+        mirror sync in Etappe 41b): an EMPTY list never touches the table. A
+        failed or empty scrape must leave the last known-good stations in
+        place rather than blanking the map — availability, not emptiness, is
+        the criterion. Deliberately silent here (returns 0); the caller knows
+        why the list is empty and logs the warning.
+
+        The readings table is NOT touched: the history behind a station is
+        expensive to rebuild and must survive every daily refresh.
+        Duplicate numbers in the input collapse (last one wins) — the number
+        is the identity, never the position (an upper and a deep station can
+        share the exact same coordinates).
+        """
+        if not stations:
+            return 0
+        updated_at = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM groundwater_stations")
+            conn.executemany(
+                "INSERT INTO groundwater_stations"
+                " (number, name, lat, lon, aquifer, tier, level_m_nn, depth_m,"
+                " measured_at, uri, situation, situation_class, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (number) DO UPDATE SET"
+                " name = excluded.name, lat = excluded.lat, lon = excluded.lon,"
+                " aquifer = excluded.aquifer, tier = excluded.tier,"
+                " level_m_nn = excluded.level_m_nn, depth_m = excluded.depth_m,"
+                " measured_at = excluded.measured_at, uri = excluded.uri,"
+                " situation = excluded.situation,"
+                " situation_class = excluded.situation_class,"
+                " updated_at = excluded.updated_at",
+                [
+                    (
+                        item.number,
+                        item.name,
+                        item.lat,
+                        item.lon,
+                        item.aquifer,
+                        item.tier,
+                        item.level_m_nn,
+                        item.depth_m,
+                        item.measured_at,
+                        item.uri,
+                        item.situation,
+                        item.situation_class,
+                        updated_at,
+                    )
+                    for item in stations
+                ],
+            )
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM groundwater_stations"
+            ).fetchone()
+        return int(row["n"])
+
+    def list_groundwater_stations(self) -> list[GroundwaterStation]:
+        """Every stored monitoring station, ordered by number."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM groundwater_stations ORDER BY number"
+            ).fetchall()
+        return [_row_to_groundwater_station(row) for row in rows]
+
+    def get_groundwater_station(self, number: str) -> GroundwaterStation | None:
+        """One station by its number, or None when it is unknown."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM groundwater_stations WHERE number = ?", (number,)
+            ).fetchone()
+        return _row_to_groundwater_station(row) if row else None
+
+    def count_groundwater_stations(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM groundwater_stations"
+            ).fetchone()
+        return int(row["n"])
+
+    def upsert_groundwater_readings(
+        self, number: str, readings: list[tuple[str, float]]
+    ) -> None:
+        """Add or replace daily water levels (``[(ISO date, m ü. NN), …]``).
+
+        Additive on purpose: the history is filled in per station and must not
+        be lost when a later import covers a shorter period.
+        """
+        if not readings:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO groundwater_readings (number, day, level_m_nn)"
+                " VALUES (?, ?, ?)"
+                " ON CONFLICT (number, day) DO UPDATE SET"
+                " level_m_nn = excluded.level_m_nn",
+                [(number, day, level) for day, level in readings],
+            )
+
+    def list_groundwater_readings(self, number: str) -> list[tuple[str, float]]:
+        """One station's daily levels as ``[(ISO date, m ü. NN), …]``, oldest first.
+
+        ``day`` is an ISO date, so the lexicographic sort is chronological
+        (same trick as the audit log's ``ts``).
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT day, level_m_nn FROM groundwater_readings"
+                " WHERE number = ? ORDER BY day",
+                (number,),
+            ).fetchall()
+        return [(row["day"], float(row["level_m_nn"])) for row in rows]
+
     # -- birthday blocks (yearly series in Xalt and/or MoreValue) ---------
 
     def list_birthday_blocks(self) -> list[BirthdayBlock]:
@@ -1077,6 +1215,23 @@ def _row_to_mirror_event(row: sqlite3.Row) -> MirrorEvent:
         description=row["description"],
         organizer=row["organizer"],
         attendees=row["attendees"],
+    )
+
+
+def _row_to_groundwater_station(row: sqlite3.Row) -> GroundwaterStation:
+    return GroundwaterStation(
+        number=row["number"],
+        name=row["name"],
+        lat=float(row["lat"]),
+        lon=float(row["lon"]),
+        tier=row["tier"],
+        aquifer=row["aquifer"],
+        level_m_nn=row["level_m_nn"],
+        depth_m=row["depth_m"],
+        measured_at=row["measured_at"],
+        uri=row["uri"],
+        situation=row["situation"],
+        situation_class=row["situation_class"],
     )
 
 

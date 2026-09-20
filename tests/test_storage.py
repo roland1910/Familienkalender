@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from app.models import AuditEntry, BirthdayBlock, BusyBlock, CalendarEvent, MirrorEvent
+from app.models import (
+    AuditEntry,
+    BirthdayBlock,
+    BusyBlock,
+    CalendarEvent,
+    GroundwaterStation,
+    MirrorEvent,
+)
 from app.storage import AUDIT_RETENTION_DAYS, Storage, resolve_data_dir
 
 BERLIN_OFFSET_SUMMER = "+02:00"
@@ -1566,3 +1573,149 @@ class TestEventDetails:
         assert Storage(db_path).get_events(WINDOW_START, WINDOW_END)[0].event.title == (
             "Alter Termin"
         )
+
+
+def station(
+    number: str = "16704",
+    *,
+    name: str = "München KP 95",
+    lat: float = 48.1288,
+    lon: float = 11.5863,
+    tier: str = "upper",
+    level_m_nn: float | None = 508.98,
+    depth_m: float | None = 4.28,
+    measured_at: str | None = "2026-09-19T08:00:00+00:00",
+    situation: str | None = None,
+    situation_class: int | None = None,
+) -> GroundwaterStation:
+    return GroundwaterStation(
+        number=number,
+        name=name,
+        lat=lat,
+        lon=lon,
+        tier=tier,
+        aquifer="Quartär",
+        level_m_nn=level_m_nn,
+        depth_m=depth_m,
+        measured_at=measured_at,
+        uri=f"https://www.gkd.bayern.de/de/grundwasser/oberesstockwerk/x-{number}/messwerte",
+        situation=situation,
+        situation_class=situation_class,
+    )
+
+
+class TestGroundwater:
+    def test_replace_stores_and_reads_back_every_field(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        stored = storage.replace_groundwater_stations(
+            [station(situation="niedrig", situation_class=1)]
+        )
+
+        assert stored == 1
+        [read_back] = storage.list_groundwater_stations()
+        assert read_back == station(situation="niedrig", situation_class=1)
+
+    def test_replace_removes_stations_that_vanished(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.replace_groundwater_stations([station("1"), station("2")])
+
+        storage.replace_groundwater_stations([station("2"), station("3")])
+
+        assert {s.number for s in storage.list_groundwater_stations()} == {"2", "3"}
+
+    def test_an_empty_list_never_wipes_the_table(self, tmp_path: Path) -> None:
+        # Protection rule (same lesson as the photo index in Etappe 31 and the
+        # mirror sync in Etappe 41b): availability, not emptiness, is the
+        # criterion. A failed or empty fetch must leave the last good state.
+        storage = make_storage(tmp_path)
+        storage.replace_groundwater_stations([station("1")])
+
+        assert storage.replace_groundwater_stations([]) == 0
+        assert [s.number for s in storage.list_groundwater_stations()] == ["1"]
+
+    def test_duplicate_numbers_collapse_to_one_row(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+
+        storage.replace_groundwater_stations([station("1", name="A"), station("1", name="B")])
+
+        [read_back] = storage.list_groundwater_stations()
+        assert read_back.name == "B"
+
+    def test_stations_at_the_same_coordinates_stay_separate(self, tmp_path: Path) -> None:
+        # Obermenzing T 3 F / T 3 T: upper and deep station, identical
+        # position, ~8 m apart in water level. The number is the key.
+        storage = make_storage(tmp_path)
+        storage.replace_groundwater_stations(
+            [
+                station("100", lat=48.1710, lon=11.4530, tier="upper", level_m_nn=520.0),
+                station("101", lat=48.1710, lon=11.4530, tier="deep", level_m_nn=512.0),
+            ]
+        )
+
+        levels = {s.number: s.level_m_nn for s in storage.list_groundwater_stations()}
+        assert levels == {"100": 520.0, "101": 512.0}
+
+    def test_missing_values_round_trip_as_none(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.replace_groundwater_stations(
+            [station(level_m_nn=None, depth_m=None, measured_at=None)]
+        )
+
+        [read_back] = storage.list_groundwater_stations()
+        assert read_back.level_m_nn is None
+        assert read_back.depth_m is None
+        assert read_back.measured_at is None
+
+    def test_get_station_by_number(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.replace_groundwater_stations([station("16704")])
+
+        assert storage.get_groundwater_station("16704").number == "16704"
+        assert storage.get_groundwater_station("99999") is None
+
+    def test_readings_are_stored_and_read_in_chronological_order(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+
+        storage.upsert_groundwater_readings(
+            "16704", [("2026-09-19", 508.98), ("2026-09-17", 509.10)]
+        )
+
+        assert storage.list_groundwater_readings("16704") == [
+            ("2026-09-17", 509.10),
+            ("2026-09-19", 508.98),
+        ]
+
+    def test_readings_of_the_same_day_are_overwritten(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.upsert_groundwater_readings("16704", [("2026-09-19", 1.0)])
+
+        storage.upsert_groundwater_readings("16704", [("2026-09-19", 2.0)])
+
+        assert storage.list_groundwater_readings("16704") == [("2026-09-19", 2.0)]
+
+    def test_readings_are_kept_per_station(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.upsert_groundwater_readings("1", [("2026-09-19", 1.0)])
+        storage.upsert_groundwater_readings("2", [("2026-09-19", 2.0)])
+
+        assert storage.list_groundwater_readings("1") == [("2026-09-19", 1.0)]
+        assert storage.list_groundwater_readings("2") == [("2026-09-19", 2.0)]
+
+    def test_a_station_refresh_never_touches_the_readings(self, tmp_path: Path) -> None:
+        # The station list is refetched daily; the history behind it is
+        # expensive to rebuild and must survive every refresh untouched.
+        storage = make_storage(tmp_path)
+        storage.upsert_groundwater_readings("1", [("2026-09-19", 1.0)])
+        storage.replace_groundwater_stations([station("1")])
+
+        storage.replace_groundwater_stations([station("2")])
+
+        assert storage.list_groundwater_readings("1") == [("2026-09-19", 1.0)]
+
+    def test_count_stations(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        assert storage.count_groundwater_stations() == 0
+
+        storage.replace_groundwater_stations([station("1"), station("2")])
+
+        assert storage.count_groundwater_stations() == 2
