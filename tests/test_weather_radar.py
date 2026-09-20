@@ -7,6 +7,7 @@ request — neither the host, nor the zoom/tile window, nor the radar frame
 path (which must come from RainViewer's own frame list).
 """
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -268,11 +269,37 @@ class TestTileCoordinateValidation:
 
     def test_allowed_zooms_are_exactly_the_ones_the_frontend_uses(self) -> None:
         # Radar 5-7 (RainViewer's maximum) plus the base map one level
-        # deeper — see app/static/js/weather-map.js.
-        assert weather.ALLOWED_ZOOMS == (5, 6, 7, 8)
+        # deeper (6-8) — see app/static/js/weather-map.js — plus 9 and 10
+        # for the groundwater map, which shows a 50 km radius around Munich
+        # and needs a much closer scale than the radar (groundwater-map.js).
+        assert weather.ALLOWED_ZOOMS == (5, 6, 7, 8, 9, 10)
         assert weather.DEFAULT_ZOOM in weather.ALLOWED_ZOOMS
 
-    @pytest.mark.parametrize("zoom", [0, 1, 4, 9, 10, 19, 25])
+    def test_the_groundwater_radius_fits_inside_the_tile_window(self) -> None:
+        """Every tile the 50 km view can need must already be proxiable.
+
+        The window is a tile radius around Munich's own tile, so the check
+        is: the tiles holding the points 50 km north/south/east/west of
+        Munich are inside it at every zoom the groundwater map offers.
+        """
+        radius_km = 50.0
+        d_lat = radius_km / 111.0
+        d_lon = radius_km / (111.0 * math.cos(math.radians(weather.MUNICH_LAT)))
+        for zoom in (8, 9, 10):
+            scale = 2**zoom
+            for lat, lon in (
+                (weather.MUNICH_LAT + d_lat, weather.MUNICH_LON),
+                (weather.MUNICH_LAT - d_lat, weather.MUNICH_LON),
+                (weather.MUNICH_LAT, weather.MUNICH_LON + d_lon),
+                (weather.MUNICH_LAT, weather.MUNICH_LON - d_lon),
+            ):
+                x = int((lon + 180.0) / 360.0 * scale)
+                y = int(
+                    (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * scale
+                )
+                assert weather.is_allowed_tile(zoom, x, y), (zoom, lat, lon)
+
+    @pytest.mark.parametrize("zoom", [0, 1, 4, 11, 12, 19, 25])
     def test_zoom_outside_the_allowlist_is_rejected(
         self, client: TestClient, zoom: int
     ) -> None:
@@ -289,6 +316,26 @@ class TestTileCoordinateValidation:
                 f"/api/weather/tile/base/{DEFAULT_ZOOM}/{candidate[0]}/{candidate[1]}"
             )
             assert response.status_code == 400, candidate
+        assert self.mock.tile_requests == []
+
+    @pytest.mark.parametrize("zoom", [9, 10])
+    def test_the_deeper_base_zooms_of_the_groundwater_map_are_served(
+        self, client: TestClient, zoom: int
+    ) -> None:
+        x, y = munich(zoom)
+        assert client.get(f"/api/weather/tile/base/{zoom}/{x}/{y}").status_code == 200
+
+    @pytest.mark.parametrize("zoom", [8, 9, 10])
+    def test_radar_tiles_beyond_rainviewers_maximum_are_refused(
+        self, client: TestClient, zoom: int
+    ) -> None:
+        # RainViewer has no radar imagery above zoom 7 — it answers HTTP 200
+        # with a "Zoom Level Not Supported" placeholder. The deeper levels
+        # exist for the groundwater BASE map only, so asking upstream for a
+        # radar tile there would fetch a picture of an error message.
+        x, y = munich(zoom)
+        response = client.get(f"/api/weather/tile/radar/1700000000/{zoom}/{x}/{y}")
+        assert response.status_code == 400
         assert self.mock.tile_requests == []
 
     def test_tiles_inside_the_window_are_accepted(self, client: TestClient) -> None:

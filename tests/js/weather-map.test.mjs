@@ -20,8 +20,10 @@ import {
 } from "../../app/static/js/weather-map.js";
 
 // Backend-side limits, duplicated on purpose so a change on either side
-// fails here instead of showing empty tiles on the kiosk.
-const BACKEND_ZOOMS = [5, 6, 7, 8];
+// fails here instead of showing empty tiles on the kiosk. 9 and 10 belong
+// to the groundwater base map (Etappe 46); the radar has its own, lower
+// ceiling of 7, which the test below pins separately.
+const BACKEND_ZOOMS = [5, 6, 7, 8, 9, 10];
 const BACKEND_TILE_RADIUS = 4;
 
 // The largest viewport the layout can produce (see the CSS clamp).

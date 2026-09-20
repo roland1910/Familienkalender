@@ -377,8 +377,21 @@ OSM_TILE_HOST = "https://tile.openstreetmap.org"
 # and draws its tiles at double size. The base map is fetched one level
 # deeper (6-8) at normal size so it stays crisp over the same ground —
 # hence one allowlist spanning both, see app/static/js/weather-map.js.
-ALLOWED_ZOOMS = (5, 6, 7, 8)
+#
+# 9 and 10 were added in Etappe 46 for the GROUNDWATER map, which reuses
+# this base tile proxy (app/static/js/groundwater-map.js). It shows the
+# 50 km radius around Munich, i.e. a ~100 km square: at zoom 8 that is a
+# quarter of a 900 px map, far too small to tell ~165 stations apart, and
+# zoom 9/10 put 180 km / 90 km across that same square. The tile WINDOW
+# needed no widening — MAX_TILE_RADIUS already covers ±105 km at zoom 10
+# (see test_the_groundwater_radius_fits_inside_the_tile_window), and the
+# frontend caps its map size so a huge screen cannot walk out of it.
+ALLOWED_ZOOMS = (5, 6, 7, 8, 9, 10)
 DEFAULT_ZOOM = 7
+# The radar has its own, lower ceiling: above this RainViewer answers HTTP
+# 200 with a picture of the words "Zoom Level Not Supported", so relaying
+# such a request would only cache an error message as an image.
+MAX_RADAR_ZOOM = 7
 # Half-width of the accepted tile window around Munich's own tile. The
 # viewport is centred on Munich and needs at most ~4 tiles in each
 # direction at the base map's tile size; beyond that is not displayable.
@@ -645,6 +658,8 @@ async def get_base_tile(z: str, x: str, y: str) -> Response:
 async def get_radar_tile(frame: str, z: str, x: str, y: str) -> Response:
     """One RainViewer radar tile for a frame from RainViewer's own list."""
     zoom, tile_x, tile_y = _validated_coords(z, x, y)
+    if zoom > MAX_RADAR_ZOOM:
+        raise HTTPException(status_code=400, detail="Kachel außerhalb des erlaubten Bereichs.")
     frame_id = _parse_index(frame)
     if frame_id is None:
         raise HTTPException(status_code=400, detail="Ungültige Radar-Zeitmarke.")
