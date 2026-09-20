@@ -43,9 +43,10 @@ import re
 from collections.abc import Iterable
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.models import LOCAL_TZ, GroundwaterStation
+from app.power import downsample
 from app.sanitize import sanitize_error
 from app.settings import get_groundwater_status, set_groundwater_status
 from app.storage import Storage, get_storage
@@ -97,6 +98,16 @@ ERROR_RETRY_SECONDS = 3600.0
 # rate; that is the absence of a classification, not a class, so such an
 # entry is dropped rather than handed to the frontend as a colour.
 SITUATION_CLASSES = (0, 1, 2, 3)
+
+# Sparkline windows offered by the view, and the default. Clamped exactly
+# like ``hours`` in /api/power/history: anything else falls back to the
+# default rather than being honoured or rejected.
+SPARKLINE_ALLOWED_DAYS = (30, 90, 365)
+SPARKLINE_DEFAULT_DAYS = 90
+# A marker sparkline is about 40 px wide on the kiosk — it cannot show more
+# than a few dozen points, and 165 stations x a year of daily values would
+# be a payload of ~60k numbers for nothing.
+MAX_SPARKLINE_POINTS = 40
 
 # Strict integer syntax for the station number in the history path: ASCII
 # digits only, no sign, no separators, no full-width digits. int() alone
@@ -662,6 +673,41 @@ async def get_history(number: str) -> dict:
         for day, level in storage.list_groundwater_readings(number)
     ]
     return {"number": number, "points": [point for point in points if point["t"] is not None]}
+
+
+def clamp_sparkline_days(days: int) -> int:
+    """Keep the requested window inside the offered set, else the default."""
+    return days if days in SPARKLINE_ALLOWED_DAYS else SPARKLINE_DEFAULT_DAYS
+
+
+@router.get("/sparklines")
+async def get_sparklines(days: str = Query(default=str(SPARKLINE_DEFAULT_DAYS))) -> dict:
+    """Every station's recent levels as bare value lists, for the map markers.
+
+    Asking ``/history/{number}`` once per station would mean ~165 requests
+    the moment the view opens, so the marker curves come from this one
+    collected answer instead. Deliberately WITHOUT timestamps: a ~40 px
+    sparkline plots its values evenly and has no room for a time axis; the
+    detail view (one station, one request) is where the real curve lives.
+
+    Purely a database read — no scraping happens here, however often the
+    kiosk asks. Stations without any stored reading are simply absent from
+    ``series``; the frontend draws their marker without a curve.
+    """
+    try:
+        requested = int(days)
+    except ValueError:
+        requested = SPARKLINE_DEFAULT_DAYS
+    window = clamp_sparkline_days(requested)
+    since = (dt.datetime.now(dt.UTC).date() - dt.timedelta(days=window)).isoformat()
+    series = get_storage().groundwater_readings_since(since)
+    return {
+        "days": window,
+        "series": {
+            number: downsample(values, MAX_SPARKLINE_POINTS)
+            for number, values in series.items()
+        },
+    }
 
 
 def _day_epoch_ms(day: str) -> int | None:

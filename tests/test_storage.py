@@ -1768,3 +1768,31 @@ class TestGroundwater:
 
     def test_the_coverage_of_an_empty_table_is_empty(self, tmp_path: Path) -> None:
         assert make_storage(tmp_path).groundwater_reading_coverage() == {}
+
+    def test_readings_since_groups_every_station_in_one_query(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_groundwater_readings(
+            [
+                ("1", "2026-07-18", 1.0),
+                ("1", "2026-09-19", 1.2),
+                ("1", "2026-08-01", 1.1),
+                ("2", "2026-09-19", 2.0),
+            ]
+        )
+
+        assert storage.groundwater_readings_since("2026-01-01") == {
+            "1": [1.0, 1.1, 1.2],  # chronological, ISO days sort that way
+            "2": [2.0],
+        }
+
+    def test_readings_since_drops_everything_before_the_day(self, tmp_path: Path) -> None:
+        storage = make_storage(tmp_path)
+        storage.add_groundwater_readings(
+            [("1", "2026-07-18", 1.0), ("1", "2026-09-19", 1.2), ("2", "2026-07-01", 2.0)]
+        )
+
+        # A station whose readings all predate the window disappears entirely.
+        assert storage.groundwater_readings_since("2026-08-01") == {"1": [1.2]}
+
+    def test_readings_since_of_an_empty_table_is_empty(self, tmp_path: Path) -> None:
+        assert make_storage(tmp_path).groundwater_readings_since("2026-01-01") == {}

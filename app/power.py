@@ -360,8 +360,12 @@ def _clamp_hours(hours: int) -> int:
     return hours if hours in HISTORY_ALLOWED_HOURS else HISTORY_DEFAULT_HOURS
 
 
-def downsample(points: list[dict], max_points: int) -> list[dict]:
+def downsample[T](points: list[T], max_points: int) -> list[T]:
     """Reduce a time-ordered point list to at most ``max_points``, in order.
+
+    Generic in the element type on purpose: the groundwater sparklines feed
+    it bare floats rather than ``{"t", "v"}`` dicts, and the thinning rule
+    must not be written twice (see app/groundwater.py).
 
     Even (bucketed) index sampling: keeps the shape of the curve while
     bounding payload and SVG cost. Short series pass through untouched.

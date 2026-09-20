@@ -1153,6 +1153,26 @@ class Storage:
             ).fetchall()
         return [(row["day"], float(row["level_m_nn"])) for row in rows]
 
+    def groundwater_readings_since(self, since_day: str) -> dict[str, list[float]]:
+        """Every station's daily levels from ``since_day`` on: ``{number: [m ü. NN]}``.
+
+        ONE grouped query for all stations, ordered by day (an ISO date, so
+        the lexicographic sort is chronological). The sparkline endpoint
+        draws ~165 curves at once; a query per station would turn opening
+        the view into a storm of round trips — the same reasoning as
+        ``groundwater_reading_coverage``.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT number, level_m_nn FROM groundwater_readings"
+                " WHERE day >= ? ORDER BY number, day",
+                (since_day,),
+            ).fetchall()
+        series: dict[str, list[float]] = {}
+        for row in rows:
+            series.setdefault(row["number"], []).append(float(row["level_m_nn"]))
+        return series
+
     # -- birthday blocks (yearly series in Xalt and/or MoreValue) ---------
 
     def list_birthday_blocks(self) -> list[BirthdayBlock]:

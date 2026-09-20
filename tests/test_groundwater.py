@@ -824,3 +824,121 @@ class TestHistoryEndpoint:
         assert response.status_code == 400
         assert response.json()["detail"] == "Ungültige Messstellennummer."
         assert mock.requests == []
+
+
+def _day(offset: int) -> str:
+    """An ISO day ``offset`` days before today (the window is relative)."""
+    return (dt.date.today() - dt.timedelta(days=offset)).isoformat()
+
+
+class TestSparklinesEndpoint:
+    """One collected answer for all stations — 164 single history calls when
+    the view opens would be absurd."""
+
+    def test_returns_bare_value_lists_oldest_first(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        store = api_storage(tmp_path)
+        seed(store, make_station("16704"), make_station("16705"))
+        store.upsert_groundwater_readings(
+            "16704", [(_day(3), 508.9), (_day(1), 509.3), (_day(2), 509.1)]
+        )
+        store.upsert_groundwater_readings("16705", [(_day(1), 404.5)])
+
+        payload = client.get("/api/groundwater/sparklines").json()
+
+        assert payload["days"] == groundwater.SPARKLINE_DEFAULT_DAYS
+        # Values only — a sparkline 60px wide has no room for timestamps.
+        assert payload["series"]["16704"] == [508.9, 509.1, 509.3]
+        assert payload["series"]["16705"] == [404.5]
+
+    def test_a_station_without_history_is_simply_absent(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        store = api_storage(tmp_path)
+        seed(store, make_station("16704"), make_station("16705"))
+        store.upsert_groundwater_readings("16704", [(_day(1), 508.9)])
+
+        series = client.get("/api/groundwater/sparklines").json()["series"]
+
+        assert set(series) == {"16704"}
+
+    def test_long_series_are_thinned_but_keep_their_ends(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        store = api_storage(tmp_path)
+        seed(store, make_station("16704"))
+        # One year of daily values — far more than a 60px sparkline can show.
+        readings = [(_day(offset), 500.0 + offset) for offset in range(364, -1, -1)]
+        store.upsert_groundwater_readings("16704", readings)
+
+        values = client.get(
+            "/api/groundwater/sparklines", params={"days": "365"}
+        ).json()["series"]["16704"]
+
+        assert len(values) == groundwater.MAX_SPARKLINE_POINTS
+        # Order preserving, and both ends of the period survive the thinning.
+        assert values == sorted(values, reverse=True)
+        assert values[0] == pytest.approx(500.0 + 364)
+        assert values[-1] == pytest.approx(500.0)
+
+    def test_short_series_pass_through_untouched(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        store = api_storage(tmp_path)
+        seed(store, make_station("16704"))
+        readings = [(_day(offset), 500.0 + offset) for offset in range(9, -1, -1)]
+        store.upsert_groundwater_readings("16704", readings)
+
+        values = client.get("/api/groundwater/sparklines").json()["series"]["16704"]
+
+        assert len(values) == 10
+
+    def test_only_readings_inside_the_window_are_returned(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        store = api_storage(tmp_path)
+        seed(store, make_station("16704"))
+        store.upsert_groundwater_readings(
+            "16704", [(_day(200), 500.0), (_day(29), 501.0), (_day(1), 502.0)]
+        )
+
+        values = client.get(
+            "/api/groundwater/sparklines", params={"days": "30"}
+        ).json()["series"]["16704"]
+
+        assert values == [501.0, 502.0]
+
+    @pytest.mark.parametrize("raw", ["0", "-5", "7", "99999", "abc", "", "1e3", "90.5"])
+    def test_an_unexpected_days_value_falls_back_to_the_default(
+        self, client: TestClient, tmp_path: Path, raw: str
+    ) -> None:
+        seed(api_storage(tmp_path), make_station("16704"))
+
+        payload = client.get("/api/groundwater/sparklines", params={"days": raw}).json()
+
+        assert payload["days"] == groundwater.SPARKLINE_DEFAULT_DAYS
+
+    @pytest.mark.parametrize("days", groundwater.SPARKLINE_ALLOWED_DAYS)
+    def test_every_allowed_window_is_kept(
+        self, client: TestClient, tmp_path: Path, days: int
+    ) -> None:
+        seed(api_storage(tmp_path), make_station("16704"))
+
+        payload = client.get(
+            "/api/groundwater/sparklines", params={"days": str(days)}
+        ).json()
+
+        assert payload["days"] == days
+
+    def test_nothing_is_scraped_for_a_sparkline_request(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Purely a database read: the view opens with one stations call and
+        # one sparkline call, neither of which may hit the GKD.
+        mock = MockUpstream(down=True)
+        use_upstream(monkeypatch, mock)
+        seed(api_storage(tmp_path), make_station("16704"))
+
+        assert client.get("/api/groundwater/sparklines").status_code == 200
+        assert mock.requests == []
