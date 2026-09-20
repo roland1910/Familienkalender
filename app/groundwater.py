@@ -28,7 +28,9 @@ messages surfaced as HTTP 502.
 Unlike MET Norway there is nothing to make a conditional request with: the
 pages answer ``Cache-Control: no-store`` and carry neither ETag nor
 Last-Modified. The cache is therefore purely time based — the station list is
-refetched once a day, driven by the periodic sync (see app.sync).
+refetched once a day, driven by the periodic sync (see app.sync, gated behind
+GROUNDWATER_REFRESH=1 so no test ever scrapes) and, on demand, by the first
+request to ``/api/groundwater/stations``.
 """
 
 import asyncio
@@ -36,6 +38,7 @@ import datetime as dt
 import json
 import logging
 import math
+import os
 import re
 
 import httpx
@@ -455,6 +458,19 @@ def _refresh_due(storage: Storage, now: dt.datetime) -> bool:
         return False
     interval = ERROR_RETRY_SECONDS if status.get("error") else REFRESH_INTERVAL_SECONDS
     return age >= interval
+
+
+def periodic_refresh_enabled() -> bool:
+    """Whether the periodic sync scrapes the GKD (disabled for tests/dev).
+
+    Off unless ``GROUNDWATER_REFRESH=1`` (set by run.sh), exactly like the
+    periodic photo scan: every unit test that exercises ``sync_all`` would
+    otherwise fire real requests at a public authority's website. The
+    ``/api/groundwater/stations`` endpoint refreshes on demand regardless, so
+    the view works on a dev machine too — it just does not scrape in the
+    background there.
+    """
+    return os.environ.get("GROUNDWATER_REFRESH") == "1"
 
 
 async def refresh_stations(

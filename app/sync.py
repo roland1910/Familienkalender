@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from app import birthday_sync, busy_sync, mirror_sync
+from app import birthday_sync, busy_sync, groundwater, mirror_sync
 from app.models import AuditEntry, CalendarEvent, EventChange, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google, google_contacts, limits
@@ -149,6 +149,16 @@ async def _sync_all_locked(
         )
     except Exception:  # pragma: no cover - run_birthday_sync already isolates errors
         logger.exception("Unexpected error in birthday sync")
+    # Refresh the groundwater monitoring stations. Not a calendar concern at
+    # all — it just needs a periodic tick, and this is the one the add-on
+    # already has. refresh_stations decides itself whether a refetch is due
+    # (once a day), isolates its own errors and never touches the stored
+    # stations on a failure, so it can never affect the calendar sync.
+    if groundwater.periodic_refresh_enabled():
+        try:
+            await groundwater.refresh_stations(storage, now=synced_at)
+        except Exception:  # pragma: no cover - refresh_stations isolates its errors
+            logger.exception("Unexpected error refreshing the groundwater stations")
     # Keep the change log bounded: drop entries older than the retention
     # window at the end of every run. Isolated so a prune failure never
     # breaks the sync.

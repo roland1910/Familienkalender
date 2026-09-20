@@ -758,3 +758,69 @@ class TestBirthdaySyncIntegration:
         monkeypatch.setattr("app.birthday_sync.run_birthday_sync", boom)
         results = await sync_all(storage, now=FIXED_NOW)
         assert results  # calendar sources still processed
+
+
+@pytest.mark.anyio
+class TestGroundwaterIntegration:
+    async def test_the_station_refresh_runs_with_the_run_timestamp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GROUNDWATER_REFRESH", "1")
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        seen = {}
+
+        async def fake_refresh(storage_arg, *, now=None):
+            seen["now"] = now
+            return 0
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.groundwater.refresh_stations", fake_refresh)
+        await sync_all(storage, now=FIXED_NOW)
+
+        assert seen["now"] == FIXED_NOW
+
+    async def test_a_groundwater_error_does_not_break_the_calendar_sync(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GROUNDWATER_REFRESH", "1")
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("groundwater exploded")
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.groundwater.refresh_stations", boom)
+        # Must not raise: the groundwater view is an extra, never a blocker.
+        results = await sync_all(storage, now=FIXED_NOW)
+        assert results  # calendar sources still processed
+
+    async def test_without_the_flag_the_sync_never_scrapes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every unit test runs sync_all — none of them may hit the GKD."""
+        monkeypatch.delenv("GROUNDWATER_REFRESH", raising=False)
+        storage = Storage(tmp_path / "test.db")
+        storage.add_source(type="caldav", name="Firma", config={})
+        called = False
+
+        async def fake_refresh(*args, **kwargs):
+            nonlocal called
+            called = True
+            return 0
+
+        async def fake_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr("app.sources.caldav.fetch_events", fake_fetch)
+        monkeypatch.setattr("app.groundwater.refresh_stations", fake_refresh)
+        await sync_all(storage, now=FIXED_NOW)
+
+        assert called is False

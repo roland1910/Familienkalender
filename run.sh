@@ -33,6 +33,11 @@ export SSL_SOURCE_CERTFILE SSL_SOURCE_KEYFILE
 # behind this flag so test/dev servers without /media never scan).
 export SLIDESHOW_SCAN=1
 
+# Enable the daily background refresh of the GKD groundwater stations
+# (app/sync.py gates it behind this flag so unit tests and dev servers never
+# fire real requests at the Bayerisches Landesamt für Umwelt).
+export GROUNDWATER_REFRESH=1
+
 # The staged, app-readable copies uvicorn actually loads.
 STAGE_DIR=/run/familienkalender-ssl
 export SSL_CERTFILE="${STAGE_DIR}/fullchain.pem"

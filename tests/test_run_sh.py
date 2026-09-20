@@ -17,3 +17,10 @@ class TestRunShContracts:
         photos never enter the slideshow index without a manual rescan."""
         content = RUN_SH.read_text(encoding="utf-8")
         assert "export SLIDESHOW_SCAN=1" in content
+
+    def test_exports_groundwater_refresh_flag(self):
+        """The daily groundwater station refresh (app/sync.py) only runs with
+        GROUNDWATER_REFRESH=1 — production must set it, otherwise the station
+        list is only ever refreshed when someone opens the view."""
+        content = RUN_SH.read_text(encoding="utf-8")
+        assert "export GROUNDWATER_REFRESH=1" in content
