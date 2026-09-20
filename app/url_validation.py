@@ -42,6 +42,8 @@ import os
 import re
 from urllib.parse import urlsplit
 
+import httpx
+
 # The Home Assistant supervisor/add-on internal network.
 HA_INTERNAL_NETWORK = ipaddress.ip_network("172.30.32.0/23")
 
@@ -78,6 +80,34 @@ def _check_ip_literal(host: str) -> None:
         or (address.version == 4 and address in HA_INTERNAL_NETWORK)
     ):
         raise SourceURLError(f"Ziel-Adresse {host} ist nicht erlaubt (internes Netz)")
+
+
+def has_dot_segment(url: str) -> bool:
+    """Whether the DECODED path of ``url`` contains a "." or ".." segment.
+
+    A raw string prefix check is not enough to keep a URL inside a known
+    subtree: ``httpx.URL.join`` normalizes a literal ``..`` away but leaves a
+    PERCENT-ENCODED ``%2e%2e`` untouched — such a URL passes ``startswith``
+    while the server resolves it one level up (the trap from Etappe 41b).
+    ``httpx.URL.path`` percent-decodes, so the traversal surfaces here.
+
+    Both forms of the path are inspected: ``urlsplit`` hands over the path
+    exactly as written (httpx already resolves a literal ``..`` while parsing,
+    which would hide it here), ``httpx.URL.path`` hands over the decoded one.
+    An unparseable URL counts as unsafe. Used by the CalDAV writer (stay
+    inside the configured collection) and by the groundwater history
+    backfill (stay inside the GKD's groundwater section).
+    """
+    try:
+        raw_path = urlsplit(url).path
+        decoded_path = httpx.URL(url).path
+    except (ValueError, TypeError):
+        return True
+    return any(
+        segment in (".", "..")
+        for path in (raw_path, decoded_path)
+        for segment in path.split("/")
+    )
 
 
 def validate_source_url(url: str) -> str:

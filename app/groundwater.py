@@ -40,6 +40,7 @@ import logging
 import math
 import os
 import re
+from collections.abc import Iterable
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -337,8 +338,13 @@ async def _read_limited(response: httpx.Response, limit: int, message: str) -> b
     return b"".join(chunks)
 
 
-async def _fetch_page(client: httpx.AsyncClient, url: str, label: str) -> str:
-    """One page as text, with timeout, status check and size cap."""
+async def fetch_page(client: httpx.AsyncClient, url: str, label: str) -> str:
+    """One page as text, with timeout, status check and size cap.
+
+    Public because app.groundwater_history fetches the per-station table
+    pages with exactly the same hardening — duplicating the streaming
+    size guard would be the one place where the two could drift apart.
+    """
     try:
         response = await client.send(client.build_request("GET", url), stream=True)
         try:
@@ -368,7 +374,7 @@ async def _fetch_situations() -> dict[str, tuple[str, int]]:
     """
     try:
         async with create_nid_client() as client:
-            page = await _fetch_page(client, NID_URL, "Der Niedrigwasserdienst")
+            page = await fetch_page(client, NID_URL, "Der Niedrigwasserdienst")
         return parse_nid_situations(page)
     except GroundwaterUnavailableError as exc:
         logger.warning("Low-water classification unavailable: %s", exc)
@@ -389,7 +395,7 @@ async def fetch_stations() -> list[GroundwaterStation]:
     stations: list[GroundwaterStation] = []
     async with create_gkd_client() as client:
         for tier, path in GKD_TIER_PATHS.items():
-            page = await _fetch_page(client, path, "Der Grundwasserdienst")
+            page = await fetch_page(client, path, "Der Grundwasserdienst")
             stations.extend(
                 station
                 for station in parse_station_list(page, tier)
@@ -401,6 +407,55 @@ async def fetch_stations() -> list[GroundwaterStation]:
         )
     rating = await _fetch_situations()
     return [_with_situation(station, rating.get(station.number)) for station in stations]
+
+
+def daily_readings(
+    stations: Iterable[GroundwaterStation],
+) -> dict[str, tuple[str, float]]:
+    """Each station's current value as a daily reading: ``{number: (day, m ü. NN)}``.
+
+    This is what keeps the history growing without ever scraping a table page
+    again: the station list is fetched once a day anyway and carries the
+    latest level, so filing it under its measurement day costs no extra
+    request. The day is the LOCAL (Europe/Berlin) date of ``measured_at`` —
+    the stored timestamp is UTC, and a reading published for 00:30 local time
+    belongs to that local day, not to the previous UTC one.
+
+    Stations without a readable value or without a readable timestamp are
+    left out: a value we cannot date is a value we cannot file.
+    """
+    result: dict[str, tuple[str, float]] = {}
+    for station in stations:
+        if station.level_m_nn is None or not station.measured_at:
+            continue
+        try:
+            moment = dt.datetime.fromisoformat(station.measured_at)
+        except ValueError:
+            continue
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=dt.UTC)
+        result[station.number] = (
+            moment.astimezone(LOCAL_TZ).date().isoformat(),
+            station.level_m_nn,
+        )
+    return result
+
+
+def _store_daily_readings(storage: Storage, stations: list[GroundwaterStation]) -> None:
+    """File the current value of every station as that day's reading.
+
+    Isolated: the history is a nice-to-have on top of the station list, and
+    a failure here must never cost the refresh its stations. Writing is an
+    upsert on (number, day), so several runs on the same day can neither
+    duplicate nor drift.
+    """
+    try:
+        rows = [
+            (number, day, level) for number, (day, level) in daily_readings(stations).items()
+        ]
+        storage.add_groundwater_readings(rows)
+    except Exception:  # pragma: no cover - defensive, the history is extra
+        logger.exception("Failed to file the daily groundwater readings")
 
 
 def _with_situation(
@@ -480,7 +535,9 @@ async def refresh_stations(
 
     Never raises: a failure is sanitized into the ``groundwater_status``
     setting and the previously stored stations stay exactly as they were
-    (protection rule). The readings table is untouched either way.
+    (protection rule) — and, just as importantly, the readings table is not
+    touched on a failure either. A successful run additionally files each
+    station's current level as that day's reading (see _store_daily_readings).
     """
     moment = now or dt.datetime.now(dt.UTC)
     async with _refresh_lock:
@@ -506,6 +563,10 @@ async def refresh_stations(
             )
             return stored
         stored = storage.replace_groundwater_stations(stations)
+        # The list we just fetched carries every station's current level —
+        # filing it as that day's reading is what makes the history grow on
+        # its own, with no further request (see app.groundwater_history).
+        _store_daily_readings(storage, stations)
         set_groundwater_status(
             storage, last_run=moment.isoformat(), stations=stored, error=None
         )

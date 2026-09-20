@@ -65,7 +65,7 @@ from app.models import (
     as_local_datetime,
 )
 from app.sources import limits
-from app.url_validation import SourceURLError, validate_source_url
+from app.url_validation import SourceURLError, has_dot_segment, validate_source_url
 
 logger = logging.getLogger(__name__)
 
@@ -301,19 +301,6 @@ def _text(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
-def _has_dot_segment(url: str) -> bool:
-    """Whether the DECODED path of ``url`` contains a "." or ".." segment.
-
-    ``httpx.URL.path`` percent-decodes, so ``%2e%2e`` surfaces here as ``..``
-    — which is exactly the case a raw string prefix check cannot see.
-    """
-    try:
-        path = httpx.URL(url).path
-    except (ValueError, TypeError):
-        return True  # unparseable: treat as unsafe
-    return any(segment in (".", "..") for segment in path.split("/"))
-
-
 class CaldavWriteClient:
     """Authenticated CalDAV writer scoped to ONE calendar collection.
 
@@ -357,7 +344,7 @@ class CaldavWriteClient:
         server resolves it one level up, i.e. outside the collection. The
         decoded path is therefore checked for dot segments as well.
         """
-        if not url.startswith(self._collection) or _has_dot_segment(url):
+        if not url.startswith(self._collection) or has_dot_segment(url):
             raise CaldavWriteError(
                 "Ziel-Adresse liegt außerhalb des konfigurierten Kalenders."
             )

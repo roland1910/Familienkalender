@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from app import birthday_sync, busy_sync, groundwater, mirror_sync
+from app import birthday_sync, busy_sync, groundwater, groundwater_history, mirror_sync
 from app.models import AuditEntry, CalendarEvent, EventChange, Source
 from app.sanitize import sanitize_error
 from app.sources import caldav, google, google_contacts, limits
@@ -159,6 +159,16 @@ async def _sync_all_locked(
             await groundwater.refresh_stations(storage, now=synced_at)
         except Exception:  # pragma: no cover - refresh_stations isolates its errors
             logger.exception("Unexpected error refreshing the groundwater stations")
+        # …and afterwards fill in the daily history of the stations that do
+        # not have any yet. Same contract again: it decides for itself
+        # whether a run is due (hourly gate), whether a station needs
+        # anything at all, isolates its errors and only ever ADDS readings.
+        # Runs after the refresh on purpose — a station has to exist before
+        # its history can be fetched.
+        try:
+            await groundwater_history.backfill_history(storage, now=synced_at)
+        except Exception:  # pragma: no cover - backfill_history isolates its errors
+            logger.exception("Unexpected error backfilling the groundwater history")
     # Keep the change log bounded: drop entries older than the retention
     # window at the end of every run. Isolated so a prune failure never
     # breaks the sync.
