@@ -467,15 +467,19 @@ function markerNode(marker, station, colors) {
     );
   }
 
-  // A transparent rectangle over card and dot: it gives the whole marker one
-  // hit area instead of asking a finger to find a 1.6px line.
+  // A transparent rectangle over the marker: it gives the whole thing one
+  // hit area instead of asking a finger to find a 1.6px line. It must NOT
+  // reach down to the dot for a stacked card — that rectangle would cover
+  // the card below it and make the other station at the same coordinates
+  // unclickable, which is exactly what the pair must never be.
+  const hitBottom = marker.stackIndex === 0 ? marker.y + DOT_RADIUS : marker.cardY + CARD_HEIGHT;
   group.append(
     svgEl("rect", {
       class: "groundwater-hit",
       x: marker.cardX,
       y: marker.cardY,
       width: CARD_WIDTH,
-      height: marker.y + DOT_RADIUS - marker.cardY,
+      height: hitBottom - marker.cardY,
       fill: "transparent",
     }),
   );
