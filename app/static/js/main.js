@@ -20,6 +20,7 @@ import {
 } from "./dates.js";
 import { parseEvent } from "./events.js";
 import { attachSwipe } from "./gestures.js";
+import { startGroundwaterView, stopGroundwaterView } from "./groundwater-view.js";
 import { renderIcons, setIcon } from "./icons.js";
 import { renderLegend } from "./legend.js";
 import { monthGridRange, renderMonthView } from "./month-view.js";
@@ -60,6 +61,7 @@ function visibleRange() {
 function periodTitle() {
   if (state.mode === "power") return "Strom";
   if (state.mode === "weather") return "Wetter";
+  if (state.mode === "groundwater") return "Grundwasser";
   if (state.view === "month") {
     return `${MONTH_NAMES[state.anchor.getMonth()]} ${state.anchor.getFullYear()}`;
   }
@@ -204,13 +206,19 @@ function switchView(view) {
   refresh();
 }
 
-// The three top-level modes and the DOM they own: the toggle button, the
+// The four top-level modes and the DOM they own: the toggle button, the
 // section shown, and the body class that hides the calendar-only toolbar
 // controls via CSS.
 const MODES = [
   { mode: "calendar", button: "btn-mode-calendar", section: "calendar" },
   { mode: "power", button: "btn-mode-power", section: "power", bodyClass: "mode-power" },
   { mode: "weather", button: "btn-mode-weather", section: "weather", bodyClass: "mode-weather" },
+  {
+    mode: "groundwater",
+    button: "btn-mode-groundwater",
+    section: "groundwater",
+    bodyClass: "mode-groundwater",
+  },
 ];
 
 function switchMode(mode) {
@@ -229,6 +237,8 @@ function switchMode(mode) {
   else stopPowerView();
   if (mode === "weather") startWeatherView(document.getElementById("weather"));
   else stopWeatherView();
+  if (mode === "groundwater") startGroundwaterView(document.getElementById("groundwater"));
+  else stopGroundwaterView();
   if (mode === "calendar") refresh();
   render();
 }
@@ -456,6 +466,9 @@ async function init() {
   document
     .getElementById("btn-mode-weather")
     .addEventListener("click", () => switchMode("weather"));
+  document
+    .getElementById("btn-mode-groundwater")
+    .addEventListener("click", () => switchMode("groundwater"));
   attachSwipe(document.getElementById("calendar"), {
     onSwipeLeft: () => navigate(1),
     onSwipeRight: () => navigate(-1),

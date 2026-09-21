@@ -87,6 +87,21 @@ const ICONS = {
     stroked("line", { x1: 12, y1: 17.5, x2: 10.8, y2: 21 }),
     stroked("line", { x1: 16, y1: 17.5, x2: 14.8, y2: 21 }),
   ],
+  // Groundwater: a hollow water drop with a level line inside it. Hollow on
+  // purpose — the weather icon next to it is a SOLID cloud, and at 26px on
+  // the kiosk two filled blobs would be told apart only by their outline.
+  // The wave is what says "water table" rather than just "rain".
+  water: [
+    {
+      tag: "path",
+      attrs: {
+        ...STROKE,
+        "stroke-width": 2.2,
+        d: "M12 2.5C12 2.5 19 10.2 19 14.5A7 7 0 0 1 5 14.5C5 10.2 12 2.5 12 2.5Z",
+      },
+    },
+    stroked("path", { d: "M7.2 15.5q2.4 -2.2 4.8 0t4.8 0" }),
+  ],
   // Theme "auto": a circle with one half filled (light/dark side by side).
   "theme-auto": [
     stroked("circle", { cx: 12, cy: 12, r: 8.5 }),

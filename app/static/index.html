@@ -46,6 +46,9 @@
       <section id="weather" class="weather" hidden aria-label="Wetter">
         <p class="loading">Lädt&hellip;</p>
       </section>
+      <section id="groundwater" class="groundwater" hidden aria-label="Grundwasser">
+        <p class="loading">Lädt&hellip;</p>
+      </section>
     </div>
     <header class="toolbar">
       <!-- Gruppe 1: Blättern (nur im Kalender-Modus sichtbar). Die Chevrons
@@ -93,6 +96,13 @@
                   aria-pressed="false" aria-label="Wetter" title="Wetter">
             <span class="btn-icon" data-icon="cloud" aria-hidden="true"></span>
           </button>
+          <!-- Etappe 46: Grundwasser. Hohler Wassertropfen mit Pegellinie —
+               bewusst eine Kontur, damit er sich bei 26px klar von der
+               gefüllten Regenwolke daneben unterscheidet. -->
+          <button id="btn-mode-groundwater" class="mode-button" type="button"
+                  aria-pressed="false" aria-label="Grundwasser" title="Grundwasser">
+            <span class="btn-icon" data-icon="water" aria-hidden="true"></span>
+          </button>
         </div>
         <span class="toolbar-divider" aria-hidden="true"></span>
         <!-- Theme-Umschalter (pro Gerät, localStorage): zyklisch
@@ -124,6 +134,10 @@
     </header>
   </div>
   <div id="day-popover" class="popover-backdrop" hidden></div>
+  <!-- Detail einer Grundwasser-Messstelle (Etappe 46). Eigener Backdrop
+       statt des Tages-Popovers: gleiche Optik, aber ohne jede Kopplung an
+       den Kalenderzustand. -->
+  <div id="groundwater-popover" class="popover-backdrop" hidden></div>
   <script type="module" src="static/js/main.js"></script>
 </body>
 </html>

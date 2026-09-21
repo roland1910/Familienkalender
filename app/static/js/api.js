@@ -138,6 +138,46 @@ function baseTileSuffix(z, x, y) {
   return `${encodeURIComponent(z)}/${encodeURIComponent(x)}/${encodeURIComponent(y)}`;
 }
 
+// -- groundwater view -------------------------------------------------------
+
+export async function fetchGroundwaterStations() {
+  const response = await fetch("api/groundwater/stations");
+  if (!response.ok) {
+    throw new Error(
+      await germanDetail(response, `Messstellen laden fehlgeschlagen: HTTP ${response.status}`),
+    );
+  }
+  const payload = await response.json();
+  return payload.stations;
+}
+
+// One collected answer for all marker curves — asking per station would be
+// ~165 requests every time the view opens (see app/groundwater.py).
+export async function fetchGroundwaterSparklines(days) {
+  const query = new URLSearchParams({ days: String(days) });
+  const response = await fetch(`api/groundwater/sparklines?${query}`);
+  if (!response.ok) {
+    throw new Error(
+      await germanDetail(response, `Verlaufsdaten laden fehlgeschlagen: HTTP ${response.status}`),
+    );
+  }
+  const payload = await response.json();
+  return payload.series;
+}
+
+// The number comes from our own station list, never from user input; it is
+// encoded anyway so no caller can smuggle a path segment in.
+export async function fetchGroundwaterHistory(number) {
+  const response = await fetch(`api/groundwater/history/${encodeURIComponent(number)}`);
+  if (!response.ok) {
+    throw new Error(
+      await germanDetail(response, `Verlauf laden fehlgeschlagen: HTTP ${response.status}`),
+    );
+  }
+  const payload = await response.json();
+  return payload.points;
+}
+
 export async function fetchNextPhoto() {
   const response = await fetch("api/slideshow/next");
   if (!response.ok) {

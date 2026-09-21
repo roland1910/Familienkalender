@@ -390,7 +390,11 @@ body.mode-power .status-badge,
 body.mode-weather .toolbar-nav,
 body.mode-weather .view-switch,
 body.mode-weather .toolbar-divider-calendar,
-body.mode-weather .status-badge {
+body.mode-weather .status-badge,
+body.mode-groundwater .toolbar-nav,
+body.mode-groundwater .view-switch,
+body.mode-groundwater .toolbar-divider-calendar,
+body.mode-groundwater .status-badge {
   display: none;
 }
 
@@ -1225,6 +1229,281 @@ body.mode-weather .status-badge {
   color: var(--text-muted);
 }
 
+/* -- groundwater view (Grundwasser-Ansicht, Etappe 46) ---------------------- */
+
+/* Same shape as the weather view: a square map on the left (its tiles are
+   placed in pixels, so JS gives it an explicit size on the kiosk — see
+   applyAutoFit in groundwater-view.js), a narrow column of controls and the
+   legend on the right, and the mandatory attribution across the bottom. */
+.groundwater {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.groundwater-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.groundwater-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.groundwater-map-card {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.groundwater-side {
+  flex: 0 0 320px;
+  overflow-y: auto;
+}
+
+.groundwater-map-card,
+.groundwater-side {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.groundwater-map-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.groundwater-map-title {
+  margin: 0;
+  font-size: var(--fs-xl);
+}
+
+.groundwater-side-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-strong);
+  color: var(--text-muted);
+}
+
+.groundwater-map-controls,
+.groundwater-periods {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.groundwater-btn {
+  min-width: 56px;
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-strong);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.groundwater-period-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* The map viewport, cropping the pixel-positioned base map tiles and the
+   marker overlay on top of them. The aspect ratio is the fallback for the
+   narrow panel; on the kiosk applyAutoFit sets an explicit square size. */
+.groundwater-map {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.groundwater-tiles {
+  position: absolute;
+  inset: 0;
+}
+
+/* Position and size come from groundwater-view.js (inline px from the
+   viewport math); only the painting rules live here. */
+.groundwater-tile {
+  position: absolute;
+  display: block;
+  max-width: none;
+}
+
+/* ONE svg holds all ~165 markers. It must not swallow taps meant for the
+   map itself, so only the markers take pointer events. */
+.groundwater-markers {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.groundwater-marker {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.groundwater-marker:focus {
+  outline: 2px solid var(--accent);
+}
+
+.groundwater-hint {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  font-size: var(--fs-lg);
+  color: var(--text-muted);
+  background: var(--bg);
+}
+
+/* The [hidden] attribute only sets display:none in the UA stylesheet, which
+   the rule above would win against — the loading hint would then sit on top
+   of the finished map forever (the trap the weather view already hit). */
+.groundwater-hint[hidden] {
+  display: none;
+}
+
+.groundwater-note,
+.groundwater-count {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.groundwater-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.groundwater-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.groundwater-legend-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* -- groundwater detail popover -------------------------------------------- */
+
+.groundwater-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.groundwater-meta-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  font-size: var(--fs-md);
+}
+
+.groundwater-meta-label {
+  flex: 0 0 170px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.groundwater-meta-value {
+  font-weight: var(--fw-strong);
+  overflow-wrap: anywhere;
+}
+
+.groundwater-siblings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+
+.groundwater-sibling-btn {
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.groundwater-detail-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-strong);
+  color: var(--text-muted);
+}
+
+.groundwater-detail-body {
+  width: 100%;
+}
+
+/* The curve plots metres above sea level ONLY. The depth below ground runs
+   the opposite way and is two orders of magnitude smaller, so it stands as
+   a number in the meta list above — never on this axis. */
+.groundwater-detail-chart {
+  width: 100%;
+  height: clamp(180px, 28vh, 260px);
+}
+
+.groundwater-detail-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.groundwater-detail-empty {
+  margin: 0;
+  padding: 32px 0;
+  text-align: center;
+  font-size: var(--fs-md);
+  color: var(--text-muted);
+}
+
+/* Required by the licence of the data (CC BY 4.0) and by the OSM tile
+   usage policy — not decoration. */
+.groundwater-attribution {
+  margin: 0 0 8px;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
 /* -- week view -------------------------------------------------------------- */
 
 .week-view {
@@ -1540,6 +1819,36 @@ body.mode-weather .status-badge {
 
   .weather-legend-item {
     font-size: var(--fs-sm);
+  }
+
+  /* Groundwater on the narrow panel / phone: map and side column stack, the
+     view scrolls, and the map falls back to its CSS aspect-ratio (applyAutoFit
+     clears the inline size below this breakpoint). */
+  .groundwater-split {
+    flex-direction: column;
+  }
+
+  .groundwater-view {
+    height: auto;
+  }
+
+  .groundwater-side {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .groundwater-map-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .groundwater-meta-row {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .groundwater-meta-label {
+    flex: none;
   }
 }
 
