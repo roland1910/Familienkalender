@@ -55,16 +55,24 @@ export function projectPixel(lon, lat, zoom, tilePx) {
 }
 
 /**
+ * World pixel of the top-left corner of a `width` x `height` viewport
+ * centred on Munich. Exported because anything drawn ON the map — the
+ * groundwater station markers — has to use the very same origin as the
+ * tiles, or it would sit next to its own position rather than on it.
+ */
+export function viewportOrigin(zoom, tilePx, width, height) {
+  const center = projectPixel(MUNICH_LON, MUNICH_LAT, zoom, tilePx);
+  return { x: center.x - width / 2, y: center.y - height / 2 };
+}
+
+/**
  * The tiles covering a `width` x `height` viewport centred on Munich,
  * each with the CSS offset it must be placed at inside that viewport.
  * Tiles outside the world (at low zoom the viewport can be wider than the
  * map) are skipped; the result is capped at MAX_TILES_PER_LAYER.
  */
 export function viewportTiles(zoom, tilePx, width, height) {
-  const center = projectPixel(MUNICH_LON, MUNICH_LAT, zoom, tilePx);
-  // World pixel of the viewport's top-left corner.
-  const originX = center.x - width / 2;
-  const originY = center.y - height / 2;
+  const { x: originX, y: originY } = viewportOrigin(zoom, tilePx, width, height);
   const firstX = Math.floor(originX / tilePx);
   const firstY = Math.floor(originY / tilePx);
   const lastX = Math.floor((originX + width) / tilePx);
@@ -89,12 +97,19 @@ export function viewportTiles(zoom, tilePx, width, height) {
 }
 
 /**
- * Step the zoom by `delta` levels within RADAR_ZOOMS, clamped at both
- * ends so the buttons stay harmless at the limits.
+ * Step `zoom` by `delta` levels within `levels`, clamped at both ends so
+ * the buttons stay harmless at the limits. An unknown current zoom starts
+ * from `fallback`. Shared with the groundwater map, which offers its own
+ * (deeper) set of levels — see groundwater-map.js.
  */
+export function stepWithin(levels, zoom, delta, fallback) {
+  const index = levels.indexOf(zoom);
+  const from = index === -1 ? levels.indexOf(fallback) : index;
+  const next = Math.min(levels.length - 1, Math.max(0, from + delta));
+  return levels[next];
+}
+
+/** Step the radar zoom within RADAR_ZOOMS. */
 export function stepZoom(zoom, delta) {
-  const index = RADAR_ZOOMS.indexOf(zoom);
-  const from = index === -1 ? RADAR_ZOOMS.indexOf(DEFAULT_ZOOM) : index;
-  const next = Math.min(RADAR_ZOOMS.length - 1, Math.max(0, from + delta));
-  return RADAR_ZOOMS[next];
+  return stepWithin(RADAR_ZOOMS, zoom, delta, DEFAULT_ZOOM);
 }
