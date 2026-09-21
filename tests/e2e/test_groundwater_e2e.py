@@ -216,9 +216,16 @@ def test_the_map_is_tiled_and_every_station_gets_a_marker(page: Page, server_url
     expect(page.locator(".groundwater-hint")).to_be_hidden()
 
 
+def zoom_in(page: Page, steps: int = 2) -> None:
+    """Zoom to the closest level (the buttons clamp, so two taps suffice)."""
+    for _ in range(steps):
+        page.locator(".groundwater-zoom-in").click()
+
+
 def test_the_markers_carry_real_svg_sparklines(page: Page, server_url: str) -> None:
     mock_groundwater(page)
     open_groundwater_view(page, server_url)
+    zoom_in(page)
 
     markers = page.locator(".groundwater-markers")
     # One single svg holds all markers (165 separate ones would be a lot of
@@ -250,6 +257,7 @@ def test_each_sparkline_uses_its_own_scale(page: Page, server_url: str) -> None:
         sparklines={"a": [440.0, 440.4, 440.2], "b": [520.0, 520.4, 520.2]},
     )
     open_groundwater_view(page, server_url)
+    zoom_in(page)
 
     sparks = page.locator("polyline.groundwater-spark")
     expect(sparks).to_have_count(2)
@@ -310,6 +318,7 @@ def test_two_stations_on_identical_coordinates_are_both_reachable(
     and each detail view links to the other as a second way in."""
     mock_groundwater(page)
     open_groundwater_view(page, server_url)
+    zoom_in(page)
 
     upper = page.locator('.groundwater-marker[data-number="100"]')
     deeper = page.locator('.groundwater-marker[data-number="101"]')
@@ -348,6 +357,100 @@ def test_two_stations_on_identical_coordinates_are_both_reachable(
     )
 
 
+def test_the_overview_shows_dots_only_and_the_curves_come_with_the_zoom(
+    page: Page, server_url: str
+) -> None:
+    """The density rule (Etappe 47): around Munich the stations stand so
+    close that their cards overlapped into an unreadable block. At the
+    default zoom the map is a plain traffic light; the curves appear once
+    Roland zooms into a corner of it."""
+    mock_groundwater(page)
+    open_groundwater_view(page, server_url)
+
+    # Every station is still on the map — only its card is gone.
+    expect(page.locator(".groundwater-marker")).to_have_count(len(STATIONS))
+    expect(page.locator(".groundwater-dot").first).to_be_visible()
+    expect(page.locator("rect.groundwater-card")).to_have_count(0)
+    expect(page.locator("polyline.groundwater-spark")).to_have_count(0)
+
+    zoom_in(page)
+    expect(page.locator("rect.groundwater-card")).to_have_count(len(STATIONS))
+    expect(page.locator("polyline.groundwater-spark")).to_have_count(len(SPARKLINES))
+
+    # ...and zooming back out puts the map into the overview again.
+    page.locator(".groundwater-zoom-out").click()
+    page.locator(".groundwater-zoom-out").click()
+    expect(page.locator("rect.groundwater-card")).to_have_count(0)
+    expect(page.locator(".groundwater-marker")).to_have_count(len(STATIONS))
+
+
+def test_the_overview_dot_is_readable_and_stays_a_touch_target(
+    page: Page, server_url: str
+) -> None:
+    """Without a card the colour of the dot is the whole message, so it has
+    to be seen from two metres — while the finger target stays at 44 px."""
+    mock_groundwater(page)
+    open_groundwater_view(page, server_url)
+
+    marker = page.locator('.groundwater-marker[data-number="16704"]')
+    dot = marker.locator("circle.groundwater-dot").bounding_box()
+    hit = marker.locator("rect.groundwater-hit").bounding_box()
+    assert dot is not None and hit is not None
+    assert dot["width"] >= 12, dot
+    assert hit["width"] >= 44 and hit["height"] >= 44, hit
+    # The target is centred on the dot, not floating next to it.
+    assert abs((hit["x"] + hit["width"] / 2) - (dot["x"] + dot["width"] / 2)) < 1, (hit, dot)
+    assert abs((hit["y"] + hit["height"] / 2) - (dot["y"] + dot["height"] / 2)) < 1, (hit, dot)
+
+
+def test_tapping_a_dot_opens_the_detail_in_both_states(page: Page, server_url: str) -> None:
+    """In the overview the tap is the ONLY way to a curve, so it has to work
+    there just as it does once the cards are drawn."""
+    mock_groundwater(page)
+    open_groundwater_view(page, server_url)
+
+    for state in ("overview", "zoomed"):
+        page.locator('.groundwater-marker[data-number="16705"]').click()
+        panel = page.locator("#groundwater-popover .groundwater-detail")
+        expect(panel).to_be_visible()
+        expect(panel.locator(".popover-title")).to_have_text("Freising Nord", timeout=5000)
+        expect(panel.locator("path.groundwater-detail-line")).to_have_count(1)
+        page.keyboard.press("Escape")
+        expect(page.locator("#groundwater-popover")).to_be_hidden()
+        if state == "overview":
+            zoom_in(page)
+
+
+def test_a_shared_well_head_stays_reachable_in_the_overview(page: Page, server_url: str) -> None:
+    """Obermenzing T 3 F and T 3 T sit on one coordinate. With no cards to
+    stack, their invisible tap targets are stacked instead — neither may
+    swallow the other."""
+    mock_groundwater(page)
+    open_groundwater_view(page, server_url)
+
+    upper = page.locator('.groundwater-marker[data-number="100"]')
+    deeper = page.locator('.groundwater-marker[data-number="101"]')
+    upper_hit = upper.locator("rect.groundwater-hit").bounding_box()
+    deeper_hit = deeper.locator("rect.groundwater-hit").bounding_box()
+    assert upper_hit is not None and deeper_hit is not None
+    assert deeper_hit["y"] + deeper_hit["height"] <= upper_hit["y"] + 1, (upper_hit, deeper_hit)
+
+    upper.click()
+    expect(page.locator("#groundwater-popover .popover-title")).to_have_text("Obermenzing T 3 F")
+    page.keyboard.press("Escape")
+    deeper.click()
+    expect(page.locator("#groundwater-popover .popover-title")).to_have_text("Obermenzing T 3 T")
+
+
+def test_the_side_column_says_where_the_curves_are(page: Page, server_url: str) -> None:
+    mock_groundwater(page)
+    open_groundwater_view(page, server_url)
+
+    note = page.locator(".groundwater-zoom-note")
+    expect(note).to_be_visible()
+    expect(note).to_have_text("Die Mini-Kurven erscheinen beim Hineinzoomen (+).")
+
+
 def test_the_period_buttons_reload_the_sparklines(page: Page, server_url: str) -> None:
     mock_groundwater(page)
     requested: list[str] = []
@@ -359,6 +462,7 @@ def test_the_period_buttons_reload_the_sparklines(page: Page, server_url: str) -
         )[-1],
     )
     open_groundwater_view(page, server_url)
+    zoom_in(page)
     expect(page.locator("polyline.groundwater-spark").first).to_be_attached()
 
     buttons = page.locator(".groundwater-period-btn")

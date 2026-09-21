@@ -50,6 +50,7 @@ import {
   DOT_RADIUS,
   MAP_TILE_PX,
   mapSize,
+  OVERVIEW_DOT_RADIUS,
   stationMarkers,
   stepGroundwaterZoom,
 } from "./groundwater-map.js";
@@ -90,8 +91,10 @@ const DETAIL_TEXT_PX = 12;
 
 // A new record low (class 3) gets a bigger dot on top of its colour:
 // classes 2 and 3 are both red, and colour alone is not a distinction.
+// Added to whichever base radius the current zoom uses, so the distinction
+// survives into the dots-only overview.
 const RECORD_LOW_CLASS = 3;
-const RECORD_LOW_DOT_RADIUS = DOT_RADIUS + 2;
+const RECORD_LOW_DOT_BONUS = 2;
 
 // The licence of the data (CC BY 4.0) requires naming the source; this is
 // not optional decoration. The NID rating and the base map carry their own
@@ -194,6 +197,15 @@ function sideColumn() {
   const side = el("div", "groundwater-side");
   side.append(el("h3", "groundwater-side-title", "Verlauf der Marker"));
   side.append(periodButtons());
+  // Without this line the curves simply look missing: in the overview the
+  // map shows dots only (density rule, see groundwater-map.js).
+  side.append(
+    el(
+      "p",
+      "groundwater-note groundwater-zoom-note",
+      "Die Mini-Kurven erscheinen beim Hineinzoomen (+).",
+    ),
+  );
   side.append(
     el(
       "p",
@@ -407,7 +419,13 @@ function stationByNumber(number) {
   return stations.find((station) => station.number === number) ?? null;
 }
 
-/** One marker: the dot on the well, the sparkline card above it, a hit area. */
+/**
+ * One marker: the dot on the well, the sparkline card above it, a hit area.
+ *
+ * Below SPARKLINE_MIN_ZOOM the card and its curve are left out entirely
+ * (see the density rule in groundwater-map.js) and the dot grows to
+ * OVERVIEW_DOT_RADIUS, because its colour is then the whole message.
+ */
 function markerNode(marker, station, colors) {
   const color = colors[situationColorVar(station.situation_class)];
   const group = svgEl("g", {
@@ -419,47 +437,50 @@ function markerNode(marker, station, colors) {
   // A foreign string, but an attribute value — not an HTML sink.
   group.setAttribute("aria-label", station.name);
 
-  group.append(
-    svgEl("rect", {
-      class: "groundwater-card",
-      x: marker.cardX,
-      y: marker.cardY,
-      width: CARD_WIDTH,
-      height: CARD_HEIGHT,
-      rx: 4,
-      fill: colors.surface,
-      "fill-opacity": 0.85,
-      stroke: color,
-      "stroke-width": 1.5,
-    }),
-  );
-
-  const values = sparklines[station.number];
-  const polyline = sparklinePolyline(values, CARD_WIDTH - 8, CARD_HEIGHT - 6);
-  if (polyline !== "") {
+  if (marker.showsCard) {
     group.append(
-      svgEl("polyline", {
-        class: "groundwater-spark",
-        transform: `translate(${marker.cardX + 4} ${marker.cardY + 3})`,
-        points: polyline,
-        fill: "none",
+      svgEl("rect", {
+        class: "groundwater-card",
+        x: marker.cardX,
+        y: marker.cardY,
+        width: CARD_WIDTH,
+        height: CARD_HEIGHT,
+        rx: 4,
+        fill: colors.surface,
+        "fill-opacity": 0.85,
         stroke: color,
-        "stroke-width": 1.6,
-        "stroke-linejoin": "round",
-        "stroke-linecap": "round",
+        "stroke-width": 1.5,
       }),
     );
+
+    const values = sparklines[station.number];
+    const polyline = sparklinePolyline(values, CARD_WIDTH - 8, CARD_HEIGHT - 6);
+    if (polyline !== "") {
+      group.append(
+        svgEl("polyline", {
+          class: "groundwater-spark",
+          transform: `translate(${marker.cardX + 4} ${marker.cardY + 3})`,
+          points: polyline,
+          fill: "none",
+          stroke: color,
+          "stroke-width": 1.6,
+          "stroke-linejoin": "round",
+          "stroke-linecap": "round",
+        }),
+      );
+    }
   }
 
   // Only the lowest card of a stack draws the dot — the stations share one
   // position, so a second dot would sit exactly on the first.
   if (marker.stackIndex === 0) {
+    const radius = marker.showsCard ? DOT_RADIUS : OVERVIEW_DOT_RADIUS;
     group.append(
       svgEl("circle", {
         class: "groundwater-dot",
         cx: marker.x,
         cy: marker.y,
-        r: station.situation_class === RECORD_LOW_CLASS ? RECORD_LOW_DOT_RADIUS : DOT_RADIUS,
+        r: station.situation_class === RECORD_LOW_CLASS ? radius + RECORD_LOW_DOT_BONUS : radius,
         fill: color,
         stroke: colors.surface,
         "stroke-width": 1.5,
@@ -468,18 +489,17 @@ function markerNode(marker, station, colors) {
   }
 
   // A transparent rectangle over the marker: it gives the whole thing one
-  // hit area instead of asking a finger to find a 1.6px line. It must NOT
-  // reach down to the dot for a stacked card — that rectangle would cover
-  // the card below it and make the other station at the same coordinates
-  // unclickable, which is exactly what the pair must never be.
-  const hitBottom = marker.stackIndex === 0 ? marker.y + DOT_RADIUS : marker.cardY + CARD_HEIGHT;
+  // hit area instead of asking a finger to find a 1.6px line — and in the
+  // overview it keeps the touch target at 44 px although the dot is 14.
+  // Its shape (and the stacking that keeps two stations at one well head
+  // apart) is pure geometry and lives in groundwater-map.js.
   group.append(
     svgEl("rect", {
       class: "groundwater-hit",
-      x: marker.cardX,
-      y: marker.cardY,
-      width: CARD_WIDTH,
-      height: hitBottom - marker.cardY,
+      x: marker.hit.x,
+      y: marker.hit.y,
+      width: marker.hit.width,
+      height: marker.hit.height,
       fill: "transparent",
     }),
   );

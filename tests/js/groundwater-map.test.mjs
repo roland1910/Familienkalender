@@ -18,6 +18,9 @@ import {
   mapSize,
   markerPixel,
   munichPixel,
+  OVERVIEW_DOT_RADIUS,
+  showsSparklines,
+  SPARKLINE_MIN_ZOOM,
   STACK_GAP,
   stationMarkers,
   stepGroundwaterZoom,
@@ -238,4 +241,84 @@ test("the default zoom shows the whole 50 km radius on a kiosk map", () => {
     assert.ok(point.x >= 0 && point.x <= size, `x ${point.x} outside the map`);
     assert.ok(point.y >= 0 && point.y <= size, `y ${point.y} outside the map`);
   }
+});
+
+// --- density rule: dots only until the map is zoomed in (Etappe 47) --------
+
+test("the sparkline threshold is one step closer than the overview default", () => {
+  // Derived, not typed: the overview zoom is the one that shows the whole
+  // radius, and the cards are meant to appear one step INTO it.
+  assert.equal(SPARKLINE_MIN_ZOOM, DEFAULT_GROUNDWATER_ZOOM + 1);
+  assert.ok(
+    GROUNDWATER_ZOOMS.includes(SPARKLINE_MIN_ZOOM),
+    "the threshold must be a zoom the buttons can actually reach",
+  );
+});
+
+test("sparklines are off below the threshold and on from it", () => {
+  assert.equal(showsSparklines(SPARKLINE_MIN_ZOOM - 1), false);
+  // The boundary itself counts as "zoomed in".
+  assert.equal(showsSparklines(SPARKLINE_MIN_ZOOM), true);
+  assert.equal(showsSparklines(SPARKLINE_MIN_ZOOM + 1), true);
+  assert.equal(showsSparklines(DEFAULT_GROUNDWATER_ZOOM), false);
+  for (const zoom of GROUNDWATER_ZOOMS) {
+    assert.equal(showsSparklines(zoom), zoom >= SPARKLINE_MIN_ZOOM, `zoom ${zoom}`);
+  }
+});
+
+test("a nonsense zoom falls back to the plain dots", () => {
+  // Fewer pixels of nothing is the safe side: a dot is always readable.
+  for (const zoom of [undefined, null, Number.NaN, "10", {}]) {
+    assert.equal(showsSparklines(zoom), false, String(zoom));
+  }
+});
+
+test("markers below the threshold carry no card", () => {
+  const [marker] = markers([station("1", MUNICH_LAT, MUNICH_LON)], DEFAULT_GROUNDWATER_ZOOM);
+  assert.equal(marker.showsCard, false);
+});
+
+test("markers at the threshold carry a card", () => {
+  const [marker] = markers([station("1", MUNICH_LAT, MUNICH_LON)], SPARKLINE_MIN_ZOOM);
+  assert.equal(marker.showsCard, true);
+});
+
+test("the dot-only hit area is a touch-sized square on the dot", () => {
+  const [marker] = markers([station("1", MUNICH_LAT, MUNICH_LON)], DEFAULT_GROUNDWATER_ZOOM);
+  assert.ok(marker.hit.width >= 44 && marker.hit.height >= 44, marker.hit);
+  assert.equal(marker.hit.x + marker.hit.width / 2, marker.x);
+  assert.equal(marker.hit.y + marker.hit.height / 2, marker.y);
+});
+
+test("the card hit area covers card and dot together", () => {
+  const [marker] = markers([station("1", MUNICH_LAT, MUNICH_LON)], SPARKLINE_MIN_ZOOM);
+  assert.equal(marker.hit.x, marker.cardX);
+  assert.equal(marker.hit.y, marker.cardY);
+  assert.equal(marker.hit.width, CARD_WIDTH);
+  assert.equal(marker.hit.y + marker.hit.height, marker.y + DOT_RADIUS);
+});
+
+test("stations sharing a well head stay separately tappable in both states", () => {
+  for (const zoom of [DEFAULT_GROUNDWATER_ZOOM, SPARKLINE_MIN_ZOOM]) {
+    const both = markers(
+      [station("T3T", 48.171, 11.453), station("T3F", 48.171, 11.453)],
+      zoom,
+    );
+    assert.equal(both.length, 2, `both stations must be drawn at zoom ${zoom}`);
+    const byNumber = Object.fromEntries(both.map((marker) => [marker.number, marker]));
+    // Same dot, stacked hit areas — neither finger target covers the other.
+    assert.equal(byNumber.T3F.x, byNumber.T3T.x);
+    assert.equal(byNumber.T3F.y, byNumber.T3T.y);
+    assert.ok(
+      byNumber.T3T.hit.y + byNumber.T3T.hit.height <= byNumber.T3F.hit.y,
+      `overlapping hit areas at zoom ${zoom}`,
+    );
+    assert.deepEqual(byNumber.T3F.siblings, ["T3F", "T3T"]);
+  }
+});
+
+test("the overview dot is bigger than the one under a card", () => {
+  // Without the curve the colour of the dot is the only thing left, so it
+  // has to carry from two metres away.
+  assert.ok(OVERVIEW_DOT_RADIUS > DOT_RADIUS, [OVERVIEW_DOT_RADIUS, DOT_RADIUS]);
 });
