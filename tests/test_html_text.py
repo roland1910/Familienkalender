@@ -8,7 +8,17 @@ the two things that matter — the line structure and the meeting LINKS — whil
 never damaging a description that is plain text to begin with.
 """
 
-from app.sources.html_text import MAX_HTML_LENGTH, html_to_text
+import _markupbase
+import ast
+import inspect
+import logging
+import textwrap
+from html import parser as html_parser
+from html.parser import HTMLParser
+
+import pytest
+
+from app.sources.html_text import MAX_HTML_LENGTH, _TextExtractor, html_to_text
 
 LOOM = (
     '<div id="loom-description">\n'
@@ -161,3 +171,107 @@ class TestRobustness:
     def test_absurdly_long_input_is_bounded(self) -> None:
         html = "<p>" + ("x" * (MAX_HTML_LENGTH * 3)) + "</p>"
         assert len(html_to_text(html)) <= MAX_HTML_LENGTH
+
+
+def _self_assignments(source: str) -> set[str]:
+    """Every attribute name that *source* assigns to ``self``.
+
+    Reading the source instead of an instance's ``__dict__`` on purpose: an
+    attribute a parser only creates while it is fed (``self._pending`` in
+    CPython 3.12) never shows up in ``vars()`` of a freshly built object.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(textwrap.dedent(source))):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Store)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        ):
+            names.add(node.attr)
+    return names
+
+
+# Attribute names CPython's HTMLParser has used for its own state, collected
+# across versions. The running interpreter is inspected as well (see below),
+# but that alone would NOT have caught the bug this guards against: ``_pending``
+# — a list buffering incomplete data — exists in the 3.12 that runs in the
+# add-on container and does not exist at all in the 3.13 used for development.
+# A purely dynamic check is therefore green exactly on the machine where such a
+# collision gets written. Names removed from CPython stay in this list on
+# purpose: the add-on has to survive on whatever interpreter the base image
+# ships.
+_RESERVED_PARSER_ATTRIBUTES = frozenset(
+    {
+        "_escapable",
+        "_pending",
+        "_support_cdata",
+        "cdata_elem",
+        "convert_charrefs",
+        "interesting",
+        "lasttag",
+        "lineno",
+        "offset",
+        "rawdata",
+        "scripting",
+        "__starttag_text",
+    }
+)
+
+
+class TestNoAttributeCollisionWithTheBaseParser:
+    """``_TextExtractor`` must never shadow state of ``HTMLParser``.
+
+    Live finding after the Etappe-45b deploy: the extractor called its
+    line-break counter ``self._pending``, the very name CPython 3.12 uses for
+    its buffer of incomplete data. ``HTMLParser.close()`` then ran
+    ``''.join(self._pending)`` on an ``int`` and raised ``TypeError``, so EVERY
+    HTML description fell into the fallback — which drops the links. Lost
+    links, silently, on a version nobody develops on.
+    """
+
+    def test_our_attribute_names_are_free(self) -> None:
+        ours = _self_assignments(inspect.getsource(_TextExtractor))
+        assert ours, "no attributes found — the source scan is broken"
+        reserved = (
+            set(vars(HTMLParser(convert_charrefs=True)))
+            | _self_assignments(inspect.getsource(html_parser))
+            | _self_assignments(inspect.getsource(_markupbase))
+            | _RESERVED_PARSER_ATTRIBUTES
+        )
+        assert not (ours & reserved)
+
+    def test_the_running_parser_is_actually_inspected(self) -> None:
+        # Guards the guard: should CPython rename its internals, the dynamic
+        # half above must still see them.
+        found = _self_assignments(inspect.getsource(html_parser))
+        assert "rawdata" in found and "convert_charrefs" in found
+
+
+class TestTheFallbackDoesNotFire:
+    """The parser path — not the tag stripper — has to do the work.
+
+    ``_strip_tags`` loses every URL, so a silent fallback looks like a working
+    conversion while quietly deleting the meeting links. Both halves are
+    asserted: the link survives AND no warning was logged.
+    """
+
+    def test_a_google_description_is_parsed_with_its_link_intact(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="app.sources.html_text"):
+            text = html_to_text(LOOM)
+        assert "Loom (https://www.loom.com/notes?workspace=1&x=2)" in text
+        assert "fell back to tag stripping" not in caplog.text
+
+    def test_no_warning_for_any_of_the_well_formed_samples(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="app.sources.html_text"):
+            for markup in (
+                LOOM,
+                "<p>Absatz</p><ul><li>Punkt</li></ul>",
+                '<div>Text <a href="https://example.com/x">Link</a></div>',
+            ):
+                html_to_text(markup)
+        assert caplog.text == ""

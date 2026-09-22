@@ -91,18 +91,28 @@ def _breaks_for(tag: str) -> int:
 class _TextExtractor(HTMLParser):
     """Collects the readable text of an HTML fragment.
 
-    Line breaks are requested rather than written: ``_pending`` remembers how
-    many are owed and is flushed before the next piece of text. A block
-    boundary only RAISES the count (so ``</div><div>`` yields one break, not
-    two), while every ``<br>`` ADDS one — two of them really are a blank line.
-    The count is capped at two on flush, which is what keeps Google's
+    Line breaks are requested rather than written: ``_pending_breaks``
+    remembers how many are owed and is flushed before the next piece of text. A
+    block boundary only RAISES the count (so ``</div><div>`` yields one break,
+    not two), while every ``<br>`` ADDS one — two of them really are a blank
+    line. The count is capped at two on flush, which is what keeps Google's
     ``<br><br><br><br>`` from becoming four empty lines.
+
+    The clumsy name is deliberate: do NOT shorten it back to ``_pending``.
+    CPython 3.12 — the interpreter inside the add-on container — uses exactly
+    that name on ``HTMLParser`` itself, for a LIST buffering incomplete data.
+    Shadowing it with an int made ``HTMLParser.close()`` run
+    ``''.join(self._pending)`` and raise ``TypeError``, so every single HTML
+    description ended up in the fallback and lost its links. None of that shows
+    on 3.13, which has no ``_pending`` at all — which is why it went unnoticed.
+    ``tests/test_html_text.py`` keeps the whole attribute set off the base
+    class's names on every version.
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
-        self._pending = 0
+        self._pending_breaks = 0
         self._skip_depth = 0
         self._href: str | None = None
         self._link_parts: list[str] = []
@@ -112,14 +122,15 @@ class _TextExtractor(HTMLParser):
         if not text:
             return
         if self._parts:
-            self._parts.append("\n" * min(self._pending, 2))
-        self._pending = 0
+            self._parts.append("\n" * min(self._pending_breaks, 2))
+        self._pending_breaks = 0
         self._parts.append(text)
 
     def _request_break(self, count: int, *, additive: bool) -> None:
         if not count:
             return
-        self._pending = self._pending + count if additive else max(self._pending, count)
+        owed = self._pending_breaks
+        self._pending_breaks = owed + count if additive else max(owed, count)
 
     # -- link handling --------------------------------------------------
     def _close_link(self) -> None:
@@ -186,7 +197,7 @@ class _TextExtractor(HTMLParser):
             # Whitespace between tags is only ever an inline separator; it must
             # not cancel a pending line break (source indentation would then
             # turn every block boundary into a blank line).
-            if self._pending == 0 and self._parts:
+            if self._pending_breaks == 0 and self._parts:
                 self._parts.append(" ")
             return
         self._emit(collapsed)
