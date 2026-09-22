@@ -48,11 +48,11 @@ import {
   CARD_WIDTH,
   DEFAULT_GROUNDWATER_ZOOM,
   DOT_RADIUS,
-  MAP_TILE_PX,
   mapSize,
   OVERVIEW_DOT_RADIUS,
   stationMarkers,
   stepGroundwaterZoom,
+  tilePixelSize,
 } from "./groundwater-map.js";
 import { viewportTiles } from "./weather-map.js";
 
@@ -392,8 +392,13 @@ function rebuildMap() {
   const tiles = activeContainer.querySelector(".groundwater-tiles");
   if (tiles === null) return;
   const { width, height } = viewportSize();
+  // Tiles are drawn SMALLER than their native 256 px so the default zoom
+  // frames the whole 50 km radius with a narrow margin; the markers below
+  // derive the very same size from the same width, or dot and tile would
+  // drift apart (see tilePixelSize).
+  const tilePx = tilePixelSize(width);
   tiles.replaceChildren(
-    ...viewportTiles(zoomLevel, MAP_TILE_PX, width, height).map((tile) =>
+    ...viewportTiles(zoomLevel, tilePx, width, height).map((tile) =>
       tileImage(baseTileUrl(tile.zoom, tile.x, tile.y), tile),
     ),
   );
@@ -523,7 +528,10 @@ function renderMarkers() {
   // ONE svg for all ~165 markers rather than 165 elements of their own —
   // the kiosk redraws this on every zoom step.
   const nodes = [];
-  for (const marker of stationMarkers(stations, zoomLevel, MAP_TILE_PX, width, height)) {
+  // Same derived tile size as the tiles underneath — the scale is what ties
+  // a marker to its place on the map.
+  const tilePx = tilePixelSize(width);
+  for (const marker of stationMarkers(stations, zoomLevel, tilePx, width, height)) {
     const station = stationByNumber(marker.number);
     if (station === null) continue;
     const node = markerNode(marker, station, colors);

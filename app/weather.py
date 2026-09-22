@@ -380,13 +380,15 @@ OSM_TILE_HOST = "https://tile.openstreetmap.org"
 #
 # 9 and 10 were added in Etappe 46 for the GROUNDWATER map, which reuses
 # this base tile proxy (app/static/js/groundwater-map.js). It shows the
-# 50 km radius around Munich, i.e. a ~100 km square: at zoom 8 that is a
-# quarter of a 900 px map, far too small to tell ~165 stations apart, and
-# zoom 9/10 put 180 km / 90 km across that same square. The tile WINDOW
-# needed no widening — MAX_TILE_RADIUS already covers ±105 km at zoom 10
-# (see test_the_groundwater_radius_fits_inside_the_tile_window), and the
-# frontend caps its map size so a huge screen cannot walk out of it.
-ALLOWED_ZOOMS = (5, 6, 7, 8, 9, 10)
+# 50 km radius around Munich, i.e. a ~100 km square, and needs a far closer
+# scale than the radar. 11 followed in Etappe 48: no whole tile zoom frames
+# that square, so the view now draws zoom 10 tiles DOWNSCALED and offers
+# 9/10/11 behind its -/+ buttons. The tile WINDOW still needed no widening —
+# MAX_TILE_RADIUS covers the 50 km ring even at zoom 11 (see
+# test_the_groundwater_radius_fits_inside_the_tile_window), and because the
+# frontend scales its tiles with its map size, a bigger screen asks for
+# bigger tiles rather than for more of them.
+ALLOWED_ZOOMS = (5, 6, 7, 8, 9, 10, 11)
 DEFAULT_ZOOM = 7
 # The radar has its own, lower ceiling: above this RainViewer answers HTTP
 # 200 with a picture of the words "Zoom Level Not Supported", so relaying

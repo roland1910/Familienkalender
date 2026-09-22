@@ -103,6 +103,16 @@ STATIONS = [
     station("101", name="Obermenzing T 3 T", lat=48.171, lon=11.453, level=512.0, tier="deep"),
 ]
 
+# The four extremes of the bounding box the live service really returns
+# (178 stations, measured 2026-09-22): ~47 km north/south and ~49/46 km
+# east/west of Munich. They are what "die äussersten messpunkte" means.
+RIM_STATIONS = [
+    station("rim-n", name="Nordrand", lat=48.5115, lon=11.5755),
+    station("rim-s", name="Südrand", lat=47.7124, lon=11.5755),
+    station("rim-o", name="Ostrand", lat=48.1374, lon=12.2367),
+    station("rim-w", name="Westrand", lat=48.1374, lon=10.9527),
+]
+
 # "16708" deliberately has NO series: a station without history must render
 # a marker without a curve and a German hint in its detail view.
 SPARKLINES = {
@@ -442,6 +452,42 @@ def test_a_shared_well_head_stays_reachable_in_the_overview(page: Page, server_u
     expect(page.locator("#groundwater-popover .popover-title")).to_have_text("Obermenzing T 3 T")
 
 
+def test_the_outermost_stations_sit_close_to_the_map_edge(page: Page, server_url: str) -> None:
+    """Etappe 48: "zoom die karte etwas mehr rein, die äussersten messpunkte
+    können nah am rand sein."
+
+    Before this stage the default view spanned ~171 km on the kiosk while the
+    stations only reach ~98 km across, so they clung to the middle of a
+    mostly empty map: the rim stations covered barely half of it. The view
+    now frames ~109 km, which is the 100 km circle plus a 4% margin per side.
+    """
+    mock_groundwater(page, stations=RIM_STATIONS)
+    open_groundwater_view(page, server_url)
+
+    map_box = page.locator(".groundwater-map").bounding_box()
+    assert map_box is not None
+    centres = {}
+    for rim in RIM_STATIONS:
+        dot = page.locator(
+            f'.groundwater-marker[data-number="{rim["number"]}"] circle.groundwater-dot'
+        ).bounding_box()
+        assert dot is not None, rim["number"]
+        # Drawn whole, not clipped by the edge — that is what the margin buys.
+        assert dot["x"] >= map_box["x"], (rim["number"], dot, map_box)
+        assert dot["y"] >= map_box["y"], (rim["number"], dot, map_box)
+        assert dot["x"] + dot["width"] <= map_box["x"] + map_box["width"], rim["number"]
+        assert dot["y"] + dot["height"] <= map_box["y"] + map_box["height"], rim["number"]
+        centres[rim["number"]] = (dot["x"] + dot["width"] / 2, dot["y"] + dot["height"] / 2)
+
+    # ...and they reach out to the border. Concrete thresholds, because
+    # "looks good" is not a regression test: the same four stations spanned
+    # ~53% of the width and ~55% of the height at the old default zoom.
+    width_share = (centres["rim-o"][0] - centres["rim-w"][0]) / map_box["width"]
+    height_share = (centres["rim-s"][1] - centres["rim-n"][1]) / map_box["height"]
+    assert width_share > 0.85, width_share
+    assert height_share > 0.75, height_share
+
+
 def test_the_side_column_says_where_the_curves_are(page: Page, server_url: str) -> None:
     mock_groundwater(page)
     open_groundwater_view(page, server_url)
@@ -479,18 +525,19 @@ def test_the_zoom_buttons_reload_the_tiles_and_clamp(page: Page, server_url: str
     open_groundwater_view(page, server_url)
 
     first = page.locator(".groundwater-tile").first
-    expect(first).to_have_attribute("src", re.compile(r"/tile/base/9/"))
-    page.locator(".groundwater-zoom-in").click()
+    # Default is zoom 10, drawn downscaled so it frames the 50 km radius.
     expect(first).to_have_attribute("src", re.compile(r"/tile/base/10/"))
+    page.locator(".groundwater-zoom-in").click()
+    expect(first).to_have_attribute("src", re.compile(r"/tile/base/11/"))
     # Already at the closest level.
     page.locator(".groundwater-zoom-in").click()
-    expect(first).to_have_attribute("src", re.compile(r"/tile/base/10/"))
+    expect(first).to_have_attribute("src", re.compile(r"/tile/base/11/"))
     page.locator(".groundwater-zoom-out").click()
     page.locator(".groundwater-zoom-out").click()
-    expect(first).to_have_attribute("src", re.compile(r"/tile/base/8/"))
+    expect(first).to_have_attribute("src", re.compile(r"/tile/base/9/"))
     # ...and not below the widest level either.
     page.locator(".groundwater-zoom-out").click()
-    expect(first).to_have_attribute("src", re.compile(r"/tile/base/8/"))
+    expect(first).to_have_attribute("src", re.compile(r"/tile/base/9/"))
     # The map is still fully tiled and the markers moved with it.
     assert page.locator(".groundwater-tile").count() >= 4
     expect(page.locator(".groundwater-marker").first).to_be_attached()

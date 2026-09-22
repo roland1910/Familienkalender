@@ -2,9 +2,10 @@
 // unit-testable with plain node --test.
 //
 // The map itself is the rain radar's base map: same proxied OSM tiles, same
-// `viewportTiles` (see weather-map.js), no radar layer. Only the zoom levels
-// differ — the radar shows a weather system, this view shows ~165 stations
-// inside a 50 km radius around Munich and needs a much closer scale.
+// `viewportTiles` (see weather-map.js), no radar layer. Only the scale
+// differs — the radar shows a weather system, this view shows ~178 stations
+// inside a 50 km radius around Munich and has to frame exactly that circle,
+// which no whole tile zoom does (see GROUNDWATER_ZOOMS / tilePixelSize).
 //
 // Markers are placed in PIXELS against the very same viewport origin the
 // tiles use (`viewportOrigin`). Anything else — a per-tile grid, a fresh
@@ -14,12 +15,80 @@
 import { MUNICH_LAT, MUNICH_LON, projectPixel, stepWithin, viewportOrigin } from "./weather-map.js";
 
 // Zoom levels behind the -/+ buttons (wide → close) and the default.
-// Metres per pixel at Munich's latitude: ~408 at zoom 8, ~204 at 9, ~102
-// at 10. On a ~900 px kiosk map that is 367 km / 184 km / 92 km across —
-// the 100 km circle of stations is a quarter of the map at zoom 8 and
-// fills it at 9, which is why 9 is the default.
-export const GROUNDWATER_ZOOMS = [8, 9, 10];
-export const DEFAULT_GROUNDWATER_ZOOM = 9;
+//
+// No WHOLE tile zoom frames this view well: the stations live inside a
+// 50 km radius, so the map has to cover ~100 km, and on a ~840 px kiosk map
+// that is ~119 m/px — between zoom 9 (204 m/px, stations clinging to the
+// middle with a third of the map empty around them) and zoom 10 (102 m/px,
+// the outermost stations falling off every side). The way out is the one
+// the rain radar already uses: draw tiles at a size other than their native
+// 256 px. Here the direction is the better one — zoom 10 tiles drawn
+// SMALLER, i.e. downscaled, which stays crisp (see tilePixelSize).
+export const GROUNDWATER_ZOOMS = [9, 10, 11];
+export const DEFAULT_GROUNDWATER_ZOOM = 10;
+
+// --- how much ground the default view shows --------------------------------
+
+// Radius of the station list, mirrored from RADIUS_KM in app/groundwater.py.
+// Duplicated on purpose: a one-sided change must show up in the tests here
+// rather than as stations sitting outside the map on the kiosk.
+export const STATION_RADIUS_KM = 50;
+
+// Share of the map edge the stations' 100 km circle is meant to fill. The
+// remaining 8% are the margin, 4% per side — enough that a dot at the very
+// rim is drawn whole instead of being cut by the edge, and little enough
+// that the stations reach out to the border instead of huddling in the
+// middle ("die äussersten messpunkte können nah am rand sein").
+export const STATION_CIRCLE_FILL = 0.92;
+
+/** Ground distance the default view spans, in metres (~109 km). */
+export const TARGET_COVERAGE_M = (2 * STATION_RADIUS_KM * 1000) / STATION_CIRCLE_FILL;
+
+// Native edge of an OSM tile. Everything the proxy serves is 256 px; the
+// rendered size is a separate matter (see tilePixelSize).
+export const NATIVE_TILE_PX = 256;
+
+const EARTH_CIRCUMFERENCE_M = 40075016.686;
+
+/** Ground metres one rendered pixel covers at Munich's latitude. */
+export function metresPerPixel(zoom, tilePx) {
+  const munichCircumference = EARTH_CIRCUMFERENCE_M * Math.cos((MUNICH_LAT * Math.PI) / 180);
+  return munichCircumference / (2 ** zoom * tilePx);
+}
+
+/**
+ * The edge, in CSS pixels, at which a tile is DRAWN on a `mapPx` wide map,
+ * so that the default zoom covers exactly TARGET_COVERAGE_M.
+ *
+ * Derived rather than typed, because the map size comes from the auto-fit
+ * and is not 840 px everywhere. Two consequences worth knowing:
+ *
+ *   - the tile size scales with the map, so the view always frames the same
+ *     ground and always asks for the same NUMBER of tiles (~5x6, checked in
+ *     tests/js/groundwater-map.test.mjs against the proxy's window);
+ *   - one zoom step therefore still halves (or doubles) the ground on
+ *     screen at any map size — which is what keeps the density rule below
+ *     honest, see SPARKLINE_MIN_ZOOM.
+ *
+ * On the kiosk this comes out at 202 px, i.e. a 256 px tile drawn smaller.
+ * Downscaling keeps the map sharp; only a map wider than ~1000 px would
+ * start upscaling, and MAX_MAP_PX caps how far that can go.
+ *
+ * Rounded to a WHOLE pixel on purpose. Neighbouring tiles are laid out at
+ * `x * tilePx - originX`, so with an integer edge they all share the same
+ * fractional offset and the browser rounds them the same way; a fractional
+ * edge would let two neighbours round apart and leave hairline seams across
+ * the map. The price is under a pixel of coverage, which the tests allow for.
+ */
+export function tilePixelSize(mapPx) {
+  // A viewport that has not been laid out yet must not produce a zero or
+  // negative tile size — fall back to the native edge, which is drawable.
+  const width = Number.isFinite(mapPx) && mapPx > 0 ? mapPx : NATIVE_TILE_PX;
+  const wanted = TARGET_COVERAGE_M / width; // metres per rendered pixel
+  const exact =
+    (metresPerPixel(DEFAULT_GROUNDWATER_ZOOM, NATIVE_TILE_PX) * NATIVE_TILE_PX) / wanted;
+  return Math.max(1, Math.round(exact));
+}
 
 // DENSITY RULE (Etappe 47, from a photo of the real kiosk): below this zoom
 // only the coloured dots are drawn, the sparkline cards appear from here on.
@@ -34,9 +103,15 @@ export const DEFAULT_GROUNDWATER_ZOOM = 9;
 // the curves appear once a corner of it is actually being looked at — the
 // order in which such a map is really read. The threshold is DERIVED from
 // the overview zoom rather than typed: the cards belong one step INTO the
-// map, whatever the default happens to be. One step halves the ground the
-// map covers (~184 km across at zoom 9, ~92 km at 10), which is what gives
-// the cards their room.
+// map, whatever the default happens to be.
+//
+// Stated over the zoom INDEX although the rendered tile size now varies —
+// on purpose. The tile size scales with the map (tilePixelSize), so one
+// zoom step halves the ground on screen on every display: the index and the
+// effective resolution say the same thing, and the index says it in one
+// comparison. What matters for card overlap is how much ground shares the
+// map, and that is exactly what a step changes (~109 km across at the
+// default, ~54 km one step in).
 export const SPARKLINE_MIN_ZOOM = DEFAULT_GROUNDWATER_ZOOM + 1;
 
 /** True when the map is close enough to draw the sparkline cards. */
@@ -46,16 +121,11 @@ export function showsSparklines(zoom) {
   return typeof zoom === "number" && Number.isFinite(zoom) && zoom >= SPARKLINE_MIN_ZOOM;
 }
 
-// The base map is drawn at its native tile size (no upscaling — unlike the
-// radar, nothing forces a coarser layer underneath).
-export const MAP_TILE_PX = 256;
-
-// Hard cap on the rendered map edge. The backend proxy only serves tiles
-// within MAX_TILE_RADIUS (4) of Munich's own tile; a map far larger than a
-// kiosk screen (a 4K monitor, a zoomed-out browser) would ask for tiles
-// outside that window and get 400s. 1200 px keeps the worst case at three
-// tiles from the centre — checked in tests/js/groundwater-map.test.mjs
-// against the duplicated backend limits.
+// Hard cap on the rendered map edge. With a derived tile size a huge map no
+// longer asks for MORE tiles (it asks for bigger ones), so the cap is now
+// about sharpness and sanity: beyond ~1000 px the 256 px tiles are being
+// upscaled, and a 4K monitor would blow them up without showing more.
+// Checked in tests/js/groundwater-map.test.mjs against the backend's window.
 export const MAX_MAP_PX = 1200;
 
 // Marker geometry, in CSS pixels. The card holds the sparkline and sits
@@ -81,8 +151,9 @@ export const OVERVIEW_DOT_RADIUS = 7;
 export const DOT_HIT_SIZE = 44;
 
 // How far outside the viewport a marker may sit and still be built. Beyond
-// that it is dropped: at zoom 8 most of the 165 stations are on screen, but
-// at zoom 10 two thirds are not, and building their DOM would be waste.
+// that it is dropped: at the default zoom all of the ~178 stations are on
+// screen, but one step in three quarters are not, and building their DOM
+// would be waste.
 const OFF_SCREEN_MARGIN = CARD_WIDTH;
 
 /** Step the groundwater zoom within GROUNDWATER_ZOOMS (clamped at both ends). */

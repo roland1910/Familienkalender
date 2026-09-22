@@ -13,19 +13,25 @@ import {
   DEFAULT_GROUNDWATER_ZOOM,
   DOT_RADIUS,
   GROUNDWATER_ZOOMS,
-  MAP_TILE_PX,
   MAX_MAP_PX,
   mapSize,
   markerPixel,
+  metresPerPixel,
   munichPixel,
+  NATIVE_TILE_PX,
   OVERVIEW_DOT_RADIUS,
   showsSparklines,
   SPARKLINE_MIN_ZOOM,
   STACK_GAP,
+  STATION_CIRCLE_FILL,
+  STATION_RADIUS_KM,
   stationMarkers,
   stepGroundwaterZoom,
+  TARGET_COVERAGE_M,
+  tilePixelSize,
 } from "../../app/static/js/groundwater-map.js";
 import {
+  MAX_TILES_PER_LAYER,
   MUNICH_LAT,
   MUNICH_LON,
   projectPixel,
@@ -34,25 +40,34 @@ import {
 
 // Backend-side limits, duplicated on purpose so a one-sided change fails
 // here instead of showing empty tiles (or 400s) on the kiosk.
-const BACKEND_ZOOMS = [5, 6, 7, 8, 9, 10];
+const BACKEND_ZOOMS = [5, 6, 7, 8, 9, 10, 11];
 const BACKEND_TILE_RADIUS = 4;
 
 // The radius of the station list (app/groundwater.py: RADIUS_KM).
 const RADIUS_KM = 50;
 
+// Bounding box of the 178 stations the live service actually returns
+// (measured 2026-09-22). The 50 km radius is the guarantee, this is the
+// reality the margin is judged against.
+const STATION_BBOX = { latMin: 47.7124, latMax: 48.5115, lonMin: 10.9527, lonMax: 12.2367 };
+
 const VIEW = { width: 900, height: 900 };
+
+// The tile edge the view really renders at this map size — markers and
+// tiles both take it from the map width, so the tests must too.
+const VIEW_TILE_PX = tilePixelSize(VIEW.width);
 
 function station(number, lat, lon) {
   return { number, name: `Messstelle ${number}`, lat, lon };
 }
 
 function markers(stations, zoom = DEFAULT_GROUNDWATER_ZOOM, view = VIEW) {
-  return stationMarkers(stations, zoom, MAP_TILE_PX, view.width, view.height);
+  return stationMarkers(stations, zoom, tilePixelSize(view.width), view.width, view.height);
 }
 
 test("Munich lands exactly in the middle of the viewport", () => {
   for (const zoom of GROUNDWATER_ZOOMS) {
-    const point = munichPixel(zoom, MAP_TILE_PX, VIEW.width, VIEW.height);
+    const point = munichPixel(zoom, VIEW_TILE_PX, VIEW.width, VIEW.height);
     assert.ok(Math.abs(point.x - VIEW.width / 2) < 1e-6, `x off centre at zoom ${zoom}`);
     assert.ok(Math.abs(point.y - VIEW.height / 2) < 1e-6, `y off centre at zoom ${zoom}`);
   }
@@ -64,24 +79,24 @@ test("a marker sits on the same pixel grid as the tiles under it", () => {
   const lat = 48.25;
   const lon = 11.35;
   const zoom = DEFAULT_GROUNDWATER_ZOOM;
-  const tiles = viewportTiles(zoom, MAP_TILE_PX, VIEW.width, VIEW.height);
-  const world = projectPixel(lon, lat, zoom, MAP_TILE_PX);
+  const tiles = viewportTiles(zoom, VIEW_TILE_PX, VIEW.width, VIEW.height);
+  const world = projectPixel(lon, lat, zoom, VIEW_TILE_PX);
   const host = tiles.find(
     (tile) =>
-      tile.x === Math.floor(world.x / MAP_TILE_PX) && tile.y === Math.floor(world.y / MAP_TILE_PX),
+      tile.x === Math.floor(world.x / VIEW_TILE_PX) && tile.y === Math.floor(world.y / VIEW_TILE_PX),
   );
   assert.ok(host !== undefined, "the station's own tile is not in the viewport");
 
-  const marker = markerPixel(lon, lat, zoom, MAP_TILE_PX, VIEW.width, VIEW.height);
-  assert.ok(Math.abs(marker.x - (host.left + (world.x - host.x * MAP_TILE_PX))) < 1e-6);
-  assert.ok(Math.abs(marker.y - (host.top + (world.y - host.y * MAP_TILE_PX))) < 1e-6);
+  const marker = markerPixel(lon, lat, zoom, VIEW_TILE_PX, VIEW.width, VIEW.height);
+  assert.ok(Math.abs(marker.x - (host.left + (world.x - host.x * VIEW_TILE_PX))) < 1e-6);
+  assert.ok(Math.abs(marker.y - (host.top + (world.y - host.y * VIEW_TILE_PX))) < 1e-6);
 });
 
 test("north is up and east is right", () => {
   const zoom = DEFAULT_GROUNDWATER_ZOOM;
-  const centre = munichPixel(zoom, MAP_TILE_PX, VIEW.width, VIEW.height);
-  const north = markerPixel(MUNICH_LON, MUNICH_LAT + 0.2, zoom, MAP_TILE_PX, 900, 900);
-  const east = markerPixel(MUNICH_LON + 0.2, MUNICH_LAT, zoom, MAP_TILE_PX, 900, 900);
+  const centre = munichPixel(zoom, VIEW_TILE_PX, VIEW.width, VIEW.height);
+  const north = markerPixel(MUNICH_LON, MUNICH_LAT + 0.2, zoom, VIEW_TILE_PX, 900, 900);
+  const east = markerPixel(MUNICH_LON + 0.2, MUNICH_LAT, zoom, VIEW_TILE_PX, 900, 900);
   assert.ok(north.y < centre.y, "north must be above the centre");
   assert.ok(east.x > centre.x, "east must be right of the centre");
 });
@@ -182,13 +197,26 @@ test("a missing or broken station list yields no markers", () => {
 });
 
 test("the zoom buttons clamp at both ends", () => {
-  assert.equal(stepGroundwaterZoom(8, -1), 8);
-  assert.equal(stepGroundwaterZoom(8, 1), 9);
-  assert.equal(stepGroundwaterZoom(10, 1), 10);
-  assert.equal(stepGroundwaterZoom(10, -1), 9);
+  const widest = GROUNDWATER_ZOOMS[0];
+  const closest = GROUNDWATER_ZOOMS[GROUNDWATER_ZOOMS.length - 1];
+  assert.equal(stepGroundwaterZoom(widest, -1), widest);
+  assert.equal(stepGroundwaterZoom(widest, 1), widest + 1);
+  assert.equal(stepGroundwaterZoom(closest, 1), closest);
+  assert.equal(stepGroundwaterZoom(closest, -1), closest - 1);
   // An unknown stored zoom starts from the default instead of breaking.
-  assert.equal(stepGroundwaterZoom(99, 1), 10);
-  assert.equal(stepGroundwaterZoom(99, -1), 8);
+  assert.equal(stepGroundwaterZoom(99, 1), DEFAULT_GROUNDWATER_ZOOM + 1);
+  assert.equal(stepGroundwaterZoom(99, -1), DEFAULT_GROUNDWATER_ZOOM - 1);
+  // Every step lands on a level the buttons actually offer.
+  for (const zoom of GROUNDWATER_ZOOMS) {
+    assert.ok(GROUNDWATER_ZOOMS.includes(stepGroundwaterZoom(zoom, 1)));
+    assert.ok(GROUNDWATER_ZOOMS.includes(stepGroundwaterZoom(zoom, -1)));
+  }
+});
+
+test("the default is the middle level, so both buttons do something", () => {
+  assert.ok(GROUNDWATER_ZOOMS.includes(DEFAULT_GROUNDWATER_ZOOM));
+  assert.notEqual(DEFAULT_GROUNDWATER_ZOOM, GROUNDWATER_ZOOMS[0]);
+  assert.notEqual(DEFAULT_GROUNDWATER_ZOOM, GROUNDWATER_ZOOMS[GROUNDWATER_ZOOMS.length - 1]);
 });
 
 test("the rendered map is square and capped", () => {
@@ -198,19 +226,21 @@ test("the rendered map is square and capped", () => {
   assert.equal(mapSize(640.7), 640);
 });
 
+const MAP_SIZES = [MAX_MAP_PX, 900, 840, 420, 320];
+
 test("every tile the map asks for is inside the window the backend proxies", () => {
   // Including the largest map the cap allows — a 4K screen must not walk
   // out of the proxy's tile window and collect 400s.
-  const sizes = [MAX_MAP_PX, 900, 420, 320];
-  for (const size of sizes) {
+  for (const size of MAP_SIZES) {
+    const tilePx = tilePixelSize(size);
     for (const zoom of GROUNDWATER_ZOOMS) {
       assert.ok(BACKEND_ZOOMS.includes(zoom), `zoom ${zoom} not allowed by the proxy`);
-      const centre = projectPixel(MUNICH_LON, MUNICH_LAT, zoom, MAP_TILE_PX);
+      const centre = projectPixel(MUNICH_LON, MUNICH_LAT, zoom, tilePx);
       const centreTile = {
-        x: Math.floor(centre.x / MAP_TILE_PX),
-        y: Math.floor(centre.y / MAP_TILE_PX),
+        x: Math.floor(centre.x / tilePx),
+        y: Math.floor(centre.y / tilePx),
       };
-      for (const tile of viewportTiles(zoom, MAP_TILE_PX, size, size)) {
+      for (const tile of viewportTiles(zoom, tilePx, size, size)) {
         assert.ok(
           Math.abs(tile.x - centreTile.x) <= BACKEND_TILE_RADIUS,
           `x out of range at zoom ${zoom}, size ${size}`,
@@ -224,23 +254,108 @@ test("every tile the map asks for is inside the window the backend proxies", () 
   }
 });
 
-test("the default zoom shows the whole 50 km radius on a kiosk map", () => {
+test("smaller tiles never fan out past the per-layer cap", () => {
+  // viewportTiles TRUNCATES at MAX_TILES_PER_LAYER, so hitting the cap
+  // would silently leave holes in the map rather than raise anything.
+  for (const size of MAP_SIZES) {
+    const tilePx = tilePixelSize(size);
+    for (const zoom of GROUNDWATER_ZOOMS) {
+      const count = viewportTiles(zoom, tilePx, size, size).length;
+      assert.ok(count < MAX_TILES_PER_LAYER, `${count} tiles at zoom ${zoom}, size ${size}`);
+    }
+  }
+});
+
+// --- framing: the stations reach out to the edge (Etappe 48) ---------------
+
+test("the tile size is derived so the default zoom covers the target ground", () => {
+  for (const size of MAP_SIZES) {
+    const tilePx = tilePixelSize(size);
+    // A whole-pixel tile edge (no hairline seams, see tilePixelSize) costs
+    // at most half a tile pixel of ground — nothing else may.
+    const slack = TARGET_COVERAGE_M / tilePx;
+    assert.ok(Number.isInteger(tilePx), `tile edge ${tilePx} is not whole at size ${size}`);
+    const covered = metresPerPixel(DEFAULT_GROUNDWATER_ZOOM, tilePx) * size;
+    assert.ok(Math.abs(covered - TARGET_COVERAGE_M) < slack, `${covered} m at size ${size}`);
+  }
+  // Nothing typed: the target is the 100 km circle plus the margin.
+  assert.ok(
+    Math.abs(TARGET_COVERAGE_M - (2 * STATION_RADIUS_KM * 1000) / STATION_CIRCLE_FILL) < 1e-6,
+  );
+});
+
+test("the kiosk map downscales its tiles rather than blowing them up", () => {
+  // Fetching zoom 10 and drawing it SMALLER is what keeps the map crisp at
+  // a scale no whole tile zoom offers.
+  assert.ok(tilePixelSize(840) < NATIVE_TILE_PX, tilePixelSize(840));
+  assert.ok(tilePixelSize(900) < NATIVE_TILE_PX, tilePixelSize(900));
+});
+
+test("one zoom step still halves the ground on screen, whatever the map size", () => {
+  // This is what lets the density rule speak in zoom steps (see
+  // SPARKLINE_MIN_ZOOM) instead of in metres per pixel.
+  for (const size of MAP_SIZES) {
+    const tilePx = tilePixelSize(size);
+    for (let i = 1; i < GROUNDWATER_ZOOMS.length; i += 1) {
+      const wide = metresPerPixel(GROUNDWATER_ZOOMS[i - 1], tilePx);
+      const close = metresPerPixel(GROUNDWATER_ZOOMS[i], tilePx);
+      assert.ok(Math.abs(wide / close - 2) < 1e-9, [size, wide, close]);
+    }
+  }
+});
+
+test("a nonsense map width still yields a drawable tile size", () => {
+  for (const bad of [0, -100, Number.NaN, undefined, null]) {
+    const tilePx = tilePixelSize(bad);
+    assert.ok(Number.isFinite(tilePx) && tilePx > 0, String(bad));
+  }
+});
+
+test("the default zoom shows the whole 50 km radius with a narrow margin", () => {
   // Otherwise stations at the edge of the list would simply be invisible
-  // until Roland zooms out, without anything telling him they exist.
-  const size = 900;
+  // until Roland zooms out, without anything telling him they exist — but
+  // the point of Etappe 48 is that they must not huddle in the middle
+  // either: "die äussersten messpunkte können nah am rand sein".
   const dLat = RADIUS_KM / 111.0;
   const dLon = RADIUS_KM / (111.0 * Math.cos((MUNICH_LAT * Math.PI) / 180));
-  const corners = [
+  const ring = [
     [MUNICH_LAT + dLat, MUNICH_LON],
     [MUNICH_LAT - dLat, MUNICH_LON],
     [MUNICH_LAT, MUNICH_LON + dLon],
     [MUNICH_LAT, MUNICH_LON - dLon],
   ];
+  for (const size of MAP_SIZES) {
+    const tilePx = tilePixelSize(size);
+    for (const [lat, lon] of ring) {
+      const point = markerPixel(lon, lat, DEFAULT_GROUNDWATER_ZOOM, tilePx, size, size);
+      const margin = Math.min(point.x, size - point.x, point.y, size - point.y) / size;
+      assert.ok(margin > 0.02, `50 km ring only ${(margin * 100).toFixed(1)}% inside at ${size}`);
+      assert.ok(margin < 0.08, `50 km ring ${(margin * 100).toFixed(1)}% from the edge at ${size}`);
+    }
+  }
+});
+
+test("the real station bounding box sits close to the edge, not in the middle", () => {
+  const size = 840; // the kiosk map
+  const tilePx = tilePixelSize(size);
+  const corners = [
+    [STATION_BBOX.latMax, STATION_BBOX.lonMin],
+    [STATION_BBOX.latMax, STATION_BBOX.lonMax],
+    [STATION_BBOX.latMin, STATION_BBOX.lonMin],
+    [STATION_BBOX.latMin, STATION_BBOX.lonMax],
+  ];
+  let smallest = 1;
   for (const [lat, lon] of corners) {
-    const point = markerPixel(lon, lat, DEFAULT_GROUNDWATER_ZOOM, MAP_TILE_PX, size, size);
+    const point = markerPixel(lon, lat, DEFAULT_GROUNDWATER_ZOOM, tilePx, size, size);
     assert.ok(point.x >= 0 && point.x <= size, `x ${point.x} outside the map`);
     assert.ok(point.y >= 0 && point.y <= size, `y ${point.y} outside the map`);
+    const margin = Math.min(point.x, size - point.x, point.y, size - point.y) / size;
+    smallest = Math.min(smallest, margin);
   }
+  // Was ~21% before Etappe 48 — the stations sat in the middle of a mostly
+  // empty map. A dot must still be drawn whole, hence the lower bound.
+  assert.ok(smallest > 0.03, `outermost station only ${(smallest * 100).toFixed(1)}% inside`);
+  assert.ok(smallest < 0.07, `outermost station still ${(smallest * 100).toFixed(1)}% from the edge`);
 });
 
 // --- density rule: dots only until the map is zoomed in (Etappe 47) --------
