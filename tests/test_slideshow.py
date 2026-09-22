@@ -645,6 +645,188 @@ class TestImageEndpoint:
         assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
 
 
+class TestServeAvailabilityGuard:
+    """Serving must never shrink the index because the share is unreachable.
+
+    Same class of bug as the scan guard above (Etappe 31), on the delivery
+    path: ``is_file()`` is false for a genuinely deleted photo *and* for every
+    photo on a CIFS share that is currently unmounted or hanging. Without a
+    guard each single delivery drops one more row, so a night of 30-second
+    rotations quietly eats a four-digit number of entries.
+    """
+
+    def _index_album(self, client: TestClient, album: Path, names: list[str]) -> None:
+        for name in names:
+            _make_image(album / name)
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+
+    def _id_of(self, client: TestClient, name: str, tries: int = 10) -> int:
+        """The index id of a specific file (the rotation order is random)."""
+        for _ in range(tries):
+            picked = client.get("/api/slideshow/next").json()
+            if picked["name"] == name:
+                return int(picked["id"])
+        raise AssertionError(f"{name} never came up in the rotation")
+
+    def test_unreachable_directory_does_not_drop_the_entry(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # The share goes away (unmounted / router reboot): the configured
+        # directory itself is unavailable, so "file not found" says nothing
+        # about the photo. 404 is fine — losing the index row is not.
+        album = media_root / "Album"
+        self._index_album(client, album, ["a.jpg", "b.jpg"])
+        photo_id = self._id_of(client, "a.jpg")
+
+        shutil.rmtree(album)
+        assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 2
+
+    def test_repeated_requests_never_erode_the_index(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # The actual damage pattern: one delivery every 30 s, all night.
+        album = media_root / "Album"
+        self._index_album(client, album, ["a.jpg", "b.jpg", "c.jpg"])
+        ids = [self._id_of(client, name) for name in ("a.jpg", "b.jpg", "c.jpg")]
+
+        shutil.rmtree(album)
+        for _ in range(5):
+            for photo_id in ids:
+                assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 3
+
+    def test_single_deleted_file_in_a_reachable_directory_is_still_dropped(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # The cleanup must survive the fix: one file deleted, folder reachable.
+        album = media_root / "Album"
+        self._index_album(client, album, ["gone.jpg", "stays.jpg"])
+        photo_id = self._id_of(client, "gone.jpg")
+
+        (album / "gone.jpg").unlink()
+        assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 1
+
+    def test_deleted_subfolder_below_a_reachable_directory_is_dropped(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        # Pins the *what* of the availability check: it asks the configured
+        # directory (the mount boundary), not the file's own parent. A deleted
+        # album subfolder is a local deletion, so its entries must still go.
+        album = media_root / "Album"
+        _make_image(album / "2019" / "urlaub.jpg")
+        _make_image(album / "keep.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        photo_id = self._id_of(client, "urlaub.jpg")
+
+        shutil.rmtree(album / "2019")
+        assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 1
+
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"), reason="symlinks unsupported on this platform"
+    )
+    def test_escaping_symlink_is_refused_even_while_the_share_is_unavailable(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+        media_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The sharp one: the availability guard may only soften the *index
+        # cleanup*, never the security checks. With the share reported
+        # unavailable, an indexed file swapped for a symlink to a secret
+        # outside /media must still be refused and must not leak a byte.
+        album = media_root / "Album"
+        self._index_album(client, album, ["pic.jpg"])
+        photo_id = self._id_of(client, "pic.jpg")
+
+        secret = tmp_path / "secret.txt"
+        secret.write_text("TOP-SECRET-OUTSIDE-MEDIA")
+        (album / "pic.jpg").unlink()
+        try:
+            (album / "pic.jpg").symlink_to(secret)
+        except OSError:
+            pytest.skip("symlink creation not permitted on this platform")
+
+        monkeypatch.setattr(slideshow, "_dir_is_available", lambda _path: False)
+        response = client.get(f"/api/slideshow/image/{photo_id}")
+        assert response.status_code == 404
+        assert b"TOP-SECRET-OUTSIDE-MEDIA" not in response.content
+        # Rejected, but kept: the guard governs deletion only.
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 1
+
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"), reason="symlinks unsupported on this platform"
+    )
+    def test_symlink_inside_media_is_refused_even_while_the_share_is_unavailable(
+        self, client: TestClient, media_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A symlink that stays inside /media is refused too (the scanner never
+        # vetted the indirection) — unavailability must not relax that either.
+        album = media_root / "Album"
+        self._index_album(client, album, ["pic.jpg", "other.jpg"])
+        photo_id = self._id_of(client, "pic.jpg")
+
+        (album / "pic.jpg").unlink()
+        try:
+            (album / "pic.jpg").symlink_to(album / "other.jpg")
+        except OSError:
+            pytest.skip("symlink creation not permitted on this platform")
+
+        monkeypatch.setattr(slideshow, "_dir_is_available", lambda _path: False)
+        assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
+
+    def test_indexed_path_outside_the_media_root_is_refused(
+        self,
+        client: TestClient,
+        storage: Storage,
+        tmp_path: Path,
+        media_root: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A row whose path resolves outside /media (however it got there) is
+        # refused no matter what the availability guard says — that check is
+        # about trust, not about reachability. No configured directory covers
+        # such a path, so the poisoned row is dropped as well.
+        assert media_root.exists()
+        secret = tmp_path / "secret.jpg"
+        secret.write_bytes(b"TOP-SECRET-OUTSIDE-MEDIA")
+        storage.replace_photos([(str(secret), 0.0, "image")])
+        photo_id = int(client.get("/api/slideshow/next").json()["id"])
+
+        monkeypatch.setattr(slideshow, "_dir_is_available", lambda _path: False)
+        response = client.get(f"/api/slideshow/image/{photo_id}")
+        assert response.status_code == 404
+        assert b"TOP-SECRET-OUTSIDE-MEDIA" not in response.content
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 0
+
+    def test_unlistable_directory_counts_as_unavailable_and_never_raises(
+        self, client: TestClient, media_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A half-mounted or hanging share: the directory still exists, but
+        # listing it raises (ESTALE, EACCES). That is a failure, not an empty
+        # album — the entry stays, and the request answers 404, not 500.
+        album = media_root / "Album"
+        self._index_album(client, album, ["a.jpg", "b.jpg"])
+        photo_id = self._id_of(client, "a.jpg")
+        (album / "a.jpg").unlink()
+
+        real_scandir = os.scandir
+        hanging = [True]
+
+        def stale(path=".", *args, **kwargs):
+            if hanging[0] and str(path) == str(album):
+                raise OSError("Stale file handle")
+            return real_scandir(path, *args, **kwargs)
+
+        monkeypatch.setattr(slideshow.os, "scandir", stale)
+        assert client.get(f"/api/slideshow/image/{photo_id}").status_code == 404
+        hanging[0] = False  # not monkeypatch.undo(): it would also drop DATA_DIR
+        assert client.get("/api/admin/slideshow").json()["photo_count"] == 2
+
+
 class TestExifTakenAt:
     """The hand-rolled EXIF parser (untrusted input, must never raise)."""
 

@@ -22,6 +22,12 @@ Security model:
   allowlist; the image endpoint additionally only ever exposes files that
   a prior scan (of an admin-approved directory) put into the index.
 
+Index-loss guard: the share can be unmounted or hang, and then every
+indexed file looks missing. Both places that could react to that — the
+scan (``_scan_sync``) and the delivery (``photo_image``) — first ask
+whether the configured directory is actually reachable, and leave the
+index alone when it is not. Availability, not emptiness, is the criterion.
+
 Scan strategy (114k+ real files): the recursive walk runs in a thread
 executor via ``asyncio.to_thread`` so it never blocks the event loop, and
 it is serialized by a lock so overlapping triggers (save + hourly timer)
@@ -275,6 +281,33 @@ def _is_under(path: str, directory: str) -> bool:
         return os.path.commonpath([directory, path]) == directory
     except ValueError:
         return False  # different drives on Windows dev machines
+
+
+def _may_drop_index_entry(path: str) -> bool:
+    """Whether a rejected index entry may be deleted from the index.
+
+    The delivery path faces the same ambiguity the scan guard resolves (see
+    ``_scan_sync``): a missing file means "this photo is gone" only while the
+    share is actually reachable. On an unmounted or hanging CIFS mount *every*
+    indexed file looks missing, and deleting per request would erode the index
+    one photo at a time.
+
+    The question is asked of the **configured** slideshow directory the entry
+    lives below, not of the file's own parent. The configured directory is the
+    mount boundary — it is what disappears when the share goes away, and it is
+    exactly what the scan guard keys on, so both paths agree on what "the share
+    is down" means. The parent directory would answer a different question: a
+    deleted album subfolder is a perfectly normal local deletion whose entries
+    *should* be cleaned up, and keying on it would keep them instead.
+
+    An entry below no configured directory at all has no availability signal
+    and is stale by configuration anyway (the scan drops those too), so it may
+    go. Never raises: every step swallows OSError and answers conservatively.
+    """
+    for directory in get_slideshow_dirs():
+        if _is_under(path, directory):
+            return _dir_is_available(directory)
+    return True
 
 
 @dataclass(frozen=True)
@@ -757,6 +790,10 @@ def _path_is_below_media_root(path: str) -> bool:
     Uses ``os.path.realpath`` so a symlink pointing out of the tree, or a
     ``../`` sequence, is rejected on the *resolved* path — the same check
     ``normalize_media_dir`` applies at index time.
+
+    Truthful while the share is down, too: ``realpath`` on a path that no
+    longer exists simply normalizes it textually, so an unreachable mount can
+    never fake an "escapes the root" verdict.
     """
     root = media_root()
     resolved = os.path.realpath(path)
@@ -774,9 +811,20 @@ async def photo_image(photo_id: int) -> FileResponse:
     Serve-time re-validation closes the TOCTOU window between index time and
     serve time (symmetric to the re-check in ``get_slideshow_dirs``): if the
     indexed file has since become a symlink, or now resolves outside the
-    media root, it is rejected and the stale index entry dropped — the same
-    treatment as a vanished file. Without this, a file swapped for a symlink
-    to ``/etc/passwd`` after the scan would be streamed verbatim.
+    media root, it is rejected — the same treatment as a vanished file.
+    Without this, a file swapped for a symlink to ``/etc/passwd`` after the
+    scan would be streamed verbatim. Rejection is unconditional; nothing below
+    can soften it.
+
+    Dropping the index row, however, is a *separate and weaker* decision, and
+    it is gated on the share being reachable (``_may_drop_index_entry``, same
+    lesson as the scan guard in ``_scan_sync``). ``is_file()`` is false both
+    for a deleted photo and for every photo on an unmounted or hanging CIFS
+    share; deleting on the latter would eat the index one delivery at a time
+    (30 s per photo — a four-digit loss overnight), recoverable only by a full
+    rescan of ~54k files. The trade-off is deliberate: an orphaned index row is
+    the cheaper mistake. The next scan clears it anyway, and until then it
+    costs exactly one skipped picture.
     """
     storage = get_storage()
     path = storage.get_photo_path(photo_id)
@@ -788,9 +836,11 @@ async def photo_image(photo_id: int) -> FileResponse:
         or not _path_is_below_media_root(path)
     ):
         # The file vanished, became a symlink, or now resolves outside the
-        # media root since the last scan — drop the stale entry so the
-        # rotation stops offering it, and never stream it.
-        storage.delete_photo(photo_id)
+        # media root since the last scan — never stream it. Only forget it
+        # when its directory is demonstrably reachable, so an unmounted share
+        # cannot turn "cannot see it right now" into "it is gone".
+        if _may_drop_index_entry(path):
+            storage.delete_photo(photo_id)
         raise HTTPException(status_code=404, detail="Foto nicht mehr vorhanden.")
     media_type = _CONTENT_TYPES.get(
         Path(path).suffix.lower(), "application/octet-stream"
