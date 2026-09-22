@@ -8,7 +8,7 @@ rate limits and a lockout after repeated wrong-token attempts. All
 rate-limit tests use an injectable fake clock.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 from zoneinfo import ZoneInfo
@@ -30,9 +30,9 @@ from app.settings import ensure_feed_token, get_feed_token, rotate_feed_token
 from app.storage import Storage, default_db_path
 
 BERLIN = ZoneInfo("Europe/Berlin")
-NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
-WINDOW_START = datetime(2026, 7, 1, tzinfo=UTC)
-WINDOW_END = datetime(2026, 10, 1, tzinfo=UTC)
+# How far ahead the seeded event sits. Anything comfortably inside the feed's
+# rolling window (-7/+90 days) works; two weeks keeps it clear of both edges.
+EVENT_OFFSET_DAYS = 14
 
 # The feed port is internet-facing: clients arrive from arbitrary addresses.
 CLIENT_IP = "203.0.113.7"
@@ -74,6 +74,23 @@ def client(feed_app) -> TestClient:
 
 
 def seed_filtered_event(storage: Storage) -> None:
+    """Put one evening appointment into the feed's current window.
+
+    Everything here is anchored to the wall clock ON PURPOSE. The feed builds
+    its window from ``now`` (-7/+90 days), so a hard-coded date quietly drops
+    out of it as time passes: this test was written in July 2026 with an event
+    on the 10th and started failing in September, when that date left the
+    window — a green test that rots into a red one without anybody touching
+    the code. What it actually asserts is that a valid token returns the
+    calendar, not that a particular July date does.
+
+    16:00-18:00 local keeps the point of the fixture as well: the source is in
+    ``filtered`` mode, and the appointment only survives the family filter
+    because it reaches past the 17:00 evening boundary.
+    """
+    now = datetime.now(UTC)
+    day = (now + timedelta(days=EVENT_OFFSET_DAYS)).astimezone(BERLIN).date()
+    start = datetime.combine(day, datetime.min.time(), tzinfo=BERLIN).replace(hour=16)
     source_id = storage.add_source(
         type="caldav", name="Firma", config={}, display_mode="filtered", shortcode="RX"
     )
@@ -83,14 +100,14 @@ def seed_filtered_event(storage: Storage) -> None:
             CalendarEvent(
                 uid="work-evening",
                 title="Kundentermin",
-                start=datetime(2026, 7, 10, 16, 0, tzinfo=BERLIN),
-                end=datetime(2026, 7, 10, 18, 0, tzinfo=BERLIN),
+                start=start,
+                end=start.replace(hour=18),
                 all_day=False,
             )
         ],
-        WINDOW_START,
-        WINDOW_END,
-        synced_at=NOW,
+        now - timedelta(days=7),
+        now + timedelta(days=90),
+        synced_at=now,
     )
 
 
