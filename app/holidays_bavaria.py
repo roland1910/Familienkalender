@@ -72,3 +72,23 @@ def is_workday(day: date) -> bool:
     simply a weekend day, nothing moves.
     """
     return day.weekday() < 5 and not is_bavarian_holiday(day)
+
+
+def next_workday(start: date) -> date:
+    """The first workday on or after ``start``.
+
+    Demo and test data that wants to demonstrate the family filter has to sit
+    on a workday: the filter hides plain daytime meetings only then, and on a
+    weekend or a Bavarian holiday it deliberately shows everything. Pinning
+    such an event to "tomorrow" therefore produces data that contradicts its
+    own comment every weekend — and a test asserting it goes red without
+    anybody touching the code.
+
+    Returns ``start`` itself when that is already a workday. The loop is
+    bounded by construction: at most two weekend days plus a short run of
+    consecutive holidays separate any date from the next workday.
+    """
+    day = start
+    while not is_workday(day):
+        day += timedelta(days=1)
+    return day

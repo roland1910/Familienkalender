@@ -6,6 +6,7 @@ from datetime import date, timedelta
 import pytest
 from playwright.sync_api import Page, expect
 
+from app.holidays_bavaria import next_workday
 from tests.e2e.helpers import (
     MONTH_NAMES_DE,
     goto_calendar,
@@ -76,7 +77,9 @@ def test_xss_payload_titles_render_as_plain_text(page: Page, server_url: str) ->
     """Hostile event titles must appear literally, never as markup (rule 4)."""
     dialogs: list[str] = []
     page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
-    xss_day = date.today() + timedelta(days=1)
+    # Follows the seed, which parks the hostile titles on the workday the
+    # filter demonstration needs.
+    xss_day = next_workday(date.today() + timedelta(days=1))
     goto_month_containing(page, server_url, xss_day)
     img_chip = page.locator(".chip", has_text="Böser Termin")
     expect(img_chip).to_be_visible()

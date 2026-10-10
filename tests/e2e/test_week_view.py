@@ -6,6 +6,7 @@ from datetime import date, timedelta
 import pytest
 from playwright.sync_api import Browser, Page, expect
 
+from app.holidays_bavaria import next_workday
 from tests.e2e.helpers import goto_calendar, goto_week_containing
 
 pytestmark = pytest.mark.e2e
@@ -127,15 +128,23 @@ def test_multi_day_event_appears_as_all_day_bar(page: Page, server_url: str) -> 
 
 def test_filtered_daytime_meeting_is_hidden(page: Page, server_url: str) -> None:
     """A plain daytime meeting from a filtered source never reaches the UI,
-    while the evening event of the same source is shown."""
-    target = date.today() + timedelta(days=1)
+    while the evening event of the same source is shown.
+
+    The target MUST be a workday: at weekends and on Bavarian holidays the
+    family filter deliberately shows everything, so on those days there is
+    nothing to hide and this test would fail without a line of code having
+    changed. The demo seed puts the pair on the same next_workday.
+    """
+    target = next_workday(date.today() + timedelta(days=1))
     goto_week_containing(page, server_url, target)
     expect(page.locator(".timed-event", has_text="Kundentermin München")).to_be_visible()
     expect(page.get_by_text("Weekly Sync")).to_have_count(0)
 
 
 def test_sources_get_distinct_deterministic_colors(page: Page, server_url: str) -> None:
-    target = date.today() + timedelta(days=1)
+    # Same day as the seed uses: the two chips have to land in ONE week, and
+    # a Sunday and the Monday after it are already two different weeks.
+    target = next_workday(date.today() + timedelta(days=1))
     goto_week_containing(page, server_url, target)
     marina_chip = page.locator(".timed-event", has_text="Böser Termin")
     kunde_chip = page.locator(".timed-event", has_text="Kundentermin München")

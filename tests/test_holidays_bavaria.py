@@ -6,9 +6,14 @@ calendar without any external dependency: Easter via the Gaussian Easter
 formula, fixed-date holidays as a static list.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
-from app.holidays_bavaria import easter_sunday, is_bavarian_holiday, is_workday
+from app.holidays_bavaria import (
+    easter_sunday,
+    is_bavarian_holiday,
+    is_workday,
+    next_workday,
+)
 
 
 class TestEasterSunday:
@@ -100,3 +105,38 @@ class TestIsWorkday:
 
     def test_day_before_weekend_holiday_is_still_a_workday(self) -> None:
         assert is_workday(date(2026, 10, 2))  # Friday before Oct 3
+
+
+class TestNextWorkday:
+    """Demo and test data that demonstrates the family filter needs a workday.
+
+    The filter hides plain daytime meetings only then; pinning such an event
+    to a fixed offset like "tomorrow" makes it contradict itself every
+    weekend. next_workday is what keeps that data honest.
+    """
+
+    def test_a_workday_is_returned_unchanged(self) -> None:
+        assert next_workday(date(2026, 7, 6)) == date(2026, 7, 6)  # Monday
+
+    def test_saturday_and_sunday_both_reach_monday(self) -> None:
+        assert next_workday(date(2026, 7, 11)) == date(2026, 7, 13)  # Sat
+        assert next_workday(date(2026, 7, 12)) == date(2026, 7, 13)  # Sun
+
+    def test_a_weekday_holiday_is_skipped(self) -> None:
+        # Fronleichnam 2026 is Thursday Jun 4 -> Friday Jun 5.
+        assert next_workday(date(2026, 6, 4)) == date(2026, 6, 5)
+
+    def test_a_run_of_holidays_and_weekend_is_skipped(self) -> None:
+        # Karfreitag 2026 is Apr 3; Easter weekend plus Ostermontag follow,
+        # so the next workday is the Tuesday.
+        assert next_workday(date(2026, 4, 3)) == date(2026, 4, 7)
+
+    def test_christmas_run_reaches_the_next_working_day(self) -> None:
+        # Dec 25 (Fri) and 26 (Sat) are holidays, Dec 27 is a Sunday.
+        assert next_workday(date(2026, 12, 25)) == date(2026, 12, 28)
+
+    def test_the_result_is_always_a_workday(self) -> None:
+        day = date(2026, 1, 1)
+        while day < date(2027, 1, 1):
+            assert is_workday(next_workday(day))
+            day += timedelta(days=1)

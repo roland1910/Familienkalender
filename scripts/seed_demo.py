@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 # Allow running as a plain script: `python scripts/seed_demo.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.holidays_bavaria import next_workday
 from app.models import LOCAL_TZ, AuditEntry, CalendarEvent
 from app.storage import DB_FILENAME, Storage
 
@@ -89,10 +90,13 @@ def _marina_events(today: date) -> list[CalendarEvent]:
         _timed("demo-marina-fruehdienst", "Frühdienst", today + timedelta(days=21),
                time(6, 30), time(7, 30)),
         # Hostile titles: stored as-is, the frontend must render them as text.
+        # On the same workday as the Kunde events on purpose: the colour test
+        # compares a Marina chip against a Kunde chip within ONE week, and a
+        # Sunday and the Monday after it are already two different weeks.
         _timed("demo-marina-xss-img", '<img src=x onerror=alert("xss")> Böser Termin',
-               today + timedelta(days=1), time(10), time(11)),
+               next_workday(today + timedelta(days=1)), time(10), time(11)),
         _timed("demo-marina-xss-script", '<script>alert("xss")</script> Skript-Termin',
-               today + timedelta(days=1), time(12), time(13)),
+               next_workday(today + timedelta(days=1)), time(12), time(13)),
     ]
     # One crowded day so the month cell overflow ("+N weitere") appears.
     for index in range(6):
@@ -109,12 +113,18 @@ def _marina_events(today: date) -> list[CalendarEvent]:
 
 
 def _kunde_events(today: date) -> list[CalendarEvent]:
+    # The filtered sources demonstrate the family rule, and that rule only
+    # hides anything on a WORKDAY — at weekends and on Bavarian holidays
+    # everything is shown on purpose. Pinned to "tomorrow" these two events
+    # contradicted their own comments every weekend (and took an E2E test
+    # red with them). next_workday keeps the demonstration honest.
+    workday = next_workday(today + timedelta(days=1))
     return [
         # Reaches past the 17:00 boundary — shown.
-        _timed("demo-kunde-termin", "Kundentermin München", today + timedelta(days=1),
+        _timed("demo-kunde-termin", "Kundentermin München", workday,
                time(16), time(19), location="München"),
         # Plain daytime meeting — stored, but hidden by the family filter.
-        _timed("demo-kunde-weekly", "Weekly Sync", today + timedelta(days=1),
+        _timed("demo-kunde-weekly", "Weekly Sync", workday,
                time(10), time(11)),
         # Multi-day business trip — shown.
         CalendarEvent(
@@ -129,11 +139,14 @@ def _kunde_events(today: date) -> list[CalendarEvent]:
 
 
 def _firma_events(today: date) -> list[CalendarEvent]:
+    # Same reason as in _kunde_events: "hidden by the family filter" is only
+    # true on a workday, so the pair has to sit on one.
+    workday = next_workday(today + timedelta(days=4))
     return [
         _timed("demo-firma-bereitschaft", "Bereitschaft Nachtschicht",
-               today + timedelta(days=4), time(20), time(23)),
+               workday, time(20), time(23)),
         # Hidden by the family filter.
-        _timed("demo-firma-meeting", "Team-Meeting", today + timedelta(days=4),
+        _timed("demo-firma-meeting", "Team-Meeting", workday,
                time(9), time(10)),
         _all_day("demo-firma-fortbildung", "Fortbildung Hamburg",
                  today + timedelta(days=14), 2),
