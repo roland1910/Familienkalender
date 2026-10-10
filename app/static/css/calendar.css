@@ -224,14 +224,6 @@ body {
   font-size: var(--fs-sm);
 }
 
-/* The chevrons mean "previous"/"next" — pointing left/right in a horizontal
-   bar, up/down in the vertical one. Rotating the glyph (not the button)
-   keeps the 48px touch target square and untouched. */
-.nav-glyph {
-  display: inline-block;
-  transform: rotate(90deg);
-}
-
 .view-switch {
   display: flex;
   flex-direction: column;
@@ -1700,10 +1692,6 @@ body.mode-groundwater .status-badge {
   .mode-button,
   .icon-button {
     width: auto;
-  }
-
-  .nav-glyph {
-    transform: none;
   }
 
   .toolbar-divider {
