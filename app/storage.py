@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS photos (
     shown INTEGER NOT NULL DEFAULT 0,
     kind TEXT NOT NULL DEFAULT 'image'
 );
+CREATE TABLE IF NOT EXISTS photo_flags (
+    path TEXT PRIMARY KEY,
+    rotation INTEGER NOT NULL DEFAULT 0,
+    delete_requested_at TEXT,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS busy_blocks (
     source_key TEXT PRIMARY KEY,
     google_event_id TEXT NOT NULL,
@@ -165,6 +171,33 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 # Emojis allowed in day_tags — everything else is rejected before it ever
 # reaches the database (guards against XSS payloads and junk strings).
 _ALLOWED_TAG_EMOJIS = frozenset(option.emoji for option in TAG_OPTIONS)
+
+# The only display rotations a photo flag may carry (quarter turns,
+# clockwise, degrees). Stored as an integer and re-validated on read.
+PHOTO_ROTATIONS = (0, 90, 180, 270)
+
+# Rows of photo_flags whose delete request is set are invisible to the
+# slideshow rotation — both to the pick and to the "everything shown" reset.
+# Spliced into the photos queries as a constant fragment, never from input.
+_PENDING_DELETE_EXCLUSION = (
+    " AND path NOT IN"
+    " (SELECT path FROM photo_flags WHERE delete_requested_at IS NOT NULL)"
+)
+
+
+def normalize_rotation(value: object) -> int:
+    """A stored rotation re-validated to one of PHOTO_ROTATIONS, else 0.
+
+    Defense in depth on the read path (same idea as settings.get_* and
+    get_slideshow_dirs): a value that somehow ended up outside the quarter
+    turns must degrade to "not rotated", never reach the frontend as a junk
+    angle.
+    """
+    try:
+        rotation = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+    return rotation if rotation in PHOTO_ROTATIONS else 0
 
 
 def resolve_data_dir() -> Path:
@@ -628,6 +661,13 @@ class Storage:
         Resetting only the eligible kinds also means switching videos back on
         does not replay the images that were just shown.
 
+        A photo marked for deletion is invisible in exactly the same sense
+        (see ``_PENDING_DELETE_EXCLUSION``): it is excluded from the pick and
+        from the reset. Excluding it only from the pick would be the same bug
+        the ``kinds`` filter avoids — the reset would keep clearing rows that
+        can never be chosen, and with nothing but marked photos left the
+        rotation would spin instead of answering "nothing to show".
+
         ``rng_random`` is an injectable ``random.random``-style callable
         (returns a float in [0, 1)) so tests get deterministic ordering;
         production passes ``None`` and SQLite's own ``RANDOM()`` is used.
@@ -643,7 +683,8 @@ class Storage:
             if row is None:
                 placeholders = ",".join("?" for _ in kinds)
                 conn.execute(
-                    f"UPDATE photos SET shown = 0 WHERE kind IN ({placeholders})",
+                    f"UPDATE photos SET shown = 0 WHERE kind IN ({placeholders})"
+                    f"{_PENDING_DELETE_EXCLUSION}",
                     tuple(kinds),
                 )
                 row = self._pick_unshown(conn, rng_random, kinds)
@@ -663,9 +704,16 @@ class Storage:
         rng_random: Callable[[], float] | None,
         kinds: Sequence[str],
     ) -> sqlite3.Row | None:
-        """One random unshown row of an eligible kind, or None if all shown."""
+        """One random unshown row of an eligible kind, or None if all shown.
+
+        Photos marked for deletion are skipped — Roland must not keep seeing
+        the picture he just asked to get rid of.
+        """
         placeholders = ",".join("?" for _ in kinds)
-        where = f"WHERE shown = 0 AND kind IN ({placeholders})"
+        where = (
+            f"WHERE shown = 0 AND kind IN ({placeholders})"
+            f"{_PENDING_DELETE_EXCLUSION}"
+        )
         params = tuple(kinds)
         if rng_random is None:
             return conn.execute(
@@ -678,6 +726,131 @@ class Storage:
         if not rows:
             return None
         return rows[int(rng_random() * len(rows)) % len(rows)]
+
+    # -- photo flags (display rotation / delete requests) ------------------
+    #
+    # WHY A SEPARATE TABLE AND NOT TWO MORE COLUMNS ON ``photos``:
+    # ``replace_photos`` rebuilds the whole index with ``DELETE FROM photos``
+    # after every scan (hourly, plus every admin save). Anything stored in
+    # that table is gone an hour later — which is exactly what is documented
+    # and intended for the ``shown`` rotation state, and exactly what must
+    # NOT happen to a rotation Roland dialled in or a deletion he requested.
+    #
+    # The key is therefore the PATH, not the photos.id: the id is reassigned
+    # on every rescan (AUTOINCREMENT over a freshly emptied table), while the
+    # path is what identifies the same file across scans. Flags survive every
+    # scan without ``replace_photos`` having to know they exist.
+    #
+    # Rows that carry neither a rotation nor a delete request are meaningless
+    # and are deleted rather than kept as zero rows, so the table stays as
+    # small as the handful of photos actually flagged.
+
+    def get_photo_rotation(self, path: str) -> int:
+        """The stored display rotation for a path (0/90/180/270; 0 if none)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT rotation FROM photo_flags WHERE path = ?", (path,)
+            ).fetchone()
+        return normalize_rotation(row["rotation"]) if row else 0
+
+    def set_photo_rotation(self, path: str, rotation: int) -> int:
+        """Store the display rotation for a path; returns the stored value.
+
+        ``rotation`` is normalized to a quarter turn (anything else becomes
+        0). Setting 0 drops the row unless it still carries a delete request.
+        """
+        value = normalize_rotation(rotation)
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            if value == 0:
+                conn.execute(
+                    "DELETE FROM photo_flags WHERE path = ?"
+                    " AND delete_requested_at IS NULL",
+                    (path,),
+                )
+                conn.execute(
+                    "UPDATE photo_flags SET rotation = 0, updated_at = ?"
+                    " WHERE path = ?",
+                    (now, path),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO photo_flags (path, rotation, updated_at)"
+                    " VALUES (?, ?, ?)"
+                    " ON CONFLICT(path) DO UPDATE SET rotation = excluded.rotation,"
+                    " updated_at = excluded.updated_at",
+                    (path, value, now),
+                )
+        return value
+
+    def mark_photo_for_deletion(self, path: str) -> str:
+        """Flag a path for deletion; returns the request timestamp (UTC ISO).
+
+        Idempotent: marking an already marked photo keeps the ORIGINAL
+        timestamp, so the admin list stays ordered by when Roland first
+        asked — a second tap on the same picture must not move it.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO photo_flags (path, rotation, delete_requested_at,"
+                " updated_at) VALUES (?, 0, ?, ?)"
+                " ON CONFLICT(path) DO UPDATE SET delete_requested_at ="
+                " COALESCE(photo_flags.delete_requested_at,"
+                " excluded.delete_requested_at), updated_at = excluded.updated_at",
+                (path, now, now),
+            )
+            row = conn.execute(
+                "SELECT delete_requested_at FROM photo_flags WHERE path = ?", (path,)
+            ).fetchone()
+        return row["delete_requested_at"]
+
+    def unmark_photo_for_deletion(self, path: str) -> None:
+        """Withdraw a deletion request, keeping any rotation that was set."""
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE photo_flags SET delete_requested_at = NULL, updated_at = ?"
+                " WHERE path = ?",
+                (now, path),
+            )
+            conn.execute(
+                "DELETE FROM photo_flags WHERE path = ? AND rotation = 0"
+                " AND delete_requested_at IS NULL",
+                (path,),
+            )
+
+    def clear_photo_flags(self, path: str) -> None:
+        """Drop the whole flag row for a path (file deleted, or orphaned)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM photo_flags WHERE path = ?", (path,))
+
+    def list_photo_flags(self) -> list[dict]:
+        """Every flag row joined to the index, ordered by request time.
+
+        Each entry is ``{path, rotation, delete_requested_at, photo_id,
+        kind}``; ``photo_id``/``kind`` are None when the path is no longer in
+        the index (an orphan — the file was deleted or unconfigured since).
+        Serves both the admin's pending-delete list and the orphan sweep, so
+        one query answers both questions.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT f.path, f.rotation, f.delete_requested_at,"
+                " p.id AS photo_id, p.kind AS kind"
+                " FROM photo_flags f LEFT JOIN photos p ON p.path = f.path"
+                " ORDER BY f.delete_requested_at, f.path"
+            ).fetchall()
+        return [
+            {
+                "path": row["path"],
+                "rotation": normalize_rotation(row["rotation"]),
+                "delete_requested_at": row["delete_requested_at"],
+                "photo_id": row["photo_id"],
+                "kind": row["kind"],
+            }
+            for row in rows
+        ]
 
     # -- events ----------------------------------------------------------
 
