@@ -77,7 +77,11 @@ ERROR_CACHE_TTL_SECONDS = 10.0
 GERMAN_FORBIDDEN_MESSAGE = "Nur für Administratoren."
 
 
-class AdminLookupError(Exception):
+class HaConnectionError(Exception):
+    """The HA WebSocket API cannot be addressed (no URL/token usable)."""
+
+
+class AdminLookupError(HaConnectionError):
     """The admin user list could not be fetched from Home Assistant."""
 
 
@@ -105,12 +109,12 @@ def reset_cache() -> None:
     _cache_valid_until = 0.0
 
 
-def _ws_url() -> str:
+def ha_ws_url() -> str:
     """HA WebSocket URL (env override for local dev/tests)."""
     return os.environ.get("HA_WS_URL") or DEFAULT_HA_WS_URL
 
 
-def _ws_token() -> str:
+def ha_ws_token() -> str:
     """Token for the HA WebSocket API — same rules as app.power.create_client.
 
     The SUPERVISOR_TOKEN is coupled to the default supervisor URL; once
@@ -118,17 +122,20 @@ def _ws_token() -> str:
     the supervisor token is never sent to a different host. Either way, a
     missing token raises immediately instead of attempting a WebSocket
     handshake with an empty access_token that HA would only reject later.
+
+    Shared with app.ha_media, which speaks the same WS API with the same
+    token rules — there is one place that decides what may be sent where.
     """
-    if _ws_url() == DEFAULT_HA_WS_URL:
+    if ha_ws_url() == DEFAULT_HA_WS_URL:
         token = os.environ.get("HA_API_TOKEN") or os.environ.get("SUPERVISOR_TOKEN", "")
         if not token:
-            raise AdminLookupError(
+            raise HaConnectionError(
                 "Kein SUPERVISOR_TOKEN und kein HA_API_TOKEN gesetzt."
             )
         return token
     token = os.environ.get("HA_API_TOKEN", "")
     if not token:
-        raise AdminLookupError(
+        raise HaConnectionError(
             "HA_WS_URL ist gesetzt, aber HA_API_TOKEN fehlt — der"
             " SUPERVISOR_TOKEN gilt nur für die Standard-URL."
         )
@@ -166,10 +173,15 @@ async def _fetch_admin_user_ids() -> frozenset[str]:
     are skipped rather than raising) — a malformed response is a reason
     to fail closed, not to 500.
     """
-    token = _ws_token()
+    try:
+        token = ha_ws_token()
+    except HaConnectionError as exc:
+        # Normalized to the module's own error so callers keep catching one
+        # exception type (and the "fail closed" path stays a single branch).
+        raise AdminLookupError(str(exc)) from exc
     try:
         async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
-            async with connect(_ws_url()) as websocket:
+            async with connect(ha_ws_url()) as websocket:
                 message = json.loads(await websocket.recv())
                 if message.get("type") != "auth_required":
                     raise AdminLookupError(
