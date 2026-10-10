@@ -7,6 +7,7 @@ constants injected before the app's modules load, so the test never waits
 the real three minutes.
 """
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -24,9 +25,17 @@ FIXTURE_PNG = Path(__file__).resolve().parent.parent / "fixtures" / "slideshow-p
 # once per second (IDLE_CHECK_INTERVAL_MS), so the timeout must clear that.
 FAST_IDLE_MS = 1200
 FAST_INTERVAL_MS = 400
+# The operating icons' window (real value: 5 s) — long enough to click an
+# icon in, short enough that waiting it out does not slow the suite down.
+FAST_CONTROLS_MS = 1500
 
 
-def _mock_slideshow(page: Page, taken: dict | None = None, folders: list | None = None) -> None:
+def _mock_slideshow(
+    page: Page,
+    taken: dict | None = None,
+    folders: list | None = None,
+    rotation: int = 0,
+) -> None:
     png = FIXTURE_PNG.read_bytes()
     payload = {
         "id": 1,
@@ -34,6 +43,7 @@ def _mock_slideshow(page: Page, taken: dict | None = None, folders: list | None 
         "kind": "image",
         "taken": taken,
         "folders": folders if folders is not None else [],
+        "rotation": rotation,
     }
     page.route(
         "**/api/slideshow/next",
@@ -45,10 +55,15 @@ def _mock_slideshow(page: Page, taken: dict | None = None, folders: list | None 
     )
 
 
-def _inject_fast_timings(page: Page) -> None:
+def _inject_fast_timings(
+    page: Page,
+    controls_ms: int = FAST_CONTROLS_MS,
+    interval_ms: int = FAST_INTERVAL_MS,
+) -> None:
     page.add_init_script(
         f"window.SCREENSAVER_IDLE_MS = {FAST_IDLE_MS};"
-        f" window.SLIDESHOW_INTERVAL_MS = {FAST_INTERVAL_MS};"
+        f" window.SLIDESHOW_INTERVAL_MS = {interval_ms};"
+        f" window.SLIDESHOW_CONTROLS_MS = {controls_ms};"
     )
 
 
@@ -87,7 +102,12 @@ def test_toggle_enables_screensaver_and_idle_starts_slideshow(
         "Photos › 2019 › Urlaub"  # noqa: RUF001
     )
 
-    # Any touch/click ends the slideshow and returns to the calendar.
+    # Since Etappe 49 it takes two touches: the first brings up the three
+    # operating icons, the second (beside them) ends the slideshow and
+    # returns to the calendar.
+    page.mouse.click(960, 540)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    expect(overlay).to_have_count(1)
     page.mouse.click(960, 540)
     expect(overlay).to_have_count(0)
     expect(page.locator("#calendar .month-view")).to_be_visible()
@@ -276,7 +296,9 @@ def test_server_default_on_starts_slideshow_without_toggle_tap(
     expect(page.locator("#btn-screensaver")).to_have_attribute("aria-pressed", "true")
     expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
 
-    # A touch still ends the slideshow and returns to the calendar.
+    # Touching still ends the slideshow and returns to the calendar — since
+    # Etappe 49 on the second touch (the first opens the operating icons).
+    page.mouse.click(960, 540)
     page.mouse.click(960, 540)
     expect(page.locator(".slideshow-overlay")).to_have_count(0)
     expect(page.locator("#calendar .month-view")).to_be_visible()
@@ -412,3 +434,285 @@ def test_undecodable_video_moves_on_to_the_next_item(page: Page, server_url: str
     expect(page.locator(".slideshow-caption")).to_have_text("danach.jpg", timeout=10000)
     visible = page.locator(".slideshow-layer-visible")
     assert visible.evaluate("node => node.tagName") == "IMG"
+
+
+# -- operating icons at the kiosk (Etappe 49) --------------------------------
+#
+# One touch brings up three big corner icons (mark for deletion, turn left,
+# turn right) and keeps the picture on screen; a second touch BESIDE them
+# ends the slideshow exactly as before. Visibility and the "a tap ends it"
+# window are deliberately the same five seconds, so there is never a state in
+# which the icons are up but a tap next to them does nothing.
+
+DELETE_BUTTON = "#slideshow-mark-delete"
+CCW_BUTTON = "#slideshow-rotate-ccw"
+CW_BUTTON = "#slideshow-rotate-cw"
+CONTROL_BUTTONS = (DELETE_BUTTON, CCW_BUTTON, CW_BUTTON)
+
+
+def _mock_sequence(page: Page, names: list[str]) -> None:
+    """Serve a different item per request so an advance is visible."""
+    png = FIXTURE_PNG.read_bytes()
+    state = {"served": 0}
+
+    def next_item(route) -> None:
+        index = min(state["served"], len(names) - 1)
+        state["served"] += 1
+        route.fulfill(
+            json={
+                "id": index + 1,
+                "name": names[index],
+                "kind": "image",
+                "taken": None,
+                "folders": [],
+                "rotation": 0,
+            }
+        )
+
+    page.route("**/api/slideshow/next", next_item)
+    page.route(
+        "**/api/slideshow/image/**",
+        lambda route: route.fulfill(body=png, content_type="image/png"),
+    )
+
+
+def _centre(page: Page) -> tuple[float, float]:
+    viewport = page.viewport_size
+    assert viewport is not None
+    return viewport["width"] / 2, viewport["height"] / 2
+
+
+def _start_slideshow(page: Page, server_url: str) -> None:
+    goto_calendar(page, server_url)
+    page.locator("#btn-screensaver").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+    expect(page.locator(".slideshow-layer-visible")).to_be_visible()
+
+
+def _tap_beside_the_icons(page: Page) -> None:
+    x, y = _centre(page)
+    page.mouse.click(x, y)
+
+
+def test_first_touch_opens_the_icons_and_keeps_the_slideshow(
+    page: Page, server_url: str
+) -> None:
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    # The slideshow is still up - the first touch only arms the controls.
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+
+    for selector in CONTROL_BUTTONS:
+        button = page.locator(selector)
+        expect(button).to_be_visible()
+        box = button.bounding_box()
+        assert box is not None, selector
+        # Tapped in the dark from two metres: far above the usual 48px.
+        assert box["width"] >= 64 and box["height"] >= 64, (selector, box)
+        # Drawn as SVG, never an emoji (the kiosk has no font for those).
+        assert button.locator("svg").count() == 1, selector
+        assert button.inner_text().strip() == "", selector
+
+
+def test_second_touch_beside_the_icons_ends_the_slideshow(
+    page: Page, server_url: str
+) -> None:
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def test_tapping_an_icon_keeps_the_slideshow_and_restarts_the_window(
+    page: Page, server_url: str
+) -> None:
+    """So two turns in a row are possible without the bar running away."""
+    _inject_fast_timings(page, controls_ms=1500)
+    _mock_slideshow(page)
+    page.route(
+        "**/api/slideshow/rotate/**",
+        lambda route: route.fulfill(json={"id": 1, "rotation": 90}),
+    )
+    _start_slideshow(page, server_url)
+
+    _tap_beside_the_icons(page)
+    controls = page.locator(".slideshow-controls")
+    expect(controls).to_be_visible()
+    page.wait_for_timeout(1000)  # most of the first window is gone
+    page.locator(CW_BUTTON).click()
+    # The tap on an icon must NOT end the slideshow...
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+    # ...and it restarts the window: past the first one, still visible.
+    page.wait_for_timeout(1000)
+    expect(controls).to_be_visible()
+
+
+def test_the_icons_vanish_after_the_window_and_return_on_the_next_touch(
+    page: Page, server_url: str
+) -> None:
+    _inject_fast_timings(page, controls_ms=800)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    controls = page.locator(".slideshow-controls")
+    _tap_beside_the_icons(page)
+    expect(controls).to_be_visible()
+    expect(controls).to_be_hidden(timeout=5000)
+    # The slideshow itself kept running.
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+    # The next touch starts from the beginning again.
+    _tap_beside_the_icons(page)
+    expect(controls).to_be_visible()
+
+
+def test_the_picture_does_not_advance_while_the_icons_are_up(
+    page: Page, server_url: str
+) -> None:
+    """Otherwise the item changes mid-tap and the wrong photo is turned or
+    marked for deletion."""
+    # A visible but unhurried cadence: the picture would change twice over
+    # during the hold below if the hold did not work.
+    _inject_fast_timings(page, controls_ms=4000, interval_ms=1200)
+    _mock_sequence(page, [f"bild-{index}.jpg" for index in range(1, 11)])
+    _start_slideshow(page, server_url)
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    shown = page.locator(".slideshow-caption").inner_text()
+    page.wait_for_timeout(2600)
+    assert page.locator(".slideshow-caption").inner_text() == shown
+
+    # Once the window is over the rotation carries on by itself.
+    expect(page.locator(".slideshow-caption")).not_to_have_text(shown, timeout=10000)
+
+
+def test_turning_a_photo_rotates_the_layer_and_swaps_its_edges(
+    page: Page, server_url: str
+) -> None:
+    """The backend answers with the new ABSOLUTE angle; the view applies it
+    without reloading the picture. A quarter turn also swaps the layer's
+    edges - object-fit: contain fits the picture before the rotation."""
+    _inject_fast_timings(page, controls_ms=4000)
+    _mock_slideshow(page)
+    angle = {"value": 0}
+
+    def rotate(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        step = 90 if body.get("direction") == "cw" else -90
+        angle["value"] = (angle["value"] + step) % 360
+        route.fulfill(json={"id": 1, "rotation": angle["value"]})
+
+    page.route("**/api/slideshow/rotate/**", rotate)
+    _start_slideshow(page, server_url)
+
+    _tap_beside_the_icons(page)
+    page.locator(CW_BUTTON).click()
+    page.wait_for_function(
+        "() => { const l = document.querySelector('.slideshow-layer-visible');"
+        " return l !== null && l.style.transform.includes('rotate(90deg)'); }"
+    )
+    geometry = page.evaluate(
+        """() => {
+            const layer = document.querySelector('.slideshow-layer-visible');
+            const overlay = document.querySelector('.slideshow-overlay');
+            return {
+                width: layer.style.width,
+                height: layer.style.height,
+                transform: getComputedStyle(layer).transform,
+                frameWidth: overlay.clientWidth,
+                frameHeight: overlay.clientHeight,
+            };
+        }"""
+    )
+    assert geometry["width"] == f"{geometry['frameHeight']}px", geometry
+    assert geometry["height"] == f"{geometry['frameWidth']}px", geometry
+    # translate(-50%, -50%) rotate(90deg) == matrix(0, 1, -1, 0, tx, ty)
+    assert geometry["transform"].startswith("matrix(0, 1, -1, 0"), geometry
+
+    # Turning back the other way returns it upright, filling the frame again.
+    page.locator(CCW_BUTTON).click()
+    page.wait_for_function(
+        "() => { const l = document.querySelector('.slideshow-layer-visible');"
+        " return l !== null && l.style.transform.includes('rotate(0deg)'); }"
+    )
+    upright = page.evaluate(
+        "() => { const l = document.querySelector('.slideshow-layer-visible');"
+        " return {width: l.style.width, height: l.style.height}; }"
+    )
+    assert upright == {"width": "100%", "height": "100%"}, upright
+
+
+def test_marking_for_deletion_moves_on_to_the_next_item(
+    page: Page, server_url: str
+) -> None:
+    """The backend stops handing a marked photo out, so leaving it on screen
+    would be contradictory - it is replaced right away, with a short note."""
+    # A long slide interval: the only thing that may advance here is the tap.
+    _inject_fast_timings(page, controls_ms=4000, interval_ms=30000)
+    _mock_sequence(page, ["eins.jpg", "zwei.jpg"])
+    marked: list[str] = []
+
+    def mark(route) -> None:
+        marked.append(route.request.url)
+        route.fulfill(
+            json={
+                "id": 1,
+                "delete_requested": True,
+                "marked_at": "2026-10-10T08:00:00+00:00",
+            }
+        )
+
+    page.route("**/api/slideshow/mark-delete/**", mark)
+    _start_slideshow(page, server_url)
+    expect(page.locator(".slideshow-caption")).to_have_text("eins.jpg")
+
+    _tap_beside_the_icons(page)
+    page.locator(DELETE_BUTTON).click()
+    expect(page.locator(".slideshow-notice")).to_contain_text("vorgemerkt")
+    expect(page.locator(".slideshow-caption")).to_have_text("zwei.jpg", timeout=10000)
+    assert marked and marked[0].endswith("/api/slideshow/mark-delete/1"), marked
+    # The slideshow is still running - marking is not "end the screensaver".
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+
+
+def test_the_icons_do_not_cover_the_vertical_edge_overlays(
+    page: Page, server_url: str
+) -> None:
+    """The filename/date/folder badges (Etappe 34) sit on the screen edges;
+    the icons are inset far enough to leave them readable."""
+    _inject_fast_timings(page, controls_ms=4000)
+    _mock_slideshow(
+        page,
+        taken={"year": 2019, "month": 8, "day": 16, "hour": 17, "minute": 30},
+        folders=["Photos", "2019", "Urlaub"],
+    )
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    _start_slideshow(page, server_url)
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+
+    def box(selector: str) -> dict:
+        found = page.locator(selector).bounding_box()
+        assert found is not None, selector
+        return found
+
+    def overlaps(a: dict, b: dict) -> bool:
+        return (
+            a["x"] < b["x"] + b["width"]
+            and b["x"] < a["x"] + a["width"]
+            and a["y"] < b["y"] + b["height"]
+            and b["y"] < a["y"] + a["height"]
+        )
+
+    for badge in (".slideshow-folders", ".slideshow-taken", ".slideshow-caption"):
+        for control in CONTROL_BUTTONS:
+            assert not overlaps(box(badge), box(control)), (badge, control)

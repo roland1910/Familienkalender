@@ -1872,12 +1872,19 @@ body.mode-groundwater .status-badge {
    default (and a no-op on <video>); it is spelled out here to state the
    intent and to guard against engines (the kiosk runs WebKitGTK) whose
    default might differ. */
+/* Centred rather than `inset: 0` since Etappe 49: a layer showing a photo
+   turned by 90°/270° gets its edges SWAPPED in px (see rotationStyle in
+   slideshow-media.js) and then turns about its own centre, so it must hang
+   from the middle, not from the top-left corner. Upright and half-turned
+   items keep the 100%/100% box, which is exactly the old geometry. */
 .slideshow-layer {
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 50%;
   z-index: 0;
   width: 100%;
   height: 100%;
+  transform: translate(-50%, -50%);
   object-fit: contain;
   object-position: center;
   image-orientation: from-image;
@@ -1954,4 +1961,88 @@ body.mode-groundwater .status-badge {
   bottom: 16px;
   right: 16px;
   max-height: calc(50% - 24px);
+}
+
+/* -- operating icons (Etappe 49) ---------------------------------------- */
+
+/* A transparent full-screen layer above both the photos and the vertical
+   edge overlays; only the three buttons inside it take touches, so a tap
+   anywhere else still reaches the window listener that ends the slideshow.
+   The explicit [hidden] rule is the documented trap from the weather hint:
+   a `display` on the class would win against the hidden attribute. */
+.slideshow-controls {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.slideshow-controls[hidden] {
+  display: none;
+}
+
+/* 72px instead of the usual 48px: these are aimed at in the dark, from two
+   metres, on a photo of unknown brightness — hence the dark disc and the
+   light ring, which stay visible on a white beach and on a night shot. */
+.slideshow-control {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  pointer-events: auto;
+  /* Stops WebKitGTK (the kiosk browser) from painting its native, light
+     control background over the deliberate translucent disc. */
+  appearance: none;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.slideshow-control svg {
+  width: 40px;
+  height: 40px;
+}
+
+/* Inset from the right/left edge far enough to clear the vertical filename,
+   date and folder overlays that hug those edges (Etappe 34) — the overlays
+   stay where they are, the icons step aside. */
+.slideshow-control-delete {
+  top: 24px;
+  right: 72px;
+}
+
+.slideshow-control-ccw {
+  bottom: 24px;
+  left: 72px;
+}
+
+.slideshow-control-cw {
+  bottom: 24px;
+  right: 72px;
+}
+
+/* Short confirmation after a tap ("Zum Löschen vorgemerkt."). Centred at the
+   top, above the layers, never in the way of a finger. */
+.slideshow-notice {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 10px 18px;
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 20px;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.slideshow-notice[hidden] {
+  display: none;
 }

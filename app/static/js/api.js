@@ -192,6 +192,33 @@ export function photoImageUrl(id) {
   return `api/slideshow/image/${encodeURIComponent(id)}`;
 }
 
+// Turn the photo a quarter in the given direction ("cw"/"ccw"). The answer
+// carries the new ABSOLUTE angle — the view applies that rather than
+// counting along itself, so a lost or doubled request cannot drift.
+export async function rotatePhoto(id, direction) {
+  const response = await fetch(`api/slideshow/rotate/${encodeURIComponent(id)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ direction }),
+  });
+  if (!response.ok) {
+    throw new Error(`Foto drehen fehlgeschlagen: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+// Flag the photo for deletion. Nothing is deleted here — the file only
+// leaves the rotation and shows up in the admin list for a final decision.
+export async function markPhotoForDeletion(id) {
+  const response = await fetch(`api/slideshow/mark-delete/${encodeURIComponent(id)}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`Vormerken fehlgeschlagen: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function putDayTags(dateISO, emojis) {
   const response = await fetch(`api/tags/${dateISO}`, {
     method: "PUT",

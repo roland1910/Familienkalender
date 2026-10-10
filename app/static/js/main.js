@@ -31,7 +31,12 @@ import {
   resolveScreensaverEnabled,
   saveScreensaverEnabled,
 } from "./screensaver-memory.js";
-import { isSlideshowRunning, startSlideshow, stopSlideshow } from "./slideshow-view.js";
+import {
+  handleSlideshowInteraction,
+  isSlideshowRunning,
+  startSlideshow,
+  stopSlideshow,
+} from "./slideshow-view.js";
 import { state } from "./state.js";
 import { loadTheme, nextTheme, saveTheme } from "./theme-memory.js";
 import { loadViewState, resolveInitialView, saveViewState } from "./view-memory.js";
@@ -344,14 +349,18 @@ function applyServerDefaults(config) {
 let screensaverEnabled = false;
 let lastInteractionAt = Date.now();
 
-function markInteraction() {
+function markInteraction(event) {
   lastInteractionAt = Date.now();
   // The user is actively using the device — a late /api/config response
   // (boot-race retry) must never flip the view or arm the screensaver
   // under their fingers.
   configRetry?.markInteraction();
-  // Any interaction dismisses a running slideshow immediately.
-  if (isSlideshowRunning()) stopSlideshow();
+  // While the slideshow runs it gets first refusal on the interaction
+  // (Etappe 49): the first touch only brings up its operating icons and
+  // keeps the picture on screen, a tap on one of them acts. Everything the
+  // slideshow does not claim — a touch beside the icons, any key, the wheel
+  // — dismisses it immediately, exactly as before.
+  if (isSlideshowRunning() && !handleSlideshowInteraction(event)) stopSlideshow();
 }
 
 function checkIdle() {

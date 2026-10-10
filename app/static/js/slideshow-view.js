@@ -16,24 +16,40 @@
 // every path — fetch failure, load failure, playback error, overlong clip —
 // ends in a scheduled advance.
 //
-// Items come from GET /api/slideshow/next ({id, name, kind, taken, folders});
+// Operating mode (Etappe 49): a touch does not end the slideshow straight
+// away any more. The first touch brings up three large corner icons — mark
+// for deletion, turn left, turn right — and keeps the picture on screen; a
+// touch BESIDE them ends it as before. Their visibility and that "ends it"
+// window are the same five seconds on purpose, so there is never a state in
+// which the icons are up but a tap next to them does nothing.
+//
+// Items come from GET /api/slideshow/next ({id, name, kind, taken, folders,
+// rotation});
 // the bytes from api/slideshow/image/{id} (which supports byte ranges, so the
 // browser can seek/stream a video instead of downloading it whole). The
 // `name`/`folders` are foreign strings and are only ever set via textContent.
 
-import { fetchNextPhoto, photoImageUrl } from "./api.js";
+import { fetchNextPhoto, markPhotoForDeletion, photoImageUrl, rotatePhoto } from "./api.js";
 import { el } from "./dom.js";
+import { createIcon } from "./icons.js";
 import { formatFolderTrail, formatTakenAt } from "./slideshow-format.js";
 import {
   advanceDelayMs,
+  CONTROLS_TIMEOUT_MS,
   errorDelayMs,
   isVideoMedia,
   MAX_VIDEO_MS,
+  rotationStyle,
   SLIDE_INTERVAL_MS,
 } from "./slideshow-media.js";
 
 // Fade duration; kept in sync with the CSS transition on .slideshow-layer.
 const FADE_MS = 800;
+
+// How long a short note ("Zum Löschen vorgemerkt.") stays up. Outlives the
+// advance it triggers on purpose — the confirmation belongs to the tap, not
+// to the picture.
+const NOTICE_MS = 2500;
 
 let overlay = null;
 let layers = [];
@@ -45,6 +61,33 @@ let running = false;
 // otherwise a finished clip's `ended` handler could advance the slideshow a
 // second time, and on a 30s kiosk cadence the closures would pile up.
 let releaseVideo = null;
+
+// -- operating mode (Etappe 49) ---------------------------------------------
+//
+// A touch on the running slideshow brings up three big corner icons (mark
+// for deletion, turn left, turn right) for CONTROLS_TIMEOUT_MS; a touch
+// beside them ends the slideshow as before, and every tap on an icon
+// restarts the window. While the icons are up the slideshow MUST NOT
+// advance — otherwise the picture changes mid-tap and the wrong photo is
+// turned or thrown away. That means three things have to be held: the
+// pending advance timer, a playing video, and a swap that is already in
+// flight (its fetch finished during the tap).
+
+let context = null; // the built overlay parts, for callers without one
+let controlsNode = null;
+let noticeNode = null;
+let controlsVisible = false;
+let controlsTimer = null;
+let noticeTimer = null;
+// The advance that is armed (or was armed when the icons came up), so it can
+// be re-armed unchanged once they go away.
+let pendingAdvance = null;
+// A video paused by the operating mode, to be resumed with it.
+let pausedVideo = null;
+// Resolvers of showNext() calls that are waiting for the icons to go away.
+let controlsWaiters = [];
+// The item currently on screen: what the icons act on.
+let currentMedia = null;
 
 function clearTimer() {
   if (timer !== null) {
@@ -58,6 +101,8 @@ function releaseCurrentVideo() {
     releaseVideo();
     releaseVideo = null;
   }
+  // The clip is gone (or paused for good) — nothing left to resume.
+  pausedVideo = null;
 }
 
 /**
@@ -138,6 +183,59 @@ function buildVideoLayer() {
   return video;
 }
 
+/**
+ * One operating icon: a large round touch target with an inline SVG. The
+ * German name lives on aria-label/title — the SVG itself is decorative
+ * (never an emoji; the kiosk has no font for those, see icons.js).
+ */
+function buildControl(id, iconName, label, extraClass) {
+  const button = el("button", `slideshow-control ${extraClass}`);
+  button.type = "button";
+  button.id = id;
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  const icon = createIcon(iconName);
+  if (icon !== null) button.append(icon);
+  return button;
+}
+
+function buildControls() {
+  const node = el("div", "slideshow-controls");
+  node.hidden = true;
+  // Positions are Roland's: bin top right, turn left bottom left, turn right
+  // bottom right — the two turns mirror the direction they stand for.
+  node.append(
+    buildControl(
+      "slideshow-mark-delete",
+      "trash",
+      "Dieses Bild zum Löschen vormerken",
+      "slideshow-control-delete",
+    ),
+    buildControl(
+      "slideshow-rotate-ccw",
+      "rotate-ccw",
+      "Bild gegen den Uhrzeigersinn drehen",
+      "slideshow-control-ccw",
+    ),
+    buildControl(
+      "slideshow-rotate-cw",
+      "rotate-cw",
+      "Bild im Uhrzeigersinn drehen",
+      "slideshow-control-cw",
+    ),
+  );
+  node.querySelector("#slideshow-mark-delete").addEventListener("click", () => {
+    markCurrentForDeletion();
+  });
+  node.querySelector("#slideshow-rotate-ccw").addEventListener("click", () => {
+    turnCurrent("ccw");
+  });
+  node.querySelector("#slideshow-rotate-cw").addEventListener("click", () => {
+    turnCurrent("cw");
+  });
+  return node;
+}
+
 function buildOverlay() {
   const node = el("div", "slideshow-overlay");
   const layerA = buildImageLayer();
@@ -150,9 +248,17 @@ function buildOverlay() {
   takenAt.setAttribute("aria-hidden", "true");
   const folderTrail = el("p", "slideshow-folders");
   folderTrail.setAttribute("aria-hidden", "true");
-  node.append(layerA, layerB, caption, takenAt, folderTrail);
+  // Short confirmations ("Zum Löschen vorgemerkt.") — announced, because the
+  // picture it refers to is gone by the time it appears.
+  const notice = el("p", "slideshow-notice");
+  notice.hidden = true;
+  notice.setAttribute("role", "status");
+  const controls = buildControls();
+  node.append(layerA, layerB, caption, takenAt, folderTrail, notice, controls);
   layers = [layerA, layerB];
   activeLayer = 0;
+  controlsNode = controls;
+  noticeNode = notice;
   return { node, caption, takenAt, folderTrail };
 }
 
@@ -218,13 +324,173 @@ function playVideo(video, media, built) {
   }
 }
 
-/** Advance after `delay` ms; replaces any pending advance. */
+/**
+ * Advance after `delay` ms; replaces any pending advance. While the
+ * operating icons are up the request is only REMEMBERED — `resumeAdvance`
+ * arms it once they go away, so the picture can never change under a finger
+ * that is about to tap an icon.
+ */
 function scheduleNext(built, delay) {
   clearTimer();
+  pendingAdvance = { built, delay };
+  if (controlsVisible) return;
   timer = setTimeout(() => {
     timer = null;
+    // Defensive: the icons may have come up in the same tick the timer
+    // fired. Leave `pendingAdvance` in place so it is re-armed later.
+    if (controlsVisible) return;
+    pendingAdvance = null;
     showNext(built);
   }, delay);
+}
+
+function clearControlsTimer() {
+  if (controlsTimer !== null) {
+    clearTimeout(controlsTimer);
+    controlsTimer = null;
+  }
+}
+
+/** (Re)start the window the icons are visible — and a tap ends — for. */
+function armControls() {
+  clearControlsTimer();
+  controlsTimer = setTimeout(hideControls, CONTROLS_TIMEOUT_MS);
+}
+
+function showControls() {
+  if (controlsNode === null) return;
+  controlsVisible = true;
+  controlsNode.hidden = false;
+  clearTimer(); // `pendingAdvance` still holds what was armed
+  pauseVideoForControls();
+  armControls();
+}
+
+function hideControls() {
+  if (!controlsVisible) return;
+  controlsVisible = false;
+  if (controlsNode !== null) controlsNode.hidden = true;
+  clearControlsTimer();
+  resumeAdvance();
+}
+
+function pauseVideoForControls() {
+  const current = layers[activeLayer];
+  if (current !== undefined && current.tagName === "VIDEO" && !current.paused) {
+    current.pause();
+    pausedVideo = current;
+  }
+}
+
+function resumeAdvance() {
+  if (pausedVideo !== null) {
+    const video = pausedVideo;
+    pausedVideo = null;
+    const started = video.play();
+    // A clip that refuses to resume is not allowed to hang the slideshow —
+    // the re-armed cap below (MAX_VIDEO_MS) moves on regardless.
+    if (started && typeof started.catch === "function") started.catch(() => {});
+  }
+  const pending = pendingAdvance;
+  if (pending !== null) scheduleNext(pending.built, pending.delay);
+  releaseControlsWaiters();
+}
+
+function releaseControlsWaiters() {
+  const waiters = controlsWaiters;
+  controlsWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+/** Resolves as soon as the operating icons are gone (at once if they are). */
+function whenControlsHidden() {
+  if (!controlsVisible) return Promise.resolve();
+  return new Promise((resolve) => controlsWaiters.push(resolve));
+}
+
+/**
+ * Feed a global interaction into the running slideshow. Returns true when
+ * the slideshow handled it (and must stay up), false when the caller should
+ * end it — the historical behaviour.
+ *
+ * Only POINTER input opens the operating mode. Keyboard and wheel keep
+ * ending the slideshow at once: the icons are corner touch targets with no
+ * keyboard affordance, so a key press would only insert a step nobody at the
+ * kiosk can use — and on a maintenance laptop "any key returns to the
+ * calendar" is exactly what is expected.
+ */
+export function handleSlideshowInteraction(event) {
+  if (!running) return false;
+  if (event?.type !== "pointerdown") return false;
+  if (!controlsVisible) {
+    showControls();
+    return true;
+  }
+  const target = event.target;
+  const onControl = target instanceof Element && target.closest(".slideshow-controls") !== null;
+  if (!onControl) return false; // a tap beside the icons ends the slideshow
+  armControls(); // tapping an icon buys another window
+  return true;
+}
+
+function showNotice(text) {
+  if (noticeNode === null) return;
+  noticeNode.textContent = text;
+  noticeNode.hidden = false;
+  if (noticeTimer !== null) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    noticeTimer = null;
+    if (noticeNode !== null) {
+      noticeNode.textContent = "";
+      noticeNode.hidden = true;
+    }
+  }, NOTICE_MS);
+}
+
+/** Apply a stored rotation to one layer (see rotationStyle for the maths). */
+function applyRotation(element, rotation) {
+  const frame =
+    overlay === null ? null : { width: overlay.clientWidth, height: overlay.clientHeight };
+  const style = rotationStyle(rotation, frame);
+  element.style.width = style.width;
+  element.style.height = style.height;
+  element.style.transform = style.transform;
+}
+
+async function turnCurrent(direction) {
+  armControls();
+  const media = currentMedia;
+  if (media === null) return;
+  try {
+    const result = await rotatePhoto(media.id, direction);
+    // The item may have been replaced while the request was in flight.
+    if (!running || currentMedia?.id !== media.id) return;
+    currentMedia.rotation = result.rotation;
+    applyRotation(layers[activeLayer], result.rotation);
+  } catch {
+    showNotice("Drehen fehlgeschlagen.");
+  }
+}
+
+async function markCurrentForDeletion() {
+  armControls();
+  const media = currentMedia;
+  if (media === null) return;
+  try {
+    await markPhotoForDeletion(media.id);
+  } catch {
+    showNotice("Vormerken fehlgeschlagen.");
+    return;
+  }
+  if (!running) return;
+  showNotice("Zum Löschen vorgemerkt.");
+  // The backend stops handing a marked photo out, so leaving it on screen
+  // would contradict the tap — move on at once. Hiding the icons first
+  // releases the hold on the advance; the pending one is dropped because
+  // this advance replaces it.
+  hideControls();
+  pendingAdvance = null;
+  if (context !== null) scheduleNext(context, 0);
 }
 
 async function showNext(built) {
@@ -254,6 +520,11 @@ async function showNext(built) {
     return;
   }
   if (!running) return;
+  // The icons may have come up while this item was loading. Swapping now
+  // would change the picture under the finger that is aiming at them, so
+  // the already-loaded item waits in the invisible layer until they go.
+  await whenControlsHidden();
+  if (!running) return;
 
   // The previous video (if any) is done the moment the new layer takes over.
   releaseCurrentVideo();
@@ -262,6 +533,10 @@ async function showNext(built) {
   // a leak: with only two layers, at any time only the two most-recently-shown
   // URLs are referenced, so the browser holds at most two decoded items — not
   // a growing set.
+  // The stored rotation belongs to this item; apply it before the fade so
+  // the picture never appears upright for a frame and then jumps.
+  applyRotation(element, media.rotation);
+  currentMedia = { id: media.id, rotation: media.rotation };
   layers[next].classList.add("slideshow-layer-visible");
   layers[activeLayer].classList.remove("slideshow-layer-visible");
   activeLayer = next;
@@ -285,6 +560,7 @@ export function startSlideshow(container) {
   running = true;
   const built = buildOverlay();
   overlay = built.node;
+  context = built;
   container.append(overlay);
   showNext(built);
 }
@@ -293,6 +569,11 @@ export function startSlideshow(container) {
 export function stopSlideshow() {
   running = false;
   clearTimer();
+  clearControlsTimer();
+  if (noticeTimer !== null) {
+    clearTimeout(noticeTimer);
+    noticeTimer = null;
+  }
   // Detach the video listeners and pause before the overlay goes away, so no
   // handler can fire (and no decoding can continue) after the teardown.
   releaseCurrentVideo();
@@ -301,6 +582,15 @@ export function stopSlideshow() {
     overlay = null;
   }
   layers = [];
+  context = null;
+  controlsNode = null;
+  noticeNode = null;
+  controlsVisible = false;
+  pendingAdvance = null;
+  currentMedia = null;
+  // Anything still waiting for the icons to go away resumes and then bails
+  // out on the `running` check — no promise is left dangling.
+  releaseControlsWaiters();
 }
 
 /** Whether the slideshow is currently on screen (for main.js/idle logic). */
