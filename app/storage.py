@@ -805,6 +805,18 @@ class Storage:
             ).fetchone()
         return row["delete_requested_at"]
 
+    def photo_delete_requested_at(self, path: str) -> str | None:
+        """When this path was marked for deletion, or None if it is not.
+
+        The authority behind the final deletion: nothing is unlinked for a
+        path this returns None for.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT delete_requested_at FROM photo_flags WHERE path = ?", (path,)
+            ).fetchone()
+        return row["delete_requested_at"] if row else None
+
     def unmark_photo_for_deletion(self, path: str) -> None:
         """Withdraw a deletion request, keeping any rotation that was set."""
         now = datetime.now(UTC).isoformat()

@@ -52,7 +52,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app import settings
+from app import ha_media, settings
 from app.auth import require_admin
 from app.storage import get_storage
 
@@ -723,6 +723,29 @@ def photo_folders(path: str, root: str | None = None) -> list[str]:
     return list(Path(relative).parts)
 
 
+def media_relative_path(path: str, root: str | None = None) -> str:
+    """The path below the media root, with forward slashes; "" if outside.
+
+    This is both what the admin list shows (Roland asked to see where a
+    photo lives, and the container-absolute path says nothing to him) and
+    what the Home Assistant delete call addresses. Always derived from the
+    stored index entry, never from a request.
+
+    The "outside" verdict is taken per path segment rather than from a
+    ``..`` prefix, so a file whose *name* happens to start with two dots is
+    not mistaken for an escape.
+    """
+    try:
+        media = root if root is not None else media_root()
+        relative = os.path.relpath(path, media)
+    except ValueError:
+        return ""  # different drive on Windows dev machines
+    parts = Path(relative).parts
+    if not parts or parts[0] == os.pardir or relative in (".", ""):
+        return ""
+    return Path(relative).as_posix()
+
+
 def photo_taken_at(path: str, root: str | None = None) -> TakenAt | None:
     """Best-effort (possibly partial) taken-at moment for a photo, or None.
 
@@ -1013,6 +1036,103 @@ async def rescan_slideshow() -> dict:
     """Re-read the configured directories from disk and rebuild the index."""
     await scan_photos()
     return _slideshow_payload()
+
+
+def _collect_pending_deletes() -> list[dict]:
+    """Blocking: the photos marked for deletion, newest request last.
+
+    Also sweeps orphaned flag rows — a flag whose path left the index (file
+    deleted elsewhere, directory unconfigured). The sweep is gated on the
+    configured directory being reachable, exactly like ``_may_drop_index_entry``
+    gates dropping an index row: while the share is down *every* path looks
+    gone, and a deletion request Roland made must not evaporate because the
+    NAS hiccupped.
+
+    Reads files (taken-at extraction), so callers run it off the event loop.
+    """
+    storage = get_storage()
+    root = media_root()
+    items: list[dict] = []
+    for flag in storage.list_photo_flags():
+        path = flag["path"]
+        if flag["photo_id"] is None:
+            if _may_drop_index_entry(path):
+                storage.clear_photo_flags(path)
+            continue
+        if flag["delete_requested_at"] is None:
+            continue  # a rotation-only row
+        taken = photo_taken_at(path, root)
+        items.append(
+            {
+                "id": flag["photo_id"],
+                "name": Path(path).name,
+                "path": media_relative_path(path, root),
+                "folders": photo_folders(path, root),
+                "taken": taken.as_dict() if taken is not None else None,
+                "kind": flag["kind"],
+                "marked_at": flag["delete_requested_at"],
+            }
+        )
+    return items
+
+
+@admin_router.get("/pending-deletes")
+async def list_pending_deletes() -> dict:
+    """The photos marked for deletion at the kiosk, with preview metadata.
+
+    Each item carries ``{id, name, path, folders, taken, kind, marked_at}``.
+    ``path`` is relative to the media root — enough for Roland to recognize
+    the picture (he asked for the file path), without handing out the
+    container-absolute path. The preview image itself is fetched through the
+    existing ``GET /api/slideshow/image/{id}``.
+    """
+    return {"items": await asyncio.to_thread(_collect_pending_deletes)}
+
+
+@admin_router.delete("/pending-deletes/{photo_id}")
+async def withdraw_pending_delete(photo_id: str) -> dict:
+    """Withdraw a deletion request from the admin list (nothing is deleted)."""
+    photo_num, path = _photo_by_id(photo_id)
+    get_storage().unmark_photo_for_deletion(path)
+    return {"id": photo_num, "delete_requested": False}
+
+
+@admin_router.post("/pending-deletes/{photo_id}/delete")
+async def delete_pending_photo(photo_id: str) -> dict:
+    """Delete the file for good, through Home Assistant's media API.
+
+    Three things are established before a single byte leaves the add-on, and
+    all three come from our own database, never from the request:
+
+    1. the id is known (404 otherwise),
+    2. the photo really is marked for deletion (409 otherwise) — a guessed
+       id must never be able to delete a picture nobody asked to lose,
+    3. its stored path still resolves below the media root (400 otherwise).
+
+    The ``media_content_id`` is then built from the stored path alone. Index
+    row and flag row are cleared only AFTER Home Assistant confirmed the
+    unlink: a failure (502, German message) leaves everything in place,
+    because the file is still lying on the NAS and must stay in the list.
+    """
+    photo_num, path = _photo_by_id(photo_id)
+    storage = get_storage()
+    if storage.photo_delete_requested_at(path) is None:
+        raise HTTPException(
+            status_code=409, detail="Dieses Foto ist nicht zum Löschen vorgemerkt."
+        )
+    relative = media_relative_path(path)
+    if not relative or not _path_is_below_media_root(path):
+        raise HTTPException(
+            status_code=400, detail="Pfad liegt nicht unterhalb des Medienordners."
+        )
+    try:
+        await ha_media.delete_media(relative)
+    except ha_media.MediaDeleteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    storage.delete_photo(photo_num)
+    storage.clear_photo_flags(path)
+    logger.info("Deleted a slideshow photo via Home Assistant (id %d)", photo_num)
+    return {"id": photo_num, "deleted": True, "path": relative}
 
 
 @admin_router.get("/dirs")

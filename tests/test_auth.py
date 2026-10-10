@@ -495,6 +495,9 @@ class TestAdminGate:
             ("POST", "/api/admin/sources"),
             ("PUT", "/api/admin/settings"),
             ("PUT", "/api/admin/settings/power"),
+            ("GET", "/api/admin/slideshow/pending-deletes"),
+            ("POST", "/api/admin/slideshow/pending-deletes/1/delete"),
+            ("DELETE", "/api/admin/slideshow/pending-deletes/1"),
         ):
             response = client.request(method, url)
             assert response.status_code == 403, f"{method} {url}"
@@ -561,6 +564,23 @@ class TestNonAdminEndpointsStayOpen:
         monkeypatch.setattr(power, "_fetch_snapshot", fake_snapshot)
         response = ingress_client().get("/api/power")
         assert response.status_code == 200
+
+    def test_slideshow_rotate_and_mark_delete_stay_open(
+        self, data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whoever stands at the kiosk turns a photo or marks it for deletion.
+
+        Both are reversible and change nothing on disk — the actual deletion
+        is the admin-gated step. A non-admin must therefore get past the gate
+        and be answered on the merits (404 for an id that does not exist),
+        never a 403.
+        """
+        monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
+        client = ingress_client()
+        rotate = client.post("/api/slideshow/rotate/1", json={"direction": "cw"})
+        assert rotate.status_code == 404
+        assert client.post("/api/slideshow/mark-delete/1").status_code == 404
+        assert client.delete("/api/slideshow/mark-delete/1").status_code == 404
 
     def test_index_health_and_static_are_open(self) -> None:
         client = ingress_client()
