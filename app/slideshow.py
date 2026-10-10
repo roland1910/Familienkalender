@@ -103,6 +103,14 @@ MAX_INDEXED_PHOTOS = 100_000
 # Synology recycle bin, and every dotfile directory.
 _SKIP_DIR_NAMES = frozenset({"#recycle", "@eaDir"})
 
+# Photo ids arrive from the client. Parsed as a plain digit run of bounded
+# length — never with a bare int(), which also accepts " 12", "+12", "1_2"
+# and full-width digits (same rule as the weather tile proxy's _DIGITS).
+_DIGITS = re.compile(r"^[0-9]{1,12}$")
+
+# The two accepted turn directions and what they add to the stored angle.
+ROTATION_STEPS = {"cw": 90, "ccw": -90}
+
 # Cap on the configured directory list — a handful is realistic; this
 # rejects hostile bulk input before it is stored.
 MAX_SLIDESHOW_DIRS = 50
@@ -771,7 +779,8 @@ async def next_photo() -> dict:
     directory segments below the media root. The stored path itself is never
     exposed.
     """
-    picked = get_storage().pick_next_photo(kinds=enabled_media_kinds())
+    storage = get_storage()
+    picked = storage.pick_next_photo(kinds=enabled_media_kinds())
     if picked is None:
         raise HTTPException(status_code=404, detail="Keine Fotos im Index.")
     taken = await asyncio.to_thread(photo_taken_at, picked["path"])
@@ -781,7 +790,74 @@ async def next_photo() -> dict:
         "kind": picked["kind"],
         "taken": taken.as_dict() if taken is not None else None,
         "folders": photo_folders(picked["path"]),
+        "rotation": storage.get_photo_rotation(picked["path"]),
     }
+
+
+class RotateRequest(BaseModel):
+    """Body of /rotate: the turn direction, validated against ROTATION_STEPS.
+
+    Defaults to the empty string so an empty (or absent) body produces the
+    same German 400 as a bogus direction instead of FastAPI's 422.
+    """
+
+    direction: str = ""
+
+
+def _photo_by_id(raw_id: str) -> tuple[int, str]:
+    """(id, stored path) for a client-supplied photo id.
+
+    The id is parsed as a plain digit run — the same strict rule the weather
+    tile proxy applies to its coordinates, because ``int()`` alone accepts
+    ``" 12"``, ``"+12"`` and even ``"1_2"``. Anything else is a 400 and never
+    reaches the database; an unknown id is a 404.
+    """
+    if not _DIGITS.fullmatch(raw_id):
+        raise HTTPException(status_code=400, detail="Ungültige Foto-Id.")
+    photo_id = int(raw_id)
+    path = get_storage().get_photo_path(photo_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Foto nicht gefunden.")
+    return photo_id, path
+
+
+@router.post("/rotate/{photo_id}")
+async def rotate_photo(photo_id: str, update: RotateRequest | None = None) -> dict:
+    """Turn a photo a quarter turn and remember it; returns the new angle.
+
+    Deliberately NOT admin-gated: whoever stands at the kiosk operates this,
+    and a rotation is loss-free and reversible — it only changes how the
+    picture is displayed, never the file (``/media`` is mounted read-only).
+    The angle is stored per path, so it survives the hourly rescan.
+    """
+    step = ROTATION_STEPS.get(update.direction if update else "")
+    if step is None:
+        raise HTTPException(status_code=400, detail="Ungültige Drehrichtung.")
+    _, path = _photo_by_id(photo_id)
+    storage = get_storage()
+    rotation = (storage.get_photo_rotation(path) + step) % 360
+    return {"id": int(photo_id), "rotation": storage.set_photo_rotation(path, rotation)}
+
+
+@router.post("/mark-delete/{photo_id}")
+async def mark_photo_delete(photo_id: str) -> dict:
+    """Flag a photo for deletion (idempotent); it leaves the rotation at once.
+
+    Not admin-gated either: marking is harmless and reversible — nothing is
+    deleted here. The actual deletion is an admin action with a preview (see
+    the /api/admin/slideshow/pending-deletes endpoints).
+    """
+    photo_num, path = _photo_by_id(photo_id)
+    marked_at = get_storage().mark_photo_for_deletion(path)
+    return {"id": photo_num, "delete_requested": True, "marked_at": marked_at}
+
+
+@router.delete("/mark-delete/{photo_id}")
+async def unmark_photo_delete(photo_id: str) -> dict:
+    """Withdraw a deletion request; the photo re-enters the rotation."""
+    photo_num, path = _photo_by_id(photo_id)
+    get_storage().unmark_photo_for_deletion(path)
+    return {"id": photo_num, "delete_requested": False}
 
 
 def _path_is_below_media_root(path: str) -> bool:

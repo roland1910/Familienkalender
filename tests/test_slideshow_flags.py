@@ -236,3 +236,153 @@ class TestPendingDeletesAreNotShown:
         assert storage.pick_next_photo() is None
         storage.unmark_photo_for_deletion("/media/a.jpg")
         assert storage.pick_next_photo()["name"] == "a.jpg"
+
+
+# -- public kiosk API --------------------------------------------------------
+
+
+class TestRotateEndpoint:
+    def test_next_reports_no_rotation_by_default(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        assert client.get("/api/slideshow/next").json()["rotation"] == 0
+
+    def test_rotating_clockwise_steps_by_ninety(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        for expected in (90, 180, 270, 0):
+            response = client.post(
+                f"/api/slideshow/rotate/{photo_id}", json={"direction": "cw"}
+            )
+            assert response.status_code == 200
+            assert response.json() == {"id": photo_id, "rotation": expected}
+
+    def test_rotating_counter_clockwise_wraps_below_zero(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        response = client.post(
+            f"/api/slideshow/rotate/{photo_id}", json={"direction": "ccw"}
+        )
+        assert response.json()["rotation"] == 270
+
+    def test_the_rotation_is_handed_out_with_the_next_pick(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        client.post(f"/api/slideshow/rotate/{photo_id}", json={"direction": "cw"})
+        client.post(f"/api/slideshow/rotate/{photo_id}", json={"direction": "cw"})
+        # One photo only — the rotation resets and hands it out again.
+        assert client.get("/api/slideshow/next").json()["rotation"] == 180
+
+    def test_the_rotation_survives_a_rescan(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        album = _album(media_root, "a.jpg")
+        _configure(client, album)
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        client.post(f"/api/slideshow/rotate/{photo_id}", json={"direction": "ccw"})
+        assert client.post("/api/admin/slideshow/rescan").status_code == 200
+        assert client.get("/api/slideshow/next").json()["rotation"] == 270
+
+    @pytest.mark.parametrize("direction", ["sideways", "CW", "", "90", "cw ", "left"])
+    def test_an_unknown_direction_is_rejected(
+        self, client: TestClient, media_root: Path, direction: str
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        response = client.post(
+            f"/api/slideshow/rotate/{photo_id}", json={"direction": direction}
+        )
+        assert response.status_code == 400
+        assert client.get("/api/slideshow/next").json()["rotation"] == 0
+
+    def test_a_missing_body_is_rejected(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        assert client.post(f"/api/slideshow/rotate/{photo_id}").status_code == 400
+
+    @pytest.mark.parametrize(
+        "raw_id",
+        ["+1", " 1", "1_2", "-1", "abc", "1.0", chr(0xFF11)],  # full-width digit one
+    )
+    def test_a_non_numeric_id_is_rejected_without_touching_the_index(
+        self, client: TestClient, media_root: Path, raw_id: str
+    ) -> None:
+        # Same strict digits-only rule as the weather tile proxy: int() alone
+        # would happily swallow "+1", " 1" and even "1_2".
+        _configure(client, _album(media_root, "a.jpg"))
+        response = client.post(
+            f"/api/slideshow/rotate/{raw_id}", json={"direction": "cw"}
+        )
+        assert response.status_code == 400
+
+    def test_an_unknown_id_is_404(self, client: TestClient, media_root: Path) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        response = client.post(
+            "/api/slideshow/rotate/999999", json={"direction": "cw"}
+        )
+        assert response.status_code == 404
+
+
+class TestMarkDeleteEndpoint:
+    def test_marking_hides_the_photo_from_the_slideshow(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg", "b.jpg"))
+        ids = _photo_ids(client)
+        response = client.post(f"/api/slideshow/mark-delete/{ids['a.jpg']}")
+        assert response.status_code == 200
+        assert response.json()["delete_requested"] is True
+        served = {client.get("/api/slideshow/next").json()["name"] for _ in range(6)}
+        assert served == {"b.jpg"}
+
+    def test_marking_is_idempotent(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        first = client.post(f"/api/slideshow/mark-delete/{photo_id}").json()
+        second = client.post(f"/api/slideshow/mark-delete/{photo_id}").json()
+        assert first == second
+
+    def test_unmarking_brings_the_photo_back(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        photo_id = client.get("/api/slideshow/next").json()["id"]
+        client.post(f"/api/slideshow/mark-delete/{photo_id}")
+        assert client.get("/api/slideshow/next").status_code == 404
+        response = client.delete(f"/api/slideshow/mark-delete/{photo_id}")
+        assert response.status_code == 200
+        assert response.json()["delete_requested"] is False
+        assert client.get("/api/slideshow/next").json()["name"] == "a.jpg"
+
+    def test_the_mark_survives_a_rescan(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg", "b.jpg"))
+        ids = _photo_ids(client)
+        client.post(f"/api/slideshow/mark-delete/{ids['a.jpg']}")
+        client.post("/api/admin/slideshow/rescan")
+        served = {client.get("/api/slideshow/next").json()["name"] for _ in range(6)}
+        assert served == {"b.jpg"}
+
+    @pytest.mark.parametrize("raw_id", ["+1", " 1", "1_2", "abc"])
+    def test_a_non_numeric_id_is_rejected(
+        self, client: TestClient, media_root: Path, raw_id: str
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        assert client.post(f"/api/slideshow/mark-delete/{raw_id}").status_code == 400
+        assert client.delete(f"/api/slideshow/mark-delete/{raw_id}").status_code == 400
+
+    def test_an_unknown_id_is_404(self, client: TestClient, media_root: Path) -> None:
+        _configure(client, _album(media_root, "a.jpg"))
+        assert client.post("/api/slideshow/mark-delete/999999").status_code == 404

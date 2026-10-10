@@ -1034,7 +1034,14 @@ class TestNextPhotoTakenField:
         _make_image(media_root / "Bilder" / "photo.jpg")
         client.put("/api/admin/slideshow", json={"dirs": [str(media_root / "Bilder")]})
         payload = client.get("/api/slideshow/next").json()
-        assert set(payload.keys()) == {"id", "name", "kind", "taken", "folders"}
+        assert set(payload.keys()) == {
+            "id",
+            "name",
+            "kind",
+            "taken",
+            "folders",
+            "rotation",
+        }
 
 
 class TestPhotoFolders:
