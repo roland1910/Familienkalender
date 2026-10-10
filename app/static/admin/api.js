@@ -175,6 +175,24 @@ export function saveSlideshowDirs(dirs, videos) {
   return request("PUT", "api/admin/slideshow", body);
 }
 
+// Photos flagged for deletion at the kiosk, waiting for a final decision.
+export function getPendingDeletes() {
+  return request("GET", "api/admin/slideshow/pending-deletes");
+}
+
+// Irreversible: unlinks the file through Home Assistant's media API.
+export function deletePendingPhoto(photoId) {
+  return request(
+    "POST",
+    `api/admin/slideshow/pending-deletes/${encodeURIComponent(photoId)}/delete`,
+  );
+}
+
+// Withdraw the request — the photo re-enters the rotation, nothing is lost.
+export function keepPendingPhoto(photoId) {
+  return request("DELETE", `api/admin/slideshow/pending-deletes/${encodeURIComponent(photoId)}`);
+}
+
 export function rescanSlideshow() {
   return request("POST", "api/admin/slideshow/rescan");
 }

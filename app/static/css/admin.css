@@ -445,6 +445,82 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* -- photos flagged for deletion (Etappe 49) ---------------------------- */
+
+.pending-delete-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pending-delete-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.pending-delete-item.empty {
+  color: var(--text-muted);
+}
+
+/* Bounded on both axes: the share holds portrait phone photos as well, and
+   an unconstrained preview would push the rest of the page off screen. */
+.pending-delete-preview {
+  flex: none;
+  width: 180px;
+  max-height: 135px;
+  object-fit: contain;
+  background: #000;
+  border-radius: var(--radius);
+}
+
+.pending-delete-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pending-delete-info p {
+  margin: 0 0 4px;
+}
+
+.pending-delete-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* The path is what Roland recognizes the picture by, so it must wrap rather
+   than be cut off. */
+.pending-delete-path,
+.pending-delete-marked {
+  color: var(--text-muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.pending-delete-actions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (max-width: 700px) {
+  .pending-delete-item {
+    flex-direction: column;
+  }
+
+  .pending-delete-preview {
+    width: 100%;
+  }
+}
+
 /* -- navigable /media directory browser --------------------------------- */
 
 .slideshow-browser {

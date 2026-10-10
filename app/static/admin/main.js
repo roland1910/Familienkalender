@@ -12,6 +12,7 @@ import { initFeed, loadFeed } from "./feed.js";
 import { initGoogleWizard, resetGoogleWizard } from "./google-wizard.js";
 import { initMirrorSync, loadMirrorSync } from "./mirror-sync.js";
 import { initNextcloudWizard, resetNextcloudWizard } from "./nextcloud-wizard.js";
+import { initPendingDeletes, loadPendingDeletes } from "./pending-deletes.js";
 import { initSettings, loadSettings } from "./settings.js";
 import { initSlideshow, loadSlideshow } from "./slideshow.js";
 import { refreshSources } from "./sources.js";
@@ -57,6 +58,7 @@ function init() {
   initSettings();
   initFeed();
   initSlideshow();
+  initPendingDeletes();
   initBusySync();
   initMirrorSync();
   initBirthdaySync();
@@ -68,6 +70,7 @@ function init() {
       loadSettings(),
       loadFeed(),
       loadSlideshow(),
+      loadPendingDeletes(),
       loadBusySync(),
       loadMirrorSync(),
       loadBirthdaySync(),
