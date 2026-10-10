@@ -66,6 +66,34 @@ function cogTeeth() {
   );
 }
 
+// A 300° arc around the icon's centre (radius 7.5, gap at the top) plus a
+// solid triangular head on the end of the travel. `clockwise` only decides
+// the sweep flag and which end carries the head — the two icons are exact
+// mirror images, which is what makes them tellable apart at a glance.
+function turnArrow(clockwise) {
+  const left = { x: 8.25, y: 5.5 };
+  const right = { x: 15.75, y: 5.5 };
+  const from = clockwise ? right : left;
+  const to = clockwise ? left : right;
+  const sweep = clockwise ? 1 : 0;
+  // Head: a triangle whose base sits on the arc's end, tip pointing along
+  // the direction of travel (inwards into the gap, i.e. towards the centre).
+  const tipX = clockwise ? 13.2 : 10.8;
+  return [
+    {
+      tag: "path",
+      attrs: {
+        ...STROKE,
+        "stroke-width": 2.4,
+        d: `M${from.x} ${from.y}A7.5 7.5 0 1 ${sweep} ${to.x} ${to.y}`,
+      },
+    },
+    filled("polygon", {
+      points: `${to.x} 1.6 ${tipX} ${to.y} ${to.x} 9.4`,
+    }),
+  ];
+}
+
 const ICONS = {
   // Calendar: sheet with two hanging tabs, a header band and two day cells.
   calendar: [
@@ -133,6 +161,36 @@ const ICONS = {
     { tag: "circle", attrs: { ...STROKE, cx: 12, cy: 12, r: 6.2, "stroke-width": 3.2 } },
     ...cogTeeth(),
   ],
+  // Slideshow operating icons (Etappe 49). Tapped in the dark from two
+  // metres, so the strokes are thicker than the header's.
+  // Waste bin: lid bar, handle, tapering body, two slots.
+  trash: [
+    { tag: "line", attrs: { ...STROKE, "stroke-width": 2.4, x1: 3.5, y1: 6, x2: 20.5, y2: 6 } },
+    {
+      tag: "path",
+      attrs: {
+        ...STROKE,
+        "stroke-width": 2.4,
+        d: "M9.4 6V4.2A1.3 1.3 0 0 1 10.7 3h2.6a1.3 1.3 0 0 1 1.3 1.2V6",
+      },
+    },
+    {
+      tag: "path",
+      attrs: {
+        ...STROKE,
+        "stroke-width": 2.4,
+        d: "M5.9 6.4 6.9 20.1A1.9 1.9 0 0 0 8.8 21.8h6.4a1.9 1.9 0 0 0 1.9-1.7L18.1 6.4",
+      },
+    },
+    { tag: "line", attrs: { ...STROKE, "stroke-width": 2.2, x1: 10.2, y1: 9.8, x2: 10.2, y2: 18 } },
+    { tag: "line", attrs: { ...STROKE, "stroke-width": 2.2, x1: 13.8, y1: 9.8, x2: 13.8, y2: 18 } },
+  ],
+  // Turn arrows: a circle open at the top, with a solid head on the end of
+  // the travel. At the top of a circle, clockwise motion runs to the RIGHT —
+  // so the clockwise head sits on the left side of the gap pointing right,
+  // and the counter-clockwise one mirrors it.
+  "rotate-cw": [...turnArrow(true)],
+  "rotate-ccw": [...turnArrow(false)],
 };
 
 /** The names `createIcon` accepts (exported for tests). */
