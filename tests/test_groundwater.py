@@ -650,7 +650,15 @@ class TestStationsEndpoint:
         self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         use_upstream(monkeypatch, MockUpstream(down=True))
-        moment = dt.datetime(2026, 9, 19, 8, 0, tzinfo=dt.UTC)
+        # Anchored to the wall clock on purpose. The endpoint withholds stale
+        # stations (STALE_DAYS), so a fixed date silently drops out of the
+        # freshness window as time passes and this test rots into a red one
+        # without anybody touching the code — which is exactly what happened
+        # with the date that used to stand here. Whole seconds keep the
+        # epoch-millisecond assertion exact.
+        moment = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=6)).replace(
+            microsecond=0
+        )
         seed(api_storage(tmp_path), make_station(measured_at=moment.isoformat()))
 
         [station] = client.get("/api/groundwater/stations").json()["stations"]
