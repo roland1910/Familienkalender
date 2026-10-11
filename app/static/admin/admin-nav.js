@@ -1,4 +1,4 @@
-// Tab shell of the admin page (Etappe 51, step 1).
+// Tab shell of the admin page (Etappe 51, steps 1 and 2).
 //
 // The page had grown to eleven sections on one endless scroll. They are now
 // grouped by what Roland is doing — sources, syncs, display, review — rather
@@ -41,6 +41,10 @@ export const TABS = [
 
 const TAB_HASHES = new Set(TABS.map((tab) => tab.hash));
 
+function labelFor(hash) {
+  return TABS.find((tab) => tab.hash === hash)?.label ?? "";
+}
+
 // "#busy-heading" -> "busy-heading". Percent escapes are decoded because
 // location.hash hands them over encoded; anything undecodable (a lone "%")
 // is kept verbatim rather than throwing.
@@ -74,6 +78,77 @@ export function resolveTarget(raw, panelOf) {
   const hash = panelId.slice("tab-".length);
   if (!TAB_HASHES.has(hash)) return fallback;
   return { tab: hash, scrollTo: id };
+}
+
+function countText(count, one, many) {
+  if (!Number.isFinite(count) || count < 1) return "";
+  return count === 1 ? one : many.replace("%d", String(count));
+}
+
+// German wording of the two badges. It doubles as the screen-reader text, so
+// colour is never the only carrier of the information.
+export function sourceErrorText(count) {
+  return countText(count, "1 Fehler", "%d Fehler");
+}
+
+export function pendingDeleteText(count) {
+  return countText(count, "1 Foto vorgemerkt", "%d Fotos vorgemerkt");
+}
+
+export function tabAriaLabel(label, badgeText) {
+  return badgeText ? `${label}, ${badgeText}` : "";
+}
+
+// HOW THE SECTIONS REPORT THEIR STATUS (step 2):
+// the badges are read off the lists the modules have already rendered, via a
+// MutationObserver per list. Three reasons for that over an imported
+// report-function: (a) no endpoint is fetched a second time — the data is
+// already on screen; (b) no module has to import or even know about this one,
+// which keeps `sources.js` untouched for step 3 and leaves every section
+// module free of navigation concerns; (c) the badge is by construction a
+// summary of what is actually displayed, so it cannot drift out of sync with
+// the list the way a separately pushed number can.
+const BADGE_WATCHERS = [
+  {
+    tab: "quellen",
+    listId: "source-list",
+    // sources.js marks a source whose last sync failed with this badge.
+    selector: ".error-badge",
+    kind: "error",
+    describe: sourceErrorText,
+  },
+  {
+    tab: "durchsicht",
+    listId: "pending-delete-list",
+    // The empty-state row is an <li> too and must not be counted.
+    selector: ".pending-delete-item:not(.empty)",
+    kind: "count",
+    describe: pendingDeleteText,
+  },
+];
+
+function renderBadge(link, watcher, count) {
+  const badge = link.querySelector(".admin-tab-badge");
+  if (!badge) return;
+  const text = watcher.describe(count);
+  badge.hidden = text === "";
+  // The error badge is a plain dot, the review badge carries the number.
+  badge.textContent = text && watcher.kind === "count" ? String(count) : "";
+  badge.classList.toggle("admin-tab-badge-error", watcher.kind === "error");
+  const aria = tabAriaLabel(labelFor(watcher.tab), text);
+  if (aria) link.setAttribute("aria-label", aria);
+  else link.removeAttribute("aria-label");
+}
+
+function watchBadges(links) {
+  for (const watcher of BADGE_WATCHERS) {
+    const list = document.getElementById(watcher.listId);
+    const link = links.get(watcher.tab);
+    if (!list || !link) continue;
+    const update = () => renderBadge(link, watcher, list.querySelectorAll(watcher.selector).length);
+    new MutationObserver(update).observe(list, { childList: true, subtree: true });
+    update();
+  }
 }
 
 export function initAdminNav() {
@@ -116,4 +191,5 @@ export function initAdminNav() {
 
   window.addEventListener("hashchange", apply);
   apply();
+  watchBadges(links);
 }

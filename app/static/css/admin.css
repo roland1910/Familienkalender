@@ -173,6 +173,49 @@ body[data-tabs="on"] .admin-tabs {
   font-weight: 600;
 }
 
+/* Review counter: carries the number itself, so colour is never the only
+   carrier of the information (the tab's aria-label spells it out as well). */
+.admin-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* Sources in error: a plain dot — there is nothing to count beyond "look". */
+.admin-tab-badge-error {
+  min-width: 12px;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  background: var(--warn-text);
+}
+
+.admin-tab-active .admin-tab-badge {
+  background: var(--accent-contrast);
+  color: var(--accent);
+}
+
+/* The warning red sits on the accent fill of the active tab; a contrast ring
+   keeps the dot readable there. */
+.admin-tab-active .admin-tab-badge-error {
+  background: var(--warn-text);
+  box-shadow: 0 0 0 2px var(--accent-contrast);
+}
+
+/* Explicit, because the display above would otherwise beat the hidden
+   attribute from the UA stylesheet (same trap as the weather loading hint). */
+.admin-tab-badge[hidden] {
+  display: none;
+}
+
 /* The panel carries the gap the .admin column used to give each section. */
 .admin-panel {
   display: flex;

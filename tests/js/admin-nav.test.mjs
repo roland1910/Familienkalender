@@ -9,7 +9,10 @@ import {
   DEFAULT_TAB,
   TABS,
   normalizeHash,
+  pendingDeleteText,
   resolveTarget,
+  sourceErrorText,
+  tabAriaLabel,
 } from "../../app/static/admin/admin-nav.js";
 
 // Stand-in for "which panel contains the element with this id?" — in the
@@ -101,4 +104,24 @@ test("an unknown hash falls back to Quellen instead of throwing", () => {
     tab: "quellen",
     scrollTo: null,
   });
+});
+
+test("badge wording is German, singular-aware and silent at zero", () => {
+  assert.equal(sourceErrorText(0), "");
+  assert.equal(sourceErrorText(1), "1 Fehler");
+  assert.equal(sourceErrorText(3), "3 Fehler");
+  assert.equal(pendingDeleteText(0), "");
+  assert.equal(pendingDeleteText(1), "1 Foto vorgemerkt");
+  assert.equal(pendingDeleteText(4), "4 Fotos vorgemerkt");
+  // Nonsense counts must not produce "NaN Fehler".
+  assert.equal(sourceErrorText(-1), "");
+  assert.equal(pendingDeleteText(Number.NaN), "");
+  assert.equal(sourceErrorText(undefined), "");
+});
+
+test("tabAriaLabel appends the badge meaning so colour is never the only signal", () => {
+  assert.equal(tabAriaLabel("Quellen", "1 Fehler"), "Quellen, 1 Fehler");
+  assert.equal(tabAriaLabel("Durchsicht", "2 Fotos vorgemerkt"), "Durchsicht, 2 Fotos vorgemerkt");
+  // Without a badge the visible link text is enough — no aria-label at all.
+  assert.equal(tabAriaLabel("Anzeige", ""), "");
 });

@@ -1,4 +1,4 @@
-"""Browser E2E tests for the admin tab shell (Etappe 51, step 1).
+"""Browser E2E tests for the admin tab shell (Etappe 51, steps 1 and 2).
 
 The sections of the admin page are grouped into four tab panels. Switching
 runs over `location.hash` and real links, so the back button, deep links and
@@ -9,7 +9,7 @@ progressive enhancement: without the module every section stays visible.
 import re
 
 import pytest
-from playwright.sync_api import Browser, Page, expect
+from playwright.sync_api import Browser, Page, Route, expect
 
 pytestmark = pytest.mark.e2e
 
@@ -24,6 +24,29 @@ def _goto(page: Page, server_url: str, hash_: str = "") -> None:
 
 def _tab(page: Page, hash_: str):
     return page.locator(f"#admin-tabs a[data-tab='{hash_}']")
+
+
+def _badge(page: Page, hash_: str):
+    return _tab(page, hash_).locator(".admin-tab-badge")
+
+
+def _source(**overrides) -> dict:
+    source = {
+        "id": 1,
+        "type": "google",
+        "name": "Marina",
+        "enabled": True,
+        "display_mode": "full",
+        "shortcode": "",
+        "color": "",
+        "include_in_feed": False,
+        "feed_priority": 0,
+        "config": {},
+        "last_sync_at": "2026-10-11T08:00:00+00:00",
+        "last_sync_error": None,
+        "event_count": 5,
+    }
+    return source | overrides
 
 
 class TestTabShell:
@@ -170,3 +193,59 @@ class TestGlobalMessage:
         expect(message).to_be_visible()
         expect(message).to_have_text("Protokoll nicht lesbar.")
         expect(message).to_be_in_viewport()
+
+
+class TestStatusBadges:
+    def test_the_source_error_dot_appears_and_disappears(
+        self, page: Page, server_url: str
+    ) -> None:
+        state = {"failing": True}
+
+        def handle_sources(route: Route) -> None:
+            error = "Verbindung fehlgeschlagen." if state["failing"] else None
+            route.fulfill(json={"sources": [_source(last_sync_error=error)]})
+
+        page.route("**/api/admin/sources", handle_sources)
+        page.route("**/api/sync", lambda route: route.fulfill(json={"results": {"1": None}}))
+
+        _goto(page, server_url)
+        badge = _badge(page, "quellen")
+        expect(badge).to_be_visible()
+        expect(badge).to_have_class(re.compile(r"admin-tab-badge-error"))
+        # Not colour alone: the screen reader hears the count.
+        expect(_tab(page, "quellen")).to_have_attribute("aria-label", "Quellen, 1 Fehler")
+
+        # The manual sync re-renders the list — now without an error.
+        state["failing"] = False
+        page.locator("#btn-sync").click()
+        expect(badge).to_be_hidden()
+        expect(_tab(page, "quellen")).not_to_have_attribute("aria-label", re.compile(r".*"))
+
+    def test_the_review_counter_appears_and_disappears(
+        self, page: Page, server_url: str
+    ) -> None:
+        state = {
+            "items": [
+                {"id": 1, "name": "a.jpg", "path": "Photos/a.jpg", "marked_at": None},
+                {"id": 2, "name": "b.jpg", "path": "Photos/b.jpg", "marked_at": None},
+            ]
+        }
+        page.route(
+            "**/api/admin/slideshow/pending-deletes",
+            lambda route: route.fulfill(json={"items": state["items"]}),
+        )
+        page.route("**/api/slideshow/image/**", lambda route: route.fulfill(status=404))
+
+        _goto(page, server_url, "#durchsicht")
+        badge = _badge(page, "durchsicht")
+        expect(badge).to_be_visible()
+        # The number itself, not just a dot — and spelled out for the reader.
+        expect(badge).to_have_text("2")
+        expect(_tab(page, "durchsicht")).to_have_attribute(
+            "aria-label", "Durchsicht, 2 Fotos vorgemerkt"
+        )
+
+        state["items"] = []
+        page.locator("#btn-pending-deletes-reload").click()
+        expect(page.locator("#pending-delete-list")).to_contain_text("Keine Fotos")
+        expect(badge).to_be_hidden()
