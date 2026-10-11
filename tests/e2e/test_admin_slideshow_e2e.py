@@ -76,9 +76,23 @@ def _route_slideshow(page: Page) -> None:
     )
 
 
-def _goto_admin(page: Page, server_url: str) -> None:
-    page.goto(f"{server_url}/admin")
-    expect(page.locator("#slideshow-heading")).to_be_visible()
+# Heading that proves the requested tab panel is the one on screen.
+_TAB_MARKER = {
+    "anzeige": "#slideshow-heading",
+    "durchsicht": "#pending-deletes-heading",
+}
+
+
+def _goto_admin(page: Page, server_url: str, tab: str = "anzeige") -> None:
+    """Open the admin page on one of the tab panels (Etappe 51).
+
+    "Diashow (Kiosk)" sits in "Anzeige", the flagged photos in "Durchsicht".
+    """
+    page.goto(f"{server_url}/admin#{tab}")
+    # data-tabs is set by admin-nav.js — without it nothing would be hidden
+    # and the assertions below would pass before the shell is even up.
+    expect(page.locator("body")).to_have_attribute("data-tabs", "on")
+    expect(page.locator(_TAB_MARKER[tab])).to_be_visible()
 
 
 def test_navigate_add_and_rescan(page: Page, server_url: str) -> None:
@@ -234,7 +248,7 @@ def test_pending_deletes_list_shows_preview_name_and_path(
 ) -> None:
     _route_slideshow(page)
     _route_pending_deletes(page, [PENDING_ITEM, SECOND_ITEM])
-    _goto_admin(page, server_url)
+    _goto_admin(page, server_url, "durchsicht")
 
     entries = page.locator("#pending-delete-list .pending-delete-item")
     expect(entries).to_have_count(2)
@@ -257,7 +271,7 @@ def test_pending_deletes_list_shows_preview_name_and_path(
 def test_deleting_a_photo_takes_two_taps(page: Page, server_url: str) -> None:
     _route_slideshow(page)
     state = _route_pending_deletes(page, [PENDING_ITEM, SECOND_ITEM])
-    _goto_admin(page, server_url)
+    _goto_admin(page, server_url, "durchsicht")
 
     entry = page.locator("#pending-delete-list .pending-delete-item").first
     button = entry.locator(".action-button", has_text="Endgültig löschen")
@@ -275,7 +289,7 @@ def test_deleting_a_photo_takes_two_taps(page: Page, server_url: str) -> None:
 def test_keeping_a_photo_withdraws_the_request(page: Page, server_url: str) -> None:
     _route_slideshow(page)
     state = _route_pending_deletes(page, [PENDING_ITEM])
-    _goto_admin(page, server_url)
+    _goto_admin(page, server_url, "durchsicht")
 
     page.locator(".action-button", has_text="Doch behalten").click()
     expect(page.locator("#pending-delete-list")).to_contain_text(
@@ -292,7 +306,7 @@ def test_a_failed_deletion_leaves_the_entry_standing(
     the share, so the row must stay — with the reason next to it."""
     _route_slideshow(page)
     _route_pending_deletes(page, [PENDING_ITEM], delete_fails=True)
-    _goto_admin(page, server_url)
+    _goto_admin(page, server_url, "durchsicht")
 
     entry = page.locator("#pending-delete-list .pending-delete-item").first
     entry.locator(".action-button").first.click()  # arm

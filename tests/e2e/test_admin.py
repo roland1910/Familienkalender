@@ -21,9 +21,18 @@ FAKE_CALENDARS = {
 }
 
 
-def goto_admin(page: Page, server_url: str) -> None:
-    page.goto(f"{server_url}/admin")
-    expect(page.locator("#source-list .source-item").first).to_be_visible()
+def goto_admin(page: Page, server_url: str, tab: str = "") -> None:
+    """Open the admin page, optionally straight on one of the tabs.
+
+    Since Etappe 51 the sections live in four tab panels, so a test that
+    touches something outside "Quellen" has to say which tab it needs. The
+    readiness signal is counted rather than "visible": the source list is in
+    the document on every tab but only displayed on the first one.
+    """
+    page.goto(f"{server_url}/admin#{tab}" if tab else f"{server_url}/admin")
+    expect(page.locator("#source-list .source-item").first).to_have_count(1)
+    if tab:
+        expect(page.locator(f"#tab-{tab}")).to_be_visible()
 
 
 class TestAdminEntry:
@@ -291,7 +300,7 @@ class TestBirthdaysWizard:
 
 class TestSettings:
     def test_evening_boundary_roundtrip(self, page: Page, server_url: str) -> None:
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "anzeige")
         boundary = page.locator("#evening-boundary")
         expect(boundary).to_have_value("17:00")
         boundary.fill("18:30")
@@ -307,7 +316,7 @@ class TestSettings:
         expect(page.locator("#settings-message")).to_have_text("Gespeichert.")
 
     def test_default_view_roundtrip(self, page: Page, server_url: str) -> None:
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "anzeige")
         select = page.locator("#default-view")
         expect(select).to_have_value("month")
         select.select_option("week")
@@ -323,7 +332,7 @@ class TestSettings:
         expect(page.locator("#settings-message")).to_have_text("Gespeichert.")
 
     def test_screensaver_default_roundtrip(self, page: Page, server_url: str) -> None:
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "anzeige")
         select = page.locator("#screensaver-default")
         expect(select).to_have_value("off")
         select.select_option("on")
@@ -527,7 +536,7 @@ class TestFeedSection:
     def test_feed_url_is_shown_and_rotates_with_confirmation(
         self, page: Page, server_url: str
     ) -> None:
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "syncs")
         url_field = page.locator("#feed-url")
         expect(url_field).to_have_value(re.compile(r"/feed/[A-Za-z0-9_-]+\.ics$"))
         old_value = url_field.input_value()
@@ -562,7 +571,7 @@ class TestBusySync:
         self, page: Page, server_url: str
     ) -> None:
         """Quelle wählen + Belegt-Sync aktivieren, speichern, neu laden."""
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "syncs")
         # The section lists the demo sources as checkboxes.
         section = page.locator("section[aria-labelledby='busy-heading']")
         expect(section.locator("#busy-connected")).to_contain_text("nicht verbunden")
@@ -608,7 +617,7 @@ class TestBusySync:
             )
 
         page.route("**/api/admin/google/write-auth-url", fulfill_auth_url)
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "syncs")
         section = page.locator("section[aria-labelledby='busy-heading']")
         section.locator("#btn-busy-connect").click()
         auth_link = section.locator("#busy-auth-link")
@@ -623,7 +632,7 @@ class TestMirrorSync:
         self, page: Page, server_url: str
     ) -> None:
         """Ziel + Quelle wählen, einschalten, neu laden — alles bleibt stehen."""
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "syncs")
         section = page.locator("section[aria-labelledby='mirror-heading']")
         target = section.locator("#mirror-target")
         # Only CalDAV sources are offered as a target (demo: "Firma").
@@ -670,7 +679,7 @@ class TestMirrorSync:
         Sonst wäre „keine Quelle" eine stille Anweisung, alle Kopien zu
         löschen — der Riegel im Backend verweigert das ohnehin.
         """
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "syncs")
         section = page.locator("section[aria-labelledby='mirror-heading']")
         section.locator("#mirror-target").select_option(label="Firma")
         section.locator(".busy-source-row input[type=checkbox]").first.check()
@@ -702,7 +711,7 @@ class TestMirrorSync:
         antwortet das Backend mit einer deutschen Meldung, und der Knopf
         entschärft sich wieder (die gemeinsame Demo-DB bleibt unberührt).
         """
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "syncs")
         section = page.locator("section[aria-labelledby='mirror-heading']")
         button = section.locator("#btn-mirror-cleanup")
         expect(button).to_contain_text("Kopien im Zielkalender entfernen")
@@ -729,7 +738,7 @@ class TestBirthdaySync:
     def test_section_offers_both_targets_and_survives_a_reload(
         self, page: Page, server_url: str
     ) -> None:
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "syncs")
         section = page.locator("section[aria-labelledby='birthday-heading']")
         expect(section.locator("h2")).to_contain_text("Geburtstags-Sync")
         # Ohne Kontakt-Quelle steht dort ein deutscher Hinweis statt einer Liste.
@@ -778,7 +787,7 @@ class TestBirthdaySync:
 class TestChangelog:
     def test_section_shows_seeded_entries(self, page: Page, server_url: str) -> None:
         """Das Änderungsprotokoll zeigt die Demo-Einträge beider Richtungen."""
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "durchsicht")
         section = page.locator("section[aria-labelledby='changelog-heading']")
         expect(section.locator("#changelog-list .changelog-item").first).to_be_visible()
         # Incoming and outgoing demo entries are present.
@@ -789,7 +798,7 @@ class TestChangelog:
         expect(section).to_contain_text("hinzugefügt")
 
     def test_refresh_button_reloads(self, page: Page, server_url: str) -> None:
-        goto_admin(page, server_url)
+        goto_admin(page, server_url, "durchsicht")
         section = page.locator("section[aria-labelledby='changelog-heading']")
         section.locator("#btn-changelog-refresh").click()
         expect(section.locator("#changelog-message")).to_contain_text("Aktualisiert")

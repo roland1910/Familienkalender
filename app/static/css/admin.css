@@ -122,6 +122,75 @@ body {
   font-size: 19px;
 }
 
+/* -- tab shell (Etappe 51) ----------------------------------------------- */
+
+/* PROGRESSIVE ENHANCEMENT, the whole point of this block: by default the bar
+   is hidden and NOTHING is hidden below it — the page is the long scroll it
+   has always been. admin-nav.js sets body[data-tabs="on"] once it is up, and
+   only from then on do these rules apply. If the module never loads, Roland
+   sees every section instead of an empty page. */
+.admin-tabs {
+  display: none;
+}
+
+body[data-tabs="on"] .admin-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  /* Bleeds into the padding of .admin so nothing scrolls past at the sides. */
+  margin: 0 -16px;
+  padding: 8px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+/* basis 140px: four tabs fit one row on the desktop panel and fall into two
+   rows of two on a 360px phone — never a sideways scroll. */
+.admin-tab {
+  flex: 1 1 140px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  font-size: 16px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  touch-action: manipulation;
+}
+
+.admin-tab-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+/* The panel carries the gap the .admin column used to give each section. */
+.admin-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+body[data-tabs="on"] .admin-panel:not(.admin-panel-active) {
+  display: none;
+}
+
+/* Deep-link targets must not end up underneath the sticky bar. */
+.admin-panel,
+.admin-section,
+.admin-section h2 {
+  scroll-margin-top: 76px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: minmax(140px, 320px) 1fr;
@@ -411,6 +480,13 @@ body {
 
   .form-grid label {
     margin-top: 8px;
+  }
+
+  /* Two rows of tabs here, so a jumped-to heading needs more clearance. */
+  .admin-panel,
+  .admin-section,
+  .admin-section h2 {
+    scroll-margin-top: 128px;
   }
 }
 

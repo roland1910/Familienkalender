@@ -71,7 +71,7 @@ def test_html_pages_have_no_inline_event_handlers() -> None:
 
 
 def test_admin_modules_exist_and_are_served() -> None:
-    for module in ("main", "api", "dom", "wizard-shared", "sources",
+    for module in ("main", "api", "dom", "admin-nav", "wizard-shared", "sources",
                    "nextcloud-wizard", "google-wizard", "settings", "power-devices",
                    "feed"):
         assert (STATIC_DIR / "admin" / f"{module}.js").is_file()

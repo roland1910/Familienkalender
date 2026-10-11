@@ -2,6 +2,7 @@
 // add wizards, settings, manual sync). Foreign strings are rendered
 // exclusively via textContent — see dom.js.
 
+import { initAdminNav } from "./admin-nav.js";
 import * as api from "./api.js";
 import { initBirthdaySync, loadBirthdaySync } from "./birthday-sync.js";
 import { initBirthdaysWizard, resetBirthdaysWizard } from "./birthdays-wizard.js";
@@ -46,6 +47,9 @@ function initSync() {
 }
 
 function init() {
+  // First: the tab shell. Until it runs, every section is visible — the
+  // page degrades to the long scroll it used to be rather than to nothing.
+  initAdminNav();
   // Opening one wizard closes (and fully resets) the others.
   const resetOthers = (keep) => () => {
     if (keep !== "nextcloud") resetNextcloudWizard();
@@ -64,6 +68,12 @@ function init() {
   initBirthdaySync();
   initChangelog();
   initSync();
+  // EVERY loader runs at page start, also for the tabs nobody has opened yet.
+  // Loading per tab on demand would save a little on the phone, but it would
+  // hide exactly the failures the tab badges exist to show (a source whose
+  // sync failed, photos waiting for a decision) — and that data has to be
+  // fetched for the badges anyway. A failure lands in #page-message, which
+  // sits ABOVE the tab bar and is therefore visible whatever tab is open.
   withPageError(async () => {
     await Promise.all([
       refreshSources(),
