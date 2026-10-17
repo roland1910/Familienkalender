@@ -56,6 +56,113 @@ class TestAdminEntry:
         expect(marina.locator(".source-status")).to_contain_text("Letzter Sync:")
 
 
+def open_source_row(page: Page, name: str):
+    """Expand one source card and return its locator.
+
+    Since Etappe 51/3 a card shows a summary and keeps its controls folded
+    away; Playwright waits for visibility, so every test that touches a
+    control has to open the card first.
+    """
+    item = page.locator(".source-item", has_text=name)
+    if not item.locator(".source-controls").is_visible():
+        item.locator(".source-summary").click()
+    expect(item.locator(".source-controls")).to_be_visible()
+    return item
+
+
+class TestSourceCard:
+    """Etappe 51, Schritt 3 — summary plus foldable detail.
+
+    Roland's picture of the admin page showed the reason: seven controls
+    per source in one flex row, about sixty of them on a phone screen.
+    """
+
+    def test_the_summary_is_tappable_and_opens_the_detail(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        kunde = page.locator(".source-item", has_text="Kunde")
+        # Folded by default: the list stays readable at a glance.
+        expect(kunde.locator(".source-controls")).to_be_hidden()
+        # The summary carries name, type and the colour dot of the calendar.
+        expect(kunde.locator(".source-name")).to_have_text("Kunde")
+        expect(kunde.locator(".source-dot")).to_have_count(1)
+        summary = kunde.locator(".source-summary")
+        box = summary.bounding_box()
+        assert box is not None and box["height"] >= 44, box
+
+        summary.click()
+        expect(kunde.locator(".source-controls")).to_be_visible()
+        # Tapping again folds it back.
+        summary.click()
+        expect(kunde.locator(".source-controls")).to_be_hidden()
+
+    def test_only_one_card_is_open_at_a_time(self, page: Page, server_url: str) -> None:
+        goto_admin(page, server_url)
+        open_source_row(page, "Kunde")
+        open_source_row(page, "Firma")
+        expect(
+            page.locator(".source-item", has_text="Kunde").locator(".source-controls")
+        ).to_be_hidden()
+
+    def test_shortcode_and_priority_only_show_with_the_feed_switch(
+        self, page: Page, server_url: str
+    ) -> None:
+        """Both only ever act inside the subscription, so they sit under its
+        switch and appear with it — two fields less in the normal case."""
+        goto_admin(page, server_url)
+        marina = open_source_row(page, "Marina")  # full mode, feed off by default
+        expect(marina.locator(".feed-toggle")).not_to_be_checked()
+        expect(marina.locator(".shortcode-input")).to_be_hidden()
+        expect(marina.locator(".feed-priority-input")).to_be_hidden()
+
+        marina.locator(".feed-toggle").check()
+        marina = open_source_row(page, "Marina")
+        expect(marina.locator(".shortcode-input")).to_be_visible()
+        expect(marina.locator(".feed-priority-input")).to_be_visible()
+
+        # Reset so the demo data stays as the other tests expect it.
+        marina.locator(".feed-toggle").uncheck()
+        expect(
+            open_source_row(page, "Marina").locator(".shortcode-input")
+        ).to_be_hidden()
+
+    def test_the_name_is_a_field_instead_of_a_rename_button(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        kunde = open_source_row(page, "Kunde")
+        expect(kunde.get_by_role("button", name="Umbenennen")).to_have_count(0)
+        field = kunde.locator(".name-input")
+        expect(field).to_have_value("Kunde")
+        field.fill("Kunde neu")
+        field.blur()
+        expect(page.locator(".source-item", has_text="Kunde neu")).to_have_count(1)
+
+        # Reset so the demo data stays as the other tests expect it.
+        back = open_source_row(page, "Kunde neu").locator(".name-input")
+        back.fill("Kunde")
+        back.blur()
+        expect(page.locator(".source-name")).to_have_text(["Marina", "Kunde", "Firma"])
+
+    def test_delete_stands_alone_below_a_separator(
+        self, page: Page, server_url: str
+    ) -> None:
+        """Mis-tapping is solved structurally, not just by colour: the
+        delete button shares its row with nothing else."""
+        goto_admin(page, server_url)
+        kunde = open_source_row(page, "Kunde")
+        danger = kunde.locator(".small-button.danger")
+        expect(kunde.locator(".source-danger")).to_have_count(1)
+        # Nothing else in that row.
+        assert kunde.locator(".source-danger button").count() == 1
+        box = danger.bounding_box()
+        toggle = kunde.locator(".source-toggle-button").bounding_box()
+        assert box is not None and toggle is not None
+        # Clearly below the enable/disable button, not beside it.
+        assert box["y"] >= toggle["y"] + toggle["height"], (box, toggle)
+
+
 class TestNextcloudWizard:
     def test_create_and_delete_a_caldav_source(self, page: Page, server_url: str) -> None:
         def fulfill_calendars(route: Route) -> None:
@@ -92,6 +199,9 @@ class TestNextcloudWizard:
         expect(new_item.locator(".type-badge")).to_have_text("Nextcloud")
 
         # Delete again (two-step confirmation) to leave the shared DB clean.
+        # The detail folds away by default (E51/3), and opening another
+        # card folds this one — so open it right before deleting.
+        new_item.locator(".source-summary").click()
         delete_button = new_item.locator(".small-button.danger")
         delete_button.click()
         expect(delete_button).to_have_text("Wirklich löschen?")
@@ -203,6 +313,9 @@ class TestGoogleWizard:
         assert not pending.exists()
 
         # Delete again (two-step confirmation) to leave the shared DB clean.
+        # The detail folds away by default (E51/3), and opening another
+        # card folds this one — so open it right before deleting.
+        new_item.locator(".source-summary").click()
         delete_button = new_item.locator(".small-button.danger")
         delete_button.click()
         expect(delete_button).to_have_text("Wirklich löschen?")
@@ -286,11 +399,14 @@ class TestBirthdaysWizard:
         # The birthdays row shows no display-mode selector; the other
         # (google/caldav) rows still do.
         expect(new_item.locator(".mode-select")).to_have_count(0)
-        kunde_item = page.locator(".source-item", has_text="Kunde")
+        kunde_item = open_source_row(page, "Kunde")
         expect(kunde_item.locator(".mode-select")).to_have_count(1)
         assert not pending.exists()
 
         # Delete again (two-step confirmation) to leave the shared DB clean.
+        # The detail folds away by default (E51/3), and opening another
+        # card folds this one — so open it right before deleting.
+        new_item.locator(".source-summary").click()
         delete_button = new_item.locator(".small-button.danger")
         delete_button.click()
         expect(delete_button).to_have_text("Wirklich löschen?")
@@ -353,7 +469,7 @@ class TestShortcode:
         self, page: Page, server_url: str
     ) -> None:
         goto_admin(page, server_url)
-        field = page.locator(".source-item", has_text="Kunde").locator(
+        field = open_source_row(page, "Kunde").locator(
             ".shortcode-input"
         )
         expect(field).to_have_value("")
@@ -361,11 +477,11 @@ class TestShortcode:
         field.press("Enter")  # change event -> PATCH -> list re-render
         # The server normalizes to uppercase; the re-rendered row shows it.
         expect(
-            page.locator(".source-item", has_text="Kunde").locator(".shortcode-input")
+            open_source_row(page, "Kunde").locator(".shortcode-input")
         ).to_have_value("RX")
 
         page.reload()
-        kunde_field = page.locator(".source-item", has_text="Kunde").locator(
+        kunde_field = open_source_row(page, "Kunde").locator(
             ".shortcode-input"
         )
         expect(kunde_field).to_have_value("RX")
@@ -375,14 +491,14 @@ class TestShortcode:
         kunde_field.press("Enter")
         page.reload()
         expect(
-            page.locator(".source-item", has_text="Kunde").locator(".shortcode-input")
+            open_source_row(page, "Kunde").locator(".shortcode-input")
         ).to_have_value("")
 
     def test_invalid_shortcode_shows_german_error(
         self, page: Page, server_url: str
     ) -> None:
         goto_admin(page, server_url)
-        field = page.locator(".source-item", has_text="Firma").locator(
+        field = open_source_row(page, "Firma").locator(
             ".shortcode-input"
         )
         field.fill("A B")
@@ -395,20 +511,20 @@ class TestFeedPriority:
         self, page: Page, server_url: str
     ) -> None:
         goto_admin(page, server_url)
-        field = page.locator(".source-item", has_text="Kunde").locator(
+        field = open_source_row(page, "Kunde").locator(
             ".feed-priority-input"
         )
         expect(field).to_have_value("0")
         field.fill("10")
         field.press("Enter")  # change event -> PATCH -> list re-render
         expect(
-            page.locator(".source-item", has_text="Kunde").locator(
+            open_source_row(page, "Kunde").locator(
                 ".feed-priority-input"
             )
         ).to_have_value("10")
 
         page.reload()
-        kunde_field = page.locator(".source-item", has_text="Kunde").locator(
+        kunde_field = open_source_row(page, "Kunde").locator(
             ".feed-priority-input"
         )
         expect(kunde_field).to_have_value("10")
@@ -418,7 +534,7 @@ class TestFeedPriority:
         kunde_field.press("Enter")
         page.reload()
         expect(
-            page.locator(".source-item", has_text="Kunde").locator(
+            open_source_row(page, "Kunde").locator(
                 ".feed-priority-input"
             )
         ).to_have_value("0")
@@ -428,7 +544,7 @@ class TestSourceColor:
     MARINA_DEFAULT = "#d97706"  # palette color for source id 1 (colors.js)
 
     def _marina_color_input(self, page: Page):
-        return page.locator(".source-item", has_text="Marina").locator(".color-input")
+        return open_source_row(page, "Marina").locator(".color-input")
 
     def _set_color(self, page: Page, value: str) -> None:
         # Playwright cannot type into <input type="color">; set the value
@@ -466,12 +582,12 @@ class TestSourceColor:
 
         # Reset: back to the palette default (leaves the shared DB clean).
         page.goto(f"{server_url}/admin")
-        marina = page.locator(".source-item", has_text="Marina")
+        marina = open_source_row(page, "Marina")
         expect(marina.locator(".color-reset")).to_be_visible()
         marina.locator(".color-reset").click()
         expect(self._marina_color_input(page)).to_have_value(self.MARINA_DEFAULT)
         expect(
-            page.locator(".source-item", has_text="Marina").locator(".color-reset")
+            open_source_row(page, "Marina").locator(".color-reset")
         ).to_be_hidden()
 
 
@@ -482,10 +598,10 @@ class TestFeedToggle:
         goto_admin(page, server_url)
         # Demo data: Marina is full (not in the feed), Kunde is filtered
         # (in the feed) — the migration/default behaviour.
-        marina_toggle = page.locator(".source-item", has_text="Marina").locator(
+        marina_toggle = open_source_row(page, "Marina").locator(
             ".feed-toggle"
         )
-        kunde_toggle = page.locator(".source-item", has_text="Kunde").locator(
+        kunde_toggle = open_source_row(page, "Kunde").locator(
             ".feed-toggle"
         )
         expect(marina_toggle).not_to_be_checked()
@@ -493,7 +609,7 @@ class TestFeedToggle:
 
         kunde_toggle.click()  # opt the source out (the Valentin case)
         page.reload()
-        kunde_toggle = page.locator(".source-item", has_text="Kunde").locator(
+        kunde_toggle = open_source_row(page, "Kunde").locator(
             ".feed-toggle"
         )
         expect(kunde_toggle).not_to_be_checked()
@@ -501,7 +617,7 @@ class TestFeedToggle:
         # Restore so the shared demo DB keeps its default state.
         kunde_toggle.click()
         expect(
-            page.locator(".source-item", has_text="Kunde").locator(".feed-toggle")
+            open_source_row(page, "Kunde").locator(".feed-toggle")
         ).to_be_checked()
 
 
@@ -513,7 +629,7 @@ class TestFeedModeWarning:
         # Switching it to "Alle Termine" while that toggle stays on means the
         # feed would now carry it unfiltered — the UI should warn (not block).
         goto_admin(page, server_url)
-        kunde = page.locator(".source-item", has_text="Kunde")
+        kunde = open_source_row(page, "Kunde")
         expect(kunde.locator(".feed-toggle")).to_be_checked()
         warning = kunde.locator(".source-feed-warning")
         expect(warning).to_be_hidden()
@@ -528,7 +644,7 @@ class TestFeedModeWarning:
 
         # Restore so the shared demo DB keeps its default state.
         page.reload()
-        kunde = page.locator(".source-item", has_text="Kunde")
+        kunde = open_source_row(page, "Kunde")
         expect(kunde.locator(".mode-select")).to_have_value("filtered")
 
 
