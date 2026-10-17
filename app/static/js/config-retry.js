@@ -18,9 +18,25 @@
 // Pure logic: fetch and scheduler are injected, so the machine is
 // node-testable without timers or network (tests/js/config-retry.test.mjs).
 
-// Five retries spread over ~60 s — generous enough for the add-on to come
-// up after a reboot, short enough not to poll forever.
-export const RETRY_DELAYS_MS = [2000, 5000, 10000, 20000, 25000];
+// Two different races share this machine, and the second one is slow.
+//
+// The BOOT race (Pi and add-on starting together) is over in seconds, so
+// the first attempts come fast. A DEPLOYMENT is the other case: `ha addons
+// update` rebuilds the add-on image and the backend is away for MINUTES.
+// The original window of ~60 s gave up long before it returned, and the
+// kiosk then kept the built-in fallbacks — month view and screensaver OFF
+// — until somebody reloaded the page. Observed on the Pi on 17.10.2026:
+// after a deploy the slideshow never came back on its own; a reload fixed
+// it instantly.
+//
+// Hence a short head and a patient tail: ~10 minutes in all, at most one
+// request per minute once the fast attempts are used up. This costs
+// nothing when the backend is healthy (the first attempt succeeds) and the
+// machine still stops for good at the first user interaction, so a late
+// answer can never flip the view under someone's fingers.
+export const RETRY_DELAYS_MS = [
+  2000, 5000, 10000, 20000, 30000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,
+];
 
 export function createConfigRetry({
   fetchConfig,

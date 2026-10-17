@@ -26,10 +26,22 @@ function fakeScheduler() {
   };
 }
 
-test("delays: five retries spread over roughly a minute", () => {
-  assert.equal(RETRY_DELAYS_MS.length, 5);
+test("delays: quick at first, then patient enough to outlast a deployment", () => {
+  // Two races, not one. The boot race (Pi and add-on starting together) is
+  // over in seconds, so the first attempts come fast. A DEPLOYMENT is the
+  // other case: `ha addons update` rebuilds the image and the add-on is
+  // away for MINUTES. The old window of ~60s gave up long before it came
+  // back, and the kiosk then sat there with the built-in fallbacks -
+  // screensaver OFF - until somebody reloaded the page (observed on the Pi
+  // on 17.10.2026: no slideshow at all after a deploy).
+  assert.ok(RETRY_DELAYS_MS[0] <= 3000, "first retry must be quick");
   const total = RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
-  assert.ok(total >= 45000 && total <= 90000, `total ${total}ms`);
+  assert.ok(total >= 480000, `total ${total}ms is too short for a deployment`);
+  assert.ok(total <= 900000, `total ${total}ms would retry for ages`);
+  // Monotonic backoff: never hammer a backend that is still coming up.
+  for (let i = 1; i < RETRY_DELAYS_MS.length; i += 1) {
+    assert.ok(RETRY_DELAYS_MS[i] >= RETRY_DELAYS_MS[i - 1], `step ${i}`);
+  }
 });
 
 test("success on the first attempt applies the config, no retry scheduled", async () => {
