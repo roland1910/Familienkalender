@@ -18,7 +18,6 @@ import {
   startOfDay,
   toISODate,
 } from "./dates.js";
-import { diag, installDiagnostics } from "./diag.js"; // TEMP diagnostics
 import { parseEvent } from "./events.js";
 import { attachSwipe } from "./gestures.js";
 import { startGroundwaterView, stopGroundwaterView } from "./groundwater-view.js";
@@ -34,7 +33,6 @@ import {
   saveScreensaverEnabled,
 } from "./screensaver-memory.js";
 import {
-  diagState,
   handleSlideshowInteraction,
   isSlideshowRunning,
   startSlideshow,
@@ -358,7 +356,6 @@ const isNewInteraction = createTapCoalescer();
 
 function markInteraction(event) {
   if (!isNewInteraction(event?.type, Date.now())) return;
-  diag(`mark ${event?.type} ${diagState()}`); // TEMP
   lastInteractionAt = Date.now();
   // The user is actively using the device — a late /api/config response
   // (boot-race retry) must never flip the view or arm the screensaver
@@ -467,7 +464,6 @@ function initTheme() {
 }
 
 async function init() {
-  installDiagnostics(diagState); // TEMP diagnostics
   // Draw the header icons first — every control is icon-only, so an empty
   // slot would be an unlabelled button (see icons.js).
   renderIcons(document);

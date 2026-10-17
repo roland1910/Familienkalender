@@ -30,7 +30,6 @@
 // `name`/`folders` are foreign strings and are only ever set via textContent.
 
 import { fetchNextPhoto, markPhotoForDeletion, photoImageUrl, rotatePhoto } from "./api.js";
-import { diag } from "./diag.js"; // TEMP diagnostics
 import { el } from "./dom.js";
 import { createIcon } from "./icons.js";
 import { isTapEvent } from "./input-events.js";
@@ -449,26 +448,7 @@ function whenControlsHidden() {
  * press would only insert a step nobody at the kiosk can use — and on a
  * maintenance laptop "any key returns to the calendar" is expected.
  */
-// TEMP: the inside of the slideshow, for the unresponsive-kiosk hunt.
-export function diagState() {
-  return (
-    `run=${running ? 1 : 0} cn=${controlsNode === null ? 0 : 1}` +
-    ` hid=${controlsNode?.hidden ? 1 : 0}` +
-    ` con=${controlsNode?.isConnected ? 1 : 0}` +
-    ` vis=${controlsAreVisible() ? 1 : 0} open=${lastOpenAt} tmr=${timer === null ? 0 : 1}` +
-    ` ctmr=${controlsTimer === null ? 0 : 1} pend=${pendingAdvance === null ? 0 : 1}` +
-    ` wait=${controlsWaiters.length}`
-  );
-}
-
 export function handleSlideshowInteraction(event) {
-  diag(`hsi:in ${event?.type} ${diagState()}`); // TEMP
-  const claimed = handleSlideshowInteractionInner(event);
-  diag(`hsi:out ${claimed ? 1 : 0} ${diagState()}`); // TEMP
-  return claimed;
-}
-
-function handleSlideshowInteractionInner(event) {
   if (!running) return false;
   if (!isTapEvent(event?.type)) return false;
   if (!controlsAreVisible()) {

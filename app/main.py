@@ -16,7 +16,6 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app import sync as sync_module
 from app.admin import router as admin_router
 from app.auth import is_admin_request
-from app.diag import router as diag_router
 from app.filtering import filter_events
 from app.groundwater import router as groundwater_router
 from app.models import LOCAL_TZ, StoredEvent
@@ -291,9 +290,6 @@ app.include_router(weather_router)
 app.include_router(groundwater_router)
 app.include_router(slideshow_router)
 app.include_router(slideshow_admin_router)
-# TEMPORARY (17.10.2026): diagnostic sink for the unresponsive-kiosk hunt.
-# Remove together with app/diag.py and the frontend's diag.js.
-app.include_router(diag_router)
 # Innermost (added first): needs the root_path that IngressPathMiddleware
 # sets, so it must run inside it.
 app.add_middleware(ApiCacheControlMiddleware)
