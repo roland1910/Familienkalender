@@ -23,6 +23,7 @@ import { parseEvent } from "./events.js";
 import { attachSwipe } from "./gestures.js";
 import { startGroundwaterView, stopGroundwaterView } from "./groundwater-view.js";
 import { renderIcons, setIcon } from "./icons.js";
+import { createTapCoalescer, INTERACTION_EVENTS } from "./input-events.js";
 import { renderLegend } from "./legend.js";
 import { monthGridRange, renderMonthView } from "./month-view.js";
 import { closeDayPopover, initPopover } from "./popover.js";
@@ -351,7 +352,12 @@ function applyServerDefaults(config) {
 let screensaverEnabled = false;
 let lastInteractionAt = Date.now();
 
+// One physical tap reaches us as two or three events on the kiosk; only
+// the first of them is a real interaction (see input-events.js).
+const isNewInteraction = createTapCoalescer();
+
 function markInteraction(event) {
+  if (!isNewInteraction(event?.type, Date.now())) return;
   diag(`mark ${event?.type} ${diagState()}`); // TEMP
   lastInteractionAt = Date.now();
   // The user is actively using the device — a late /api/config response
@@ -412,7 +418,7 @@ function initScreensaver() {
   // Interaction listeners bump the idle timestamp and dismiss the slideshow.
   // Capture phase so the very touch that wakes the display is counted even
   // if a child stops propagation.
-  for (const type of ["pointerdown", "keydown", "wheel"]) {
+  for (const type of INTERACTION_EVENTS) {
     window.addEventListener(type, markInteraction, { capture: true, passive: true });
   }
   setInterval(checkIdle, IDLE_CHECK_INTERVAL_MS);

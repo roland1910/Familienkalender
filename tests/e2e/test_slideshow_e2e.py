@@ -588,6 +588,89 @@ def touch_page(browser: Browser) -> Iterator[Page]:
     context.close()
 
 
+def _kiosk_touch(page: Page) -> None:
+    """A tap exactly as the kiosk browser delivers it: touchstart plus an
+    emulated mousedown, and NO pointerdown.
+
+    Measured on the device on 17.10.2026 — see input-events.js. Playwright's
+    own touchscreen.tap() always emits pointerdown, so it cannot express
+    this browser's behaviour; the events are dispatched by hand instead.
+    """
+    x, y = _centre(page)
+    page.evaluate(
+        """([x, y]) => {
+            const target = document.elementFromPoint(x, y) ?? document.body;
+            const touch = { bubbles: true, cancelable: true };
+            target.dispatchEvent(new Event("touchstart", touch));
+            target.dispatchEvent(
+                new MouseEvent("mousedown", { bubbles: true, clientX: x, clientY: y }),
+            );
+        }""",
+        [x, y],
+    )
+
+
+def test_a_kiosk_touch_without_any_pointer_event_still_works(
+    page: Page, server_url: str
+) -> None:
+    """The bug Roland lived with: the icons appeared exactly once per page
+    load and nothing reacted afterwards — no icons, and no way back to the
+    calendar either.
+
+    The kiosk browser emulates a pointer event for the FIRST contact only
+    and then sends pure touch events. Listening to pointerdown alone made
+    every later touch invisible to the app. Here no pointer event is sent
+    at all, which is the state the display is in from the second tap on.
+    """
+    _inject_fast_timings(page, controls_ms=30000)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    controls = page.locator(".slideshow-controls")
+    overlay = page.locator(".slideshow-overlay")
+
+    # Tap one: the icons come up and the slideshow stays.
+    _kiosk_touch(page)
+    expect(controls).to_be_visible()
+    expect(overlay).to_have_count(1)
+
+    # Tap two, beside the icons: back to the calendar. Before the fix this
+    # touch was swallowed and the display could not be left at all.
+    _kiosk_touch(page)
+    expect(overlay).to_have_count(0)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def test_one_physical_tap_counts_once_even_as_three_events(
+    page: Page, server_url: str
+) -> None:
+    """The flip side of listening to touch, pointer and mouse at once: the
+    first tap after a page load arrives as all three, and counting them
+    separately would dismiss the icons the same tap just opened."""
+    _inject_fast_timings(page, controls_ms=30000)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    x, y = _centre(page)
+    page.evaluate(
+        """([x, y]) => {
+            const target = document.elementFromPoint(x, y) ?? document.body;
+            const opts = { bubbles: true, cancelable: true };
+            target.dispatchEvent(new Event("touchstart", opts));
+            target.dispatchEvent(
+                new PointerEvent("pointerdown", { bubbles: true, clientX: x, clientY: y }),
+            );
+            target.dispatchEvent(
+                new MouseEvent("mousedown", { bubbles: true, clientX: x, clientY: y }),
+            );
+        }""",
+        [x, y],
+    )
+
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+
+
 def test_the_whole_sequence_works_with_a_finger(touch_page: Page, server_url: str) -> None:
     page = touch_page
     _inject_fast_timings(page, controls_ms=1500)

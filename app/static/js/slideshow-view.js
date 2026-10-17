@@ -33,6 +33,7 @@ import { fetchNextPhoto, markPhotoForDeletion, photoImageUrl, rotatePhoto } from
 import { diag } from "./diag.js"; // TEMP diagnostics
 import { el } from "./dom.js";
 import { createIcon } from "./icons.js";
+import { isTapEvent } from "./input-events.js";
 import { formatFolderTrail, formatTakenAt } from "./slideshow-format.js";
 import {
   advanceDelayMs,
@@ -440,11 +441,13 @@ function whenControlsHidden() {
  * the slideshow handled it (and must stay up), false when the caller should
  * end it — the historical behaviour.
  *
- * Only POINTER input opens the operating mode. Keyboard and wheel keep
- * ending the slideshow at once: the icons are corner touch targets with no
- * keyboard affordance, so a key press would only insert a step nobody at the
- * kiosk can use — and on a maintenance laptop "any key returns to the
- * calendar" is exactly what is expected.
+ * Only a TAP opens the operating mode — a touch, a pointer or a mouse
+ * press, whichever of them this browser happens to deliver (the kiosk
+ * sends no pointer event for touch after the first one; see
+ * input-events.js). Keyboard and wheel keep ending the slideshow at once:
+ * the icons are corner touch targets with no keyboard affordance, so a key
+ * press would only insert a step nobody at the kiosk can use — and on a
+ * maintenance laptop "any key returns to the calendar" is expected.
  */
 // TEMP: the inside of the slideshow, for the unresponsive-kiosk hunt.
 export function diagState() {
@@ -467,7 +470,7 @@ export function handleSlideshowInteraction(event) {
 
 function handleSlideshowInteractionInner(event) {
   if (!running) return false;
-  if (event?.type !== "pointerdown") return false;
+  if (!isTapEvent(event?.type)) return false;
   if (!controlsAreVisible()) {
     const now = Date.now();
     const openingIsBroken = lastOpenAt !== 0 && now - lastOpenAt < CONTROLS_TIMEOUT_MS;
