@@ -617,17 +617,20 @@ def test_the_whole_sequence_works_with_a_finger(touch_page: Page, server_url: st
     expect(page.locator("#calendar .month-view")).to_be_visible()
 
 
-def test_a_tap_follows_what_is_on_screen_not_a_remembered_flag(
+def test_icons_that_do_not_stay_up_hand_the_tap_back_to_the_calendar(
     page: Page, server_url: str
 ) -> None:
-    """Roland, 17.10.2026: "die icons kommen nicht wieder sondern ich lande
-    im kalender". That is what happens whenever the module believes the icons
-    are up while the screen shows none: the tap is read as the second one and
-    ends the slideshow. Whether a flag can drift is beside the point — the
-    decision must come from the DOM, which is what the finger aims at.
+    """The kiosk must never swallow a touch.
 
-    Here the icons are hidden behind the module's back to force exactly that
-    mismatch; the next tap must still bring them back.
+    Roland, 17.10.2026: "aktuell kann ich tapen und es kommt weder icon noch
+    kalender" — the worst possible outcome at a display with no keyboard and
+    no way out. Whatever keeps the icons off the screen, the second attempt
+    in a row to open them gives up and lets the slideshow end: landing in the
+    calendar always beats tapping a display that does nothing.
+
+    Here the icons are taken down behind the module's back, so its own hide
+    path (which clears the suspicion) never runs and the next tap lands on
+    the "open" branch a second time.
     """
     _inject_fast_timings(page, controls_ms=30000)
     _mock_slideshow(page)
@@ -637,13 +640,37 @@ def test_a_tap_follows_what_is_on_screen_not_a_remembered_flag(
     _tap_beside_the_icons(page)
     expect(controls).to_be_visible()
 
-    # Hidden without the module noticing — the state it remembers is now a lie.
     page.eval_on_selector(".slideshow-controls", "node => { node.hidden = true; }")
     expect(controls).to_be_hidden()
 
     _tap_beside_the_icons(page)
-    expect(page.locator(".slideshow-overlay")).to_have_count(1)
-    expect(controls).to_be_visible()
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def test_a_throw_inside_the_slideshow_still_returns_to_the_calendar(
+    page: Page, server_url: str
+) -> None:
+    """The same guarantee from the other side: if the slideshow's own
+    handling raises, the exception must not skip the way out. Simulated by
+    making the controls element refuse to be unhidden."""
+    _inject_fast_timings(page, controls_ms=30000)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    page.eval_on_selector(
+        ".slideshow-controls",
+        """node => Object.defineProperty(node, "hidden", {
+            get: () => true,
+            set: () => {
+                throw new Error("boom");
+            },
+        })""",
+    )
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
 
 
 def test_the_picture_does_not_advance_while_the_icons_are_up(

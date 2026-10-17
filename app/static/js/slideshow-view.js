@@ -368,6 +368,17 @@ function armControls() {
  * one and drops back to the calendar (Roland, 17.10.2026). The DOM cannot
  * drift from itself.
  */
+// Safety net (17.10.2026, after Roland's display stopped reacting at all):
+// the kiosk must NEVER swallow a touch. In normal operation a tap that opens
+// the icons is followed either by a tap on an icon or by one that ends the
+// slideshow — the icons stay up for CONTROLS_TIMEOUT_MS, so the "open the
+// icons" branch cannot be reached twice in a row inside that window. If it
+// is, the icons are demonstrably not reaching the screen, and the honest
+// answer is to hand the tap back: landing in the calendar is always better
+// than tapping a display that does nothing. Reset whenever the icons are
+// properly taken down again, so an ordinary second cycle is unaffected.
+let lastOpenAt = 0;
+
 function controlsAreVisible() {
   return controlsNode !== null && !controlsNode.hidden && controlsNode.isConnected;
 }
@@ -383,6 +394,7 @@ function showControls() {
 }
 
 function hideControls() {
+  lastOpenAt = 0; // the icons behaved: the next tap may open them again
   if (controlsNode !== null) controlsNode.hidden = true;
   clearControlsTimer();
   resumeAdvance();
@@ -437,9 +449,14 @@ export function handleSlideshowInteraction(event) {
   if (!running) return false;
   if (event?.type !== "pointerdown") return false;
   if (!controlsAreVisible()) {
-    // Claim the tap only if the icons are now genuinely up. Claiming a tap
-    // that showed nothing would swallow every touch and leave the display
-    // unoperable — the worst possible failure at a kiosk.
+    const now = Date.now();
+    const openingIsBroken = lastOpenAt !== 0 && now - lastOpenAt < CONTROLS_TIMEOUT_MS;
+    lastOpenAt = now;
+    // Second attempt in a row to open icons that never stayed up: give up on
+    // them and let the caller end the slideshow (see lastOpenAt above).
+    if (openingIsBroken) return false;
+    // Otherwise claim the tap only if the icons are now genuinely up.
+    // Claiming a tap that showed nothing would swallow every touch.
     return showControls();
   }
   const target = event.target;
@@ -601,6 +618,7 @@ export function stopSlideshow() {
   context = null;
   controlsNode = null;
   noticeNode = null;
+  lastOpenAt = 0;
   pendingAdvance = null;
   currentMedia = null;
   // Anything still waiting for the icons to go away resumes and then bails

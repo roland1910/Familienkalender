@@ -360,7 +360,17 @@ function markInteraction(event) {
   // keeps the picture on screen, a tap on one of them acts. Everything the
   // slideshow does not claim — a touch beside the icons, any key, the wheel
   // — dismisses it immediately, exactly as before.
-  if (isSlideshowRunning() && !handleSlideshowInteraction(event)) stopSlideshow();
+  if (!isSlideshowRunning()) return;
+  let claimed = false;
+  try {
+    claimed = handleSlideshowInteraction(event);
+  } catch (error) {
+    // A throw inside the slideshow must never cost the way out: without
+    // this the exception skips stopSlideshow() and every further touch
+    // runs into the same line, leaving the kiosk unoperable.
+    console.error("Diashow-Interaktion fehlgeschlagen", error);
+  }
+  if (!claimed) stopSlideshow();
 }
 
 function checkIdle() {
