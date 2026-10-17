@@ -16,7 +16,7 @@
 
 import * as api from "./api.js";
 import { byId, el, showMessage } from "./dom.js";
-import { breadcrumbSegments, scanWarningText, shortName } from "./slideshow-path.js";
+import { breadcrumbSegments, lastScanText, scanWarningText, shortName } from "./slideshow-path.js";
 
 // The current directory list, kept in sync with the backend so add/remove
 // can PUT the whole array.
@@ -41,6 +41,10 @@ function renderScanState(payload) {
   // "on"/"off"; anything unexpected falls back to the conservative "off"
   // rather than silently leaving the select on a stale value.
   byId("slideshow-videos").value = payload.videos === "on" ? "on" : "off";
+  const lastScan = byId("slideshow-last-scan");
+  const scanned = lastScanText(payload.last_scan, payload.photo_count);
+  lastScan.textContent = scanned;
+  lastScan.hidden = scanned === "";
   const warning = byId("slideshow-warning");
   const text = scanWarningText(payload);
   warning.textContent = text;

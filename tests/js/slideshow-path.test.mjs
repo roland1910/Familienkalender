@@ -7,6 +7,7 @@ import { test } from "node:test";
 
 import {
   breadcrumbSegments,
+  lastScanText,
   scanWarningText,
   shortName,
 } from "../../app/static/admin/slideshow-path.js";
@@ -68,4 +69,26 @@ test("breadcrumb: tolerates a trailing slash on root", () => {
     { name: "media", path: "/media" },
     { name: "Photos", path: "/media/Photos" },
   ]);
+});
+
+test("lastScanText nennt Zeitpunkt und Anzahl, damit man dem Index ansieht, dass er lebt", () => {
+  const now = new Date("2026-10-17T18:40:00+02:00");
+  // Heute -> nur die Uhrzeit.
+  assert.equal(
+    lastScanText("2026-10-17T16:05:00+00:00", 54067, now),
+    "Zuletzt eingelesen: heute 18:05 Uhr (54067 Dateien).",
+  );
+  // Gestern und aelter -> mit Datum, damit ein stehengebliebener Scan auffaellt.
+  assert.equal(
+    lastScanText("2026-10-16T05:30:00+00:00", 12, now),
+    "Zuletzt eingelesen: 16.10. 07:30 Uhr (12 Dateien).",
+  );
+});
+
+test("lastScanText schweigt, solange nichts Brauchbares bekannt ist", () => {
+  const now = new Date("2026-10-17T18:40:00+02:00");
+  // Nie gelaufen bzw. Altbestand ohne Zeitstempel: lieber nichts behaupten.
+  assert.equal(lastScanText(null, 7, now), "");
+  assert.equal(lastScanText("", 7, now), "");
+  assert.equal(lastScanText("voelliger Unsinn", 7, now), "");
 });

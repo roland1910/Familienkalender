@@ -21,6 +21,31 @@ export function scanWarningText({ unavailable_dirs, scan_skipped } = {}) {
   return `Hinweis: ${folders} beim letzten Einlesen nicht erreichbar (Netzwerkfreigabe?) — ${tail}`;
 }
 
+// "Zuletzt eingelesen: …" for the slideshow section.
+//
+// The index is refreshed by a timer nobody can see, so without this line
+// there is no way to tell a working scan from one that quietly stopped
+// hours ago — the question "how do we make sure new photos show up?" can
+// then only be answered by trusting the code. Today's runs show the time
+// alone; anything older carries its date, because that is exactly the case
+// worth noticing. An unusable or missing timestamp prints nothing rather
+// than inventing a time (old installations have no stored value yet).
+export function lastScanText(iso, photoCount, now = new Date()) {
+  if (typeof iso !== "string" || iso === "") return "";
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const pad = (value) => String(value).padStart(2, "0");
+  const clock = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  const sameDay =
+    at.getFullYear() === now.getFullYear() &&
+    at.getMonth() === now.getMonth() &&
+    at.getDate() === now.getDate();
+  const when = sameDay
+    ? `heute ${clock}`
+    : `${pad(at.getDate())}.${pad(at.getMonth() + 1)}. ${clock}`;
+  return `Zuletzt eingelesen: ${when} Uhr (${Number(photoCount) || 0} Dateien).`;
+}
+
 // The display label for a directory path: its last segment, or the whole
 // path if it has none (e.g. the drive/root itself).
 export function shortName(path) {

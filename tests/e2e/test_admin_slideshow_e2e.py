@@ -7,6 +7,7 @@ exercised: descending into a subfolder, adding it, going back, and adding a
 second subfolder.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,12 @@ _TREE = {
 
 
 def _route_slideshow(page: Page) -> None:
-    state = {"dirs": [], "photo_count": 0, "videos": "off"}
+    # last_scan mirrors the backend: None until a scan has actually run,
+    # then the ISO timestamp of the most recent one.
+    state = {"dirs": [], "photo_count": 0, "videos": "off", "last_scan": None}
+
+    def _scanned_now() -> None:
+        state["last_scan"] = datetime.now(tz=UTC).isoformat()
 
     def handle_get(route: Route) -> None:
         route.fulfill(json={**state, "media_root": "/media"})
@@ -41,10 +47,12 @@ def _route_slideshow(page: Page) -> None:
         # Mirrors the backend: an omitted "videos" leaves the value alone.
         if body.get("videos") is not None:
             state["videos"] = body["videos"]
+        _scanned_now()
         route.fulfill(json={**state, "media_root": "/media"})
 
     def handle_rescan(route: Route) -> None:
         state["photo_count"] = 12
+        _scanned_now()
         route.fulfill(json={**state, "media_root": "/media"})
 
     def handle_dirs(route: Route) -> None:
@@ -147,6 +155,30 @@ def test_navigate_add_and_rescan(page: Page, server_url: str) -> None:
     expect(page.locator("#slideshow-dir-list .slideshow-dir")).to_have_count(1)
     page.locator("#slideshow-dir-list .action-button.subtle").first.click()
     expect(page.locator("#slideshow-dir-list")).to_contain_text("Noch keine Ordner")
+
+
+def test_the_last_scan_time_is_shown_once_there_has_been_one(
+    page: Page, server_url: str
+) -> None:
+    """Roland asked how we make sure new photos reach the slideshow. The
+    scan runs on a timer nobody can see, so the page has to say when it
+    last ran — otherwise a stopped loop looks like "nothing new".
+    """
+    _route_slideshow(page)
+    _goto_admin(page, server_url)
+
+    # A fresh installation has never scanned and must claim nothing.
+    expect(page.locator("#slideshow-last-scan")).to_be_hidden()
+
+    page.locator(".slideshow-browse-enter", has_text="Photos").click()
+    page.locator(".slideshow-browse-enter", has_text="Urlaub").click()
+    page.locator("#btn-slideshow-add").click()
+    expect(page.locator("#slideshow-count")).to_have_text("7")
+
+    last_scan = page.locator("#slideshow-last-scan")
+    expect(last_scan).to_be_visible()
+    expect(last_scan).to_contain_text("Zuletzt eingelesen: heute")
+    expect(last_scan).to_contain_text("7 Dateien")
 
 
 def test_video_switch_saves_and_survives_a_reload(page: Page, server_url: str) -> None:

@@ -45,7 +45,7 @@ import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -394,25 +394,43 @@ def _store_scan_status(result: ScanResult) -> None:
     get_storage().set_setting(
         SLIDESHOW_SCAN_STATUS_KEY,
         json.dumps(
-            {"unavailable_dirs": result.unavailable_dirs, "skipped": result.skipped}
+            {
+                "unavailable_dirs": result.unavailable_dirs,
+                "skipped": result.skipped,
+                # Every run is stamped, including one that deliberately left
+                # the index alone: the question the admin page has to answer
+                # is "is the hourly scan still alive?", and a skipped run is
+                # just as much proof of that as a fruitful one. Without it a
+                # stopped loop is indistinguishable from "nothing new".
+                "last_run": datetime.now(tz=UTC).isoformat(),
+            }
         ),
     )
 
 
 def get_scan_status() -> dict:
-    """Last scan status ``{unavailable_dirs, skipped}`` (zeroed if unknown)."""
+    """Last scan status ``{unavailable_dirs, skipped, last_run}``.
+
+    ``last_run`` is None on an installation that has never scanned (and on
+    a stored value written before this field existed) — the UI then says
+    nothing rather than inventing a time.
+    """
     raw = get_storage().get_setting(SLIDESHOW_SCAN_STATUS_KEY)
     if raw:
         try:
             data = json.loads(raw)
             if isinstance(data, dict):
+                last_run = data.get("last_run")
+                if not isinstance(last_run, str) or not last_run:
+                    last_run = None
                 return {
                     "unavailable_dirs": int(data.get("unavailable_dirs") or 0),
                     "skipped": bool(data.get("skipped")),
+                    "last_run": last_run,
                 }
         except (ValueError, TypeError):
             pass
-    return {"unavailable_dirs": 0, "skipped": False}
+    return {"unavailable_dirs": 0, "skipped": False, "last_run": None}
 
 
 async def scan_photos() -> int:
@@ -985,6 +1003,7 @@ def _slideshow_payload() -> dict:
         "videos": settings.get_slideshow_videos(get_storage()),
         "unavailable_dirs": status["unavailable_dirs"],
         "scan_skipped": status["skipped"],
+        "last_scan": status["last_run"],
     }
 
 

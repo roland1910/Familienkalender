@@ -10,7 +10,7 @@ MEDIA_ROOT pointed there — no real /media needed.
 import os
 import shutil
 import struct
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -453,6 +453,50 @@ class TestAdminApi:
             params={"path": str(media_root / "Photos" / "Urlaub")},
         ).json()
         assert deep_resp["parent"] == str(media_root / "Photos")
+
+
+class TestScanVisibility:
+    """You must be able to SEE that the hourly scan is still doing its job.
+
+    Roland, 17.10.2026: "wie stellen wir sicher das neue fotos in diesen
+    ordnern teil der diashow werden". The scan itself is sound, but it is
+    driven by an invisible timer — without a recorded run time a loop that
+    quietly stopped looks exactly like one that found nothing new.
+    """
+
+    def test_a_scan_records_when_it_ran(self, client: TestClient, media_root: Path) -> None:
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        before = datetime.now(tz=UTC)
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+
+        payload = client.get("/api/admin/slideshow").json()
+        assert payload["photo_count"] == 1
+        last_scan = payload["last_scan"]
+        assert isinstance(last_scan, str) and last_scan
+        assert before <= datetime.fromisoformat(last_scan) <= datetime.now(tz=UTC)
+
+    def test_a_skipped_scan_still_counts_as_a_run(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        """A run that deliberately left the index alone (share unreachable)
+        is still proof the loop is alive — and the warning next to it says
+        why the count did not move."""
+        album = media_root / "Album"
+        _make_image(album / "a.jpg")
+        client.put("/api/admin/slideshow", json={"dirs": [str(album)]})
+        first = client.get("/api/admin/slideshow").json()["last_scan"]
+
+        shutil.rmtree(album)
+        payload = client.post("/api/admin/slideshow/rescan").json()
+        assert payload["scan_skipped"] is True
+        assert payload["last_scan"] is not None
+        assert payload["last_scan"] >= first
+
+    def test_an_installation_that_never_scanned_claims_nothing(
+        self, client: TestClient
+    ) -> None:
+        assert client.get("/api/admin/slideshow").json()["last_scan"] is None
 
 
 class TestScanAvailabilityGuard:
