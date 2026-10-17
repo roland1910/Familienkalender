@@ -109,8 +109,11 @@ class TestTabShell:
         self, page: Page, server_url: str
     ) -> None:
         # Deliberately short, so the Anzeige panel is taller than the window
-        # and the jump has to scroll for real.
-        page.set_viewport_size({"width": 900, "height": 600})
+        # and the jump has to scroll for real. Narrow on purpose too: from
+        # 900px up the bar becomes a left sidebar (Schritt 4) and cannot
+        # cover anything, so the scroll-margin check below only has
+        # something to prove in the stacked layout.
+        page.set_viewport_size({"width": 700, "height": 600})
         _goto(page, server_url, "#slideshow-heading")
 
         expect(page.locator("#tab-anzeige")).to_be_visible()
@@ -249,3 +252,46 @@ class TestStatusBadges:
         page.locator("#btn-pending-deletes-reload").click()
         expect(page.locator("#pending-delete-list")).to_contain_text("Keine Fotos")
         expect(badge).to_be_hidden()
+
+
+def test_on_a_wide_screen_the_tabs_become_a_left_sidebar(
+    page: Page, server_url: str
+) -> None:
+    """Etappe 51, Schritt 4 — reines CSS, kein Javascript.
+
+    Auf dem Desktop ist eine waagerechte Leiste über dem Inhalt
+    verschenkter Platz: daneben liegt eine ganze Bildschirmbreite brach,
+    und der Inhalt beginnt weiter unten. Dieselbe `<nav>` wird deshalb ab
+    900 px zur Spalte links; am Handy bleibt alles, wie es war.
+    """
+    page.set_viewport_size({"width": 1280, "height": 900})
+    _goto(page, server_url)
+
+    nav = page.locator("#admin-tabs").bounding_box()
+    panel = page.locator("#tab-quellen").bounding_box()
+    assert nav is not None and panel is not None
+    # Side by side: the bar ends before the panel begins.
+    assert nav["x"] + nav["width"] <= panel["x"] + 1, (nav, panel)
+    # And it really is a column, not a row.
+    first = page.locator("#admin-tabs a").first.bounding_box()
+    second = page.locator("#admin-tabs a").nth(1).bounding_box()
+    assert first is not None and second is not None
+    assert second["y"] >= first["y"] + first["height"] - 1, (first, second)
+    # Every tab stays a comfortable target.
+    assert first["height"] >= 44, first
+
+
+def test_on_a_narrow_screen_the_tabs_stay_a_bar_on_top(
+    page: Page, server_url: str
+) -> None:
+    page.set_viewport_size({"width": 390, "height": 800})
+    _goto(page, server_url)
+
+    nav = page.locator("#admin-tabs").bounding_box()
+    panel = page.locator("#tab-quellen").bounding_box()
+    assert nav is not None and panel is not None
+    assert nav["y"] + nav["height"] <= panel["y"] + 1, (nav, panel)
+    # Two rows of two, never a sideways scroll.
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= window.innerWidth + 1"
+    )

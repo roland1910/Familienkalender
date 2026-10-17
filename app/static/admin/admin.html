@@ -41,7 +41,16 @@
       <section class="admin-section" aria-labelledby="sources-heading">
         <h2 id="sources-heading">Kalender-Quellen</h2>
         <ul id="source-list" class="source-list"></ul>
+        <!-- Etappe 51, Schritt 5: ein Einstieg statt dreier langer Knöpfe
+             nebeneinander. Die Frage kommt zuerst ("Quelle hinzufügen?"),
+             die drei Arten sind die Antwort darauf. Die IDs der drei
+             Knöpfe bleiben unverändert — sie SIND die Kacheln. -->
         <div class="button-row">
+          <button id="btn-add-source" class="action-button" type="button">
+            + Quelle hinzufügen
+          </button>
+        </div>
+        <div id="add-source-kinds" class="button-row add-source-kinds" hidden>
           <button id="btn-add-nextcloud" class="action-button" type="button">
             Nextcloud-Kalender hinzufügen
           </button>

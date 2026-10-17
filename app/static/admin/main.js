@@ -46,6 +46,22 @@ function initSync() {
   });
 }
 
+// Etappe 51, Schritt 5: the three "add a ..." buttons hide behind one
+// entry. Deliberately a few lines here rather than a module of its own —
+// it is a show/hide with no state worth testing in isolation, and the
+// three wizard IDs stay exactly what they were.
+function initAddSourceEntry() {
+  const entry = byId("btn-add-source");
+  const kinds = byId("add-source-kinds");
+  entry.addEventListener("click", () => {
+    kinds.hidden = false;
+    entry.hidden = true;
+    // Move the focus on, so keyboard users land on the choice they asked
+    // for instead of on a button that just disappeared.
+    byId("btn-add-nextcloud").focus();
+  });
+}
+
 function init() {
   // First: the tab shell. Until it runs, every section is visible — the
   // page degrades to the long scroll it used to be rather than to nothing.
@@ -56,6 +72,7 @@ function init() {
     if (keep !== "google") resetGoogleWizard();
     if (keep !== "birthdays") resetBirthdaysWizard();
   };
+  initAddSourceEntry();
   initNextcloudWizard({ onCreated: refreshSources, beforeOpen: resetOthers("nextcloud") });
   initGoogleWizard({ onCreated: refreshSources, beforeOpen: resetOthers("google") });
   initBirthdaysWizard({ onCreated: refreshSources, beforeOpen: resetOthers("birthdays") });

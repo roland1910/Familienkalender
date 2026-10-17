@@ -163,6 +163,40 @@ class TestSourceCard:
         assert box["y"] >= toggle["y"] + toggle["height"], (box, toggle)
 
 
+class TestAddSourceEntry:
+    """Etappe 51, Schritt 5 — one entry instead of three buttons.
+
+    Three long buttons side by side were a wall of text for something that
+    happens rarely. The entry asks the question first ("add a source?"),
+    the three kinds answer it.
+    """
+
+    def test_the_three_kinds_appear_behind_one_entry(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        entry = page.locator("#btn-add-source")
+        expect(entry).to_be_visible()
+        box = entry.bounding_box()
+        assert box is not None and box["height"] >= 44, box
+        # Folded away until asked for.
+        expect(page.locator("#btn-add-nextcloud")).to_be_hidden()
+
+        entry.click()
+        for selector in ["#btn-add-nextcloud", "#btn-add-google", "#btn-add-birthdays"]:
+            expect(page.locator(selector)).to_be_visible()
+        # The entry steps aside while the choice is up.
+        expect(entry).to_be_hidden()
+
+    def test_opening_a_wizard_from_a_tile_still_works(
+        self, page: Page, server_url: str
+    ) -> None:
+        goto_admin(page, server_url)
+        page.locator("#btn-add-source").click()
+        page.locator("#btn-add-nextcloud").click()
+        expect(page.locator("#nextcloud-form")).to_be_visible()
+
+
 class TestNextcloudWizard:
     def test_create_and_delete_a_caldav_source(self, page: Page, server_url: str) -> None:
         def fulfill_calendars(route: Route) -> None:
@@ -175,6 +209,8 @@ class TestNextcloudWizard:
         page.route("**/api/admin/caldav/calendars", fulfill_calendars)
         goto_admin(page, server_url)
 
+        # The three kinds hide behind one entry (E51/5).
+        page.locator("#btn-add-source").click()
         page.locator("#btn-add-nextcloud").click()
         page.locator("#nc-url").fill("https://cloud.example.com")
         page.locator("#nc-username").fill("roland")
@@ -220,6 +256,8 @@ class TestNextcloudWizard:
 
         page.route("**/api/admin/caldav/calendars", fulfill_error)
         goto_admin(page, server_url)
+        # The three kinds hide behind one entry (E51/5).
+        page.locator("#btn-add-source").click()
         page.locator("#btn-add-nextcloud").click()
         page.locator("#nc-url").fill("https://cloud.example.com")
         page.locator("#nc-username").fill("roland")
@@ -278,6 +316,8 @@ class TestGoogleWizard:
         goto_admin(page, server_url)
 
         # No credentials stored yet: the wizard starts with the credentials step.
+        # The three kinds hide behind one entry (E51/5).
+        page.locator("#btn-add-source").click()
         page.locator("#btn-add-google").click()
         expect(page.locator("#g-step-credentials")).to_be_visible()
         page.locator("#g-client-id").fill("cid.apps.googleusercontent.com")
@@ -363,6 +403,8 @@ class TestBirthdaysWizard:
         page.route("**/api/admin/google/contacts-connect", fulfill_connect)
         goto_admin(page, server_url)
 
+        # The three kinds hide behind one entry (E51/5).
+        page.locator("#btn-add-source").click()
         page.locator("#btn-add-birthdays").click()
         # Whether the wizard opens on the credentials step depends on whether
         # a prior test already stored Google credentials in the shared demo

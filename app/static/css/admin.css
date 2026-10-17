@@ -234,6 +234,73 @@ body[data-tabs="on"] .admin-panel:not(.admin-panel-active) {
   scroll-margin-top: 76px;
 }
 
+/* The class sets display, so the hidden attribute needs saying out loud
+   (the recurring trap — see the weather view's loading hint). This is the
+   fourth place in the project that needed it; a global
+   `[hidden] { display: none !important }` would end the whole class of
+   bug, but that is a sweeping change and belongs in its own step. */
+.add-source-kinds[hidden],
+.action-button[hidden] {
+  display: none;
+}
+
+/* Etappe 51, Schritt 4 — the same <nav> as a left column from 900px up.
+   PURE CSS on purpose: the tab logic in admin-nav.js is untouched, so the
+   desktop layout cannot break the thing that makes the page work at all.
+   A horizontal bar wastes a desktop screen twice over — the width beside
+   it lies idle and the content starts further down.
+
+   The wider page also gets more room: the 860px reading width stays for
+   the panel, the sidebar is added beside it. */
+@media (min-width: 900px) {
+  body[data-tabs="on"] .admin {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 860px);
+    justify-content: center;
+    align-items: start;
+    gap: 16px 24px;
+    max-width: 1100px;
+  }
+
+  /* One message line for the whole page — it spans both columns so a
+     failure from a section that is not on screen is still seen. */
+  body[data-tabs="on"] #page-message {
+    grid-column: 1 / -1;
+  }
+
+  /* Sticks beside the content instead of above it; no bleed, no rule —
+     the column gap is enough separation. */
+  body[data-tabs="on"] .admin-tabs {
+    position: sticky;
+    top: 16px;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    margin: 0;
+    padding: 0;
+    background: none;
+    border-bottom: 0;
+  }
+
+  /* No stretching: each tab is as tall as a comfortable target and no
+     taller, and the label reads from the left like a list. */
+  body[data-tabs="on"] .admin-tab {
+    flex: 0 0 auto;
+    justify-content: flex-start;
+  }
+
+  body[data-tabs="on"] .admin-panel {
+    grid-column: 2;
+  }
+
+  /* Nothing sticks above the content any more, so a deep link only needs
+     a little air. */
+  body[data-tabs="on"] .admin-panel,
+  body[data-tabs="on"] .admin-section,
+  body[data-tabs="on"] .admin-section h2 {
+    scroll-margin-top: 16px;
+  }
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: minmax(140px, 320px) 1fr;
