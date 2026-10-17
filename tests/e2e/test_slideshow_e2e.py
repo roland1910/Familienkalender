@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Browser, Page, expect
 
 from tests.e2e.helpers import goto_calendar
 
@@ -571,6 +571,78 @@ def test_the_icons_vanish_after_the_window_and_return_on_the_next_touch(
     expect(page.locator(".slideshow-overlay")).to_have_count(1)
     # The next touch starts from the beginning again.
     _tap_beside_the_icons(page)
+    expect(controls).to_be_visible()
+
+
+@pytest.fixture()
+def touch_page(browser: Browser) -> Iterator[Page]:
+    """A page that reports itself as a touchscreen, like the Waveshare kiosk.
+
+    Every other test here drives the slideshow with the mouse, which emits a
+    different event sequence than a finger — so the way Roland actually
+    operates the display was the one path with no coverage at all.
+    """
+    context = browser.new_context(viewport={"width": 1920, "height": 1080}, has_touch=True)
+    page = context.new_page()
+    yield page
+    context.close()
+
+
+def test_the_whole_sequence_works_with_a_finger(touch_page: Page, server_url: str) -> None:
+    page = touch_page
+    _inject_fast_timings(page, controls_ms=1500)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    controls = page.locator(".slideshow-controls")
+    overlay = page.locator(".slideshow-overlay")
+    x, y = _centre(page)
+
+    # First tap: icons up, slideshow stays.
+    page.touchscreen.tap(x, y)
+    expect(controls).to_be_visible()
+    expect(overlay).to_have_count(1)
+
+    # Wait the window out, then tap again — the icons must come BACK, not
+    # drop to the calendar.
+    expect(controls).to_be_hidden(timeout=6000)
+    expect(overlay).to_have_count(1)
+    page.touchscreen.tap(x, y)
+    expect(controls).to_be_visible()
+    expect(overlay).to_have_count(1)
+
+    # Only a tap while they are up ends the slideshow.
+    page.touchscreen.tap(x, y)
+    expect(overlay).to_have_count(0)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def test_a_tap_follows_what_is_on_screen_not_a_remembered_flag(
+    page: Page, server_url: str
+) -> None:
+    """Roland, 17.10.2026: "die icons kommen nicht wieder sondern ich lande
+    im kalender". That is what happens whenever the module believes the icons
+    are up while the screen shows none: the tap is read as the second one and
+    ends the slideshow. Whether a flag can drift is beside the point — the
+    decision must come from the DOM, which is what the finger aims at.
+
+    Here the icons are hidden behind the module's back to force exactly that
+    mismatch; the next tap must still bring them back.
+    """
+    _inject_fast_timings(page, controls_ms=30000)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+
+    controls = page.locator(".slideshow-controls")
+    _tap_beside_the_icons(page)
+    expect(controls).to_be_visible()
+
+    # Hidden without the module noticing — the state it remembers is now a lie.
+    page.eval_on_selector(".slideshow-controls", "node => { node.hidden = true; }")
+    expect(controls).to_be_hidden()
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
     expect(controls).to_be_visible()
 
 

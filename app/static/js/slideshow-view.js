@@ -76,7 +76,7 @@ let releaseVideo = null;
 let context = null; // the built overlay parts, for callers without one
 let controlsNode = null;
 let noticeNode = null;
-let controlsVisible = false;
+
 let controlsTimer = null;
 let noticeTimer = null;
 // The advance that is armed (or was armed when the icons came up), so it can
@@ -333,12 +333,12 @@ function playVideo(video, media, built) {
 function scheduleNext(built, delay) {
   clearTimer();
   pendingAdvance = { built, delay };
-  if (controlsVisible) return;
+  if (controlsAreVisible()) return;
   timer = setTimeout(() => {
     timer = null;
     // Defensive: the icons may have come up in the same tick the timer
     // fired. Leave `pendingAdvance` in place so it is re-armed later.
-    if (controlsVisible) return;
+    if (controlsAreVisible()) return;
     pendingAdvance = null;
     showNext(built);
   }, delay);
@@ -357,18 +357,32 @@ function armControls() {
   controlsTimer = setTimeout(hideControls, CONTROLS_TIMEOUT_MS);
 }
 
+/**
+ * Whether the icons are genuinely on screen — read from the DOM, never from
+ * a remembered flag.
+ *
+ * The decision "does this tap open the icons or end the slideshow?" has to
+ * agree with what the finger is aiming at. A separate boolean is a second
+ * truth that can drift from the screen, and when it does the kiosk does the
+ * opposite of what it looks like: no icons, yet the tap counts as the second
+ * one and drops back to the calendar (Roland, 17.10.2026). The DOM cannot
+ * drift from itself.
+ */
+function controlsAreVisible() {
+  return controlsNode !== null && !controlsNode.hidden && controlsNode.isConnected;
+}
+
+/** Show the icons. Returns whether they are actually up now. */
 function showControls() {
-  if (controlsNode === null) return;
-  controlsVisible = true;
+  if (controlsNode === null) return false;
   controlsNode.hidden = false;
   clearTimer(); // `pendingAdvance` still holds what was armed
   pauseVideoForControls();
   armControls();
+  return controlsAreVisible();
 }
 
 function hideControls() {
-  if (!controlsVisible) return;
-  controlsVisible = false;
   if (controlsNode !== null) controlsNode.hidden = true;
   clearControlsTimer();
   resumeAdvance();
@@ -404,7 +418,7 @@ function releaseControlsWaiters() {
 
 /** Resolves as soon as the operating icons are gone (at once if they are). */
 function whenControlsHidden() {
-  if (!controlsVisible) return Promise.resolve();
+  if (!controlsAreVisible()) return Promise.resolve();
   return new Promise((resolve) => controlsWaiters.push(resolve));
 }
 
@@ -422,9 +436,11 @@ function whenControlsHidden() {
 export function handleSlideshowInteraction(event) {
   if (!running) return false;
   if (event?.type !== "pointerdown") return false;
-  if (!controlsVisible) {
-    showControls();
-    return true;
+  if (!controlsAreVisible()) {
+    // Claim the tap only if the icons are now genuinely up. Claiming a tap
+    // that showed nothing would swallow every touch and leave the display
+    // unoperable — the worst possible failure at a kiosk.
+    return showControls();
   }
   const target = event.target;
   const onControl = target instanceof Element && target.closest(".slideshow-controls") !== null;
@@ -585,7 +601,6 @@ export function stopSlideshow() {
   context = null;
   controlsNode = null;
   noticeNode = null;
-  controlsVisible = false;
   pendingAdvance = null;
   currentMedia = null;
   // Anything still waiting for the icons to go away resumes and then bails
