@@ -91,6 +91,15 @@ class HomeAssistantUnavailableError(Exception):
     """
 
 
+class UnknownSensorError(HomeAssistantUnavailableError):
+    """HA does not know this entity at all (404), as opposed to being down.
+
+    Worth its own type because the two cases deserve different answers: a
+    vanished *device* is one missing tile, while an unreachable HA (or a
+    vanished headline sensor) means the view has nothing to say.
+    """
+
+
 # Server-side response cache: one payload for all clients.
 _cached_payload: dict | None = None
 _cache_valid_until = 0.0
@@ -207,7 +216,7 @@ async def _fetch_metric(client: httpx.AsyncClient, entity_id: str) -> dict:
             "Home Assistant ist nicht erreichbar."
         ) from exc
     if response.status_code == 404:
-        raise HomeAssistantUnavailableError(
+        raise UnknownSensorError(
             f"Sensor {entity_id} ist in Home Assistant unbekannt."
         )
     if response.status_code != 200:
@@ -269,9 +278,27 @@ async def _fetch_snapshot_uncached() -> dict:
             # with respect to severity.
             return_exceptions=True,
         )
-    for result in results:
-        if isinstance(result, BaseException):
-            raise result
+    # A configured plug that has been removed from Home Assistant is one
+    # missing tile, not a broken view - the same rule the weather and
+    # groundwater views follow ("one source failing never costs the whole
+    # screen"). Roland lost the entire power view on 17.10.2026 because a
+    # single smart plug had been deleted in HA. The two headline sensors are
+    # deliberately NOT covered by this: without production and consumption
+    # the view has nothing left to show, so an error is the honest answer.
+    aggregate_count = len(AGGREGATE_ENTITIES)
+    results = list(results)
+    for index, result in enumerate(results):
+        if not isinstance(result, BaseException):
+            continue
+        if index >= aggregate_count and isinstance(result, UnknownSensorError):
+            logger.info(
+                "Power device %r no longer exists in Home Assistant - shown as "
+                "unavailable; remove it in the admin to clear the tile.",
+                entity_ids[index],
+            )
+            results[index] = _missing_metric()
+            continue
+        raise result
     metrics = dict(zip(entity_ids, results, strict=True))
     # Aggregate tiles have fixed German labels, so they carry no
     # friendly_name — only value/available/last_updated.
@@ -287,6 +314,12 @@ async def _fetch_snapshot_uncached() -> dict:
         for device in devices
     ]
     return payload
+
+
+def _missing_metric() -> dict:
+    """Stand-in for a device Home Assistant does not know (same shape as
+    _fetch_metric, so the frontend renders it like any unavailable plug)."""
+    return {"value": 0, "available": False, "last_updated": None, "friendly_name": None}
 
 
 def _aggregate_metric(metric: dict) -> dict:

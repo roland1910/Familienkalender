@@ -240,6 +240,51 @@ class TestPowerEndpoint:
         assert "sensor.strom_netzbezug" in response.json()["detail"]
         assert "unbekannt" in response.json()["detail"]
 
+    def test_a_vanished_device_is_unavailable_and_keeps_the_view_alive(
+        self, client: TestClient, storage: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configured plug that no longer exists in HA must not take the
+        whole power view down (Roland, 17.10.2026: one removed smart plug
+        turned /api/power into a 502 and the view showed nothing at all).
+        Same principle the weather and groundwater views already follow:
+        the failure of one part never costs the whole screen.
+        """
+        set_power_devices(
+            storage,
+            [
+                PowerDevice("sensor.kuhlschrank_leistung", "Kühlschrank"),
+                PowerDevice("sensor.weg_leistung", "Verschwunden"),
+            ],
+        )
+        # The fridge exists, the second plug does not (absent from states).
+        use_mock_ha(monkeypatch, MockHA(HAPPY_STATES))
+        response = client.get("/api/power")
+
+        assert response.status_code == 200
+        payload = response.json()
+        # The aggregates are untouched.
+        assert payload["production"]["available"] is True
+        devices = {device["entity_id"]: device for device in payload["devices"]}
+        assert devices["sensor.kuhlschrank_leistung"]["available"] is True
+        # The vanished one is still listed, simply without a value, so Roland
+        # can see which entry to clean up in the admin.
+        gone = devices["sensor.weg_leistung"]
+        assert gone["available"] is False
+        assert gone["last_updated"] is None
+        assert gone["name"] == "Verschwunden"
+
+    def test_a_vanished_aggregate_is_still_a_502(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two headline sensors are the view's whole point — if one of
+        them is gone the honest answer is an error, not an empty chart."""
+        states = dict(HAPPY_STATES)
+        del states["sensor.hoymiles_station_balkonkraftwerk_current_power"]
+        use_mock_ha(monkeypatch, MockHA(states))
+        response = client.get("/api/power")
+        assert response.status_code == 502
+        assert "unbekannt" in response.json()["detail"]
+
     def test_first_of_several_simultaneous_errors_wins_by_list_order(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
