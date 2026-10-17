@@ -27,3 +27,61 @@ Bewusst verschobene Punkte aus Quality- und Security-Reviews. Jeder Punkt nennt 
 - ~~**`homeassistant_api: true` reaktivieren**~~ — **ERLEDIGT (Etappe 7):** Die Strom-Ansicht nutzt die HA Core API (`/api/power` in `app/power.py`); `homeassistant_api: true` steht mit Begründungskommentar wieder in `config.yaml`. **Verifikation auf dem Pi steht aus** (echte Sensorwerte gegen die HA-Oberfläche prüfen).
 - **Rechtemodell Etappe 8 — Verifikation auf dem Pi steht aus:** `panel_admin: false` + serverseitige Rechtetrennung (Details in CLAUDE.md, Abschnitt „Rechtemodell"). Nach dem Deployment prüfen: (1) Marina sieht das Panel und den Kalender, aber kein Zahnrad, `/admin` liefert die deutsche 403-Seite; (2) Roland (Admin) sieht Zahnrad + Verwaltung; (3) der `familiendisplay`-Benutzer kann jetzt auf Nicht-Admin umgestellt werden (HA → Einstellungen → Personen → Benutzer, Haken „Administrator" entfernen) — danach Display-Funktion (Kalender/Tags/Strom) gegenprüfen.
 - **Geburtstage aus Google-Kontakten (Etappe 15) — echtes Verbinden + Verifikation steht aus:** Quellenart `google_contacts` (People API, `contacts.readonly`) ist implementiert und gegen gemockte People-API-Antworten getestet, aber noch nie gegen die echte API autorisiert. Offen (durch Roland/Orchestrator): (1) im Google-Cloud-Projekt die **People API aktivieren** (falls noch nicht geschehen); (2) im Adminbereich über „Geburtstage (Google-Kontakte) hinzufügen" das gewünschte Konto verbinden (interaktive Zustimmung mit dem contacts-Scope) und einen Sync abwarten; (3) prüfen, ob die Geburtstage als ganztägige „🎂 Name"-Termine erscheinen und der 5-Minuten-Sync sie aktuell hält. **Bekannte Grenzen der People API (bewusst akzeptiert):** `people.connections.list` liefert nur die **gespeicherten Kontakte** des verbundenen Kontos (nicht „Weitere Kontakte"/Autovervollständigung, nicht die Verzeichnis-/Workspace-Domain), und nur Kontakte mit **hinterlegtem Geburtstag** erzeugen Termine. Wer die Familien-Geburtstage abdecken will, pflegt sie also als Kontakte mit Geburtstagsfeld. Falls sich das als zu eng erweist: separate People-Quelle je Konto verbinden oder Geburtstage in einem dedizierten Kontakte-Konto sammeln.
+
+## Adminbereich: Umbau (Etappe 51) — Schritte 3 bis 5 offen
+
+Entwurf eines Design-Agenten vom 17.10.2026, von Roland im Konzept abgenommen. **Schritte 1 und 2 sind umgesetzt** (vier Reiter, Statuspunkte — v0.43.0, siehe CLAUDE.md, Abschnitt „Adminbereich: Reiter"). Hier stehen die verbleibenden Schritte, damit der Entwurf eine Sitzung überlebt.
+
+Jeder Schritt ist **für sich deploybar und für sich zurückdrehbar**. Vorgesehene Reihenfolge 3 → 4 → 5; 4 und 5 hängen nicht an 3.
+
+### Schritt 3 — Quellen-Karte neu (`sources.js` + `admin.css`), Aufwand mittel–groß
+
+Heute baut `sources.js` sieben Bedienelemente in **eine** Flexzeile (Anzeige-Select, Kürzel, Farbe + „Standardfarbe", Abo-Haken, Vorrang, Deaktivieren, Umbenennen, Löschen). Bei acht Quellen sind das rund **60 Bedienelemente auf einem Handy-Schirm** — der Auslöser für den ganzen Umbau.
+
+Ziel: Karte mit Zusammenfassung und ausklappbarem Detail, **immer nur eine offen**.
+
+```
+┌──────────────────────────────────────────────┐
+│ ● Kunde   [Nextcloud]  [Fehler]              │   ← ganze Zeile tappbar
+│ Letzter Sync: 10.10.2026, 07:15 · 42 Termine │
+│                                  Bearbeiten ⌄│
+└──────────────────────────────────────────────┘
+   ausgeklappt:
+   Anzeige      [ Gefiltert (Abend/mehrtägig) ▾ ]
+   Name         [ Kunde                        ]
+   Farbe        [■] [Standardfarbe]
+   ☑ Im Kalender-Abo
+        └ Kürzel   [ KU ]      ← nur sichtbar, wenn Abo an
+        └ Vorrang  [  0 ]      ← nur sichtbar, wenn Abo an
+   ──────────────────────────────────────────
+   [ Deaktivieren ]
+   [ Löschen ]                 ← eigene Zeile, ganz unten
+```
+
+Begründungen der einzelnen Entscheidungen:
+
+- **Farbpunkt in die Zusammenfassung** — macht die Liste auf einen Blick lesbar und spiegelt, was im Kalender steht (`colorForSource` wird ohnehin geladen).
+- **Kürzel und Vorrang wirken ausschließlich im Abo.** Unter den Abo-Haken gerückt und nur bei aktivem Haken gezeigt: zwei Felder weniger im Normalfall, und ihre Bedeutung erklärt sich aus der Position. Der `FEED_FULL_WARNING`-Hinweis bleibt, wo er ist.
+- **„Umbenennen" entfällt als Knopf** — der Name wird ein Textfeld wie das Kürzel und speichert bei `change`. Drei Bedienelemente (Knopf → Feld + Speichern + Abbrechen) werden eines. Kein E2E-Test fasst `.rename-row` oder „Umbenennen" an (geprüft).
+- **„Löschen" steht nie in derselben Flexzeile wie etwas anderes**, sondern allein unter einer Trennlinie mit Abstand nach oben. Das Danebentippen ist damit **baulich** gelöst, nicht nur farblich.
+- **Kein Modal.** Ein Dialog bräuchte Fokusfalle, Escape-Behandlung und Scroll-Sperre — Aufwand, den eine Ein-Nutzer-Seite nicht trägt. Ausklappen ist Bestandsmarkup plus eine Klasse.
+
+**Preis, ehrlich benannt:** Die Quellenzeile hat **keine IDs**, nur Klassen, und alle Klassen bleiben (`.source-item`, `.source-name`, `.type-badge`, `.source-status`, `.error-badge`, `.source-error`, `.mode-select`, `.shortcode-input`, `.feed-priority-input`, `.feed-toggle`, `.color-input`, `.color-reset`, `.small-button.danger`). **Aber** rund zwölf Stellen in `tests/e2e/test_admin.py` greifen direkt auf diese Elemente zu, und Playwright wartet auf Sichtbarkeit — eingeklappt schlägt das fehl. Nötig ist **ein** Helfer `open_source_row(page, "Kunde")` plus je eine Zeile davor. Zwei Tests prüfen nur `to_have_count` und laufen unverändert.
+
+### Schritt 4 — Desktop-Seitenleiste, Aufwand klein (**reines CSS**)
+
+Ab ≥900 px dieselbe `<nav>` per Media-Query links als Spalte, die Panels rechts daneben. Kein JavaScript, damit kein Risiko für die Reiter-Logik.
+
+### Schritt 5 — „+ Quelle hinzufügen" als ein Einstieg, Aufwand klein
+
+Statt drei nebeneinanderstehender Knöpfe ein Einstieg mit drei Typ-Kacheln. `#btn-add-nextcloud`/`-google`/`-birthdays` **bleiben** die Kacheln, die Tests brauchen also nur einen Klick davor. Reine Kosmetik, deshalb zuletzt.
+
+### Was in allen Schritten unangetastet bleibt
+
+- **Zwei-Tipp-Bestätigung** in allen drei Ausprägungen (Quellen-Löschen mit 5-Sekunden-Rückfall, `#btn-mirror-cleanup`, `deleteButtonLabel()` bei den vorgemerkten Fotos). Kein `confirm()`, kein Dialog.
+- **Fehlgeschlagene Löschung lässt den Eintrag stehen** (`pending-deletes.js`).
+- **Die großen Ein/Aus-Schalter** `.busy-sync-toggle` der drei Syncs (56 px, volle Breite, `aria-pressed`, grün bei „an") — die beste Komponente der Seite.
+- **Die Erklärtexte über den Syncs.** Sie beschreiben Schreibzugriffe auf fremde Kalender; sie zu kürzen wäre die falsche Sparsamkeit.
+- **Die Assistenten-Schrittlogik** `nc-step-*`, `g-step-*`, `b-step-*` samt „einer öffnet, schließt die anderen" und allen IDs.
+- **`#btn-sync` global in der Kopfzeile**, **`#page-message` als eine Meldungszeile** über der Reiterleiste, **ein Modul je Sektion**.
+- Selbstverständlich: relative URLs, `textContent`-only, Theme-Variablen, ≥44 px, deutsche Texte.
