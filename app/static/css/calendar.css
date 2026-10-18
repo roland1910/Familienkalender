@@ -55,6 +55,30 @@
   --fw-strong: 600;
 }
 
+/* The hidden attribute hides, full stop.
+ *
+ * The UA stylesheet only gives [hidden] a `display: none`, which ANY class
+ * rule carrying its own display beats — so an element with both a class
+ * and the attribute stays on screen. That trap cost four real bugs in this
+ * project: the weather loading hint lay over the finished map, the
+ * groundwater hint did the same, the slideshow's operating icons would not
+ * go away, and the three "add a source" buttons showed through their own
+ * fold. Each was patched with a `.thing[hidden]` rule of its own — a fix
+ * that had to be remembered anew every time something gained a class with
+ * display AND the attribute.
+ *
+ * This one rule replaces all of them. !important is deliberate and is the
+ * whole point: the attribute must outrank every class, which is what the
+ * UA stylesheet should have done. If an element ever needs to be visible
+ * while carrying `hidden`, that is a contradiction — remove the attribute
+ * instead of weakening this rule. Guarded by
+ * tests/test_frontend_static.py::test_hidden_attribute_wins_everywhere... */
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: outranking every
+     class is the entire purpose of this rule — see the comment above. */
+  display: none !important;
+}
+
 /* Dark palette. Kept in a mixin-like list re-used by both activation paths
    below via a shared declaration; CSS has no mixins, so the values are
    written out in each block. */
@@ -401,12 +425,6 @@ body.mode-groundwater .status-badge {
   margin-top: auto;
 }
 
-/* display:inline-flex would override the UA rule of the hidden attribute —
-   without this, non-admins would see the gear despite hidden. */
-.admin-link[hidden] {
-  display: none;
-}
-
 /* -- calendar container --------------------------------------------------- */
 
 .calendar {
@@ -434,11 +452,6 @@ body.mode-groundwater .status-badge {
   padding: 2px 16px 8px;
   font-size: var(--fs-sm);
   color: var(--text-muted);
-}
-
-/* display:flex would defeat the hidden attribute's UA display:none. */
-.legend[hidden] {
-  display: none;
 }
 
 .legend-item {
@@ -601,10 +614,6 @@ body.mode-groundwater .status-badge {
   align-items: center;
   justify-content: center;
   z-index: 20;
-}
-
-.popover-backdrop[hidden] {
-  display: none;
 }
 
 .popover-panel {
@@ -1140,13 +1149,6 @@ body.mode-groundwater .status-badge {
   background: var(--bg);
 }
 
-/* The [hidden] attribute only sets display:none in the UA stylesheet, which
-   the rule above would win against — the loading hint then stayed on top of
-   the finished map forever. Spell the hidden state out explicitly. */
-.weather-radar-hint[hidden] {
-  display: none;
-}
-
 .weather-chart-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1374,13 +1376,6 @@ body.mode-groundwater .status-badge {
   font-size: var(--fs-lg);
   color: var(--text-muted);
   background: var(--bg);
-}
-
-/* The [hidden] attribute only sets display:none in the UA stylesheet, which
-   the rule above would win against — the loading hint would then sit on top
-   of the finished map forever (the trap the weather view already hit). */
-.groundwater-hint[hidden] {
-  display: none;
 }
 
 .groundwater-note,
@@ -1956,17 +1951,13 @@ body.mode-groundwater .status-badge {
 /* A transparent full-screen layer above both the photos and the vertical
    edge overlays; only the three buttons inside it take touches, so a tap
    anywhere else still reaches the window listener that ends the slideshow.
-   The explicit [hidden] rule is the documented trap from the weather hint:
-   a `display` on the class would win against the hidden attribute. */
+   Folding it away needs no rule of its own any more — the global
+   [hidden] rule near the top of this file outranks the display below. */
 .slideshow-controls {
   position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
-}
-
-.slideshow-controls[hidden] {
-  display: none;
 }
 
 /* 72px instead of the usual 48px: these are aimed at in the dark, from two
@@ -2029,8 +2020,4 @@ body.mode-groundwater .status-badge {
   background: rgba(0, 0, 0, 0.65);
   border-radius: 999px;
   pointer-events: none;
-}
-
-.slideshow-notice[hidden] {
-  display: none;
 }

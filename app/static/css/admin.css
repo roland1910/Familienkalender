@@ -21,6 +21,30 @@
   --radius: 8px;
 }
 
+/* The hidden attribute hides, full stop.
+ *
+ * The UA stylesheet only gives [hidden] a `display: none`, which ANY class
+ * rule carrying its own display beats — so an element with both a class
+ * and the attribute stays on screen. That trap cost four real bugs in this
+ * project: the weather loading hint lay over the finished map, the
+ * groundwater hint did the same, the slideshow's operating icons would not
+ * go away, and the three "add a source" buttons showed through their own
+ * fold. Each was patched with a `.thing[hidden]` rule of its own — a fix
+ * that had to be remembered anew every time something gained a class with
+ * display AND the attribute.
+ *
+ * This one rule replaces all of them. !important is deliberate and is the
+ * whole point: the attribute must outrank every class, which is what the
+ * UA stylesheet should have done. If an element ever needs to be visible
+ * while carrying `hidden`, that is a contradiction — remove the attribute
+ * instead of weakening this rule. Guarded by
+ * tests/test_frontend_static.py::test_hidden_attribute_wins_everywhere... */
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: outranking every
+     class is the entire purpose of this rule — see the comment above. */
+  display: none !important;
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #14161a;
@@ -210,12 +234,6 @@ body[data-tabs="on"] .admin-tabs {
   box-shadow: 0 0 0 2px var(--accent-contrast);
 }
 
-/* Explicit, because the display above would otherwise beat the hidden
-   attribute from the UA stylesheet (same trap as the weather loading hint). */
-.admin-tab-badge[hidden] {
-  display: none;
-}
-
 /* The panel carries the gap the .admin column used to give each section. */
 .admin-panel {
   display: flex;
@@ -232,16 +250,6 @@ body[data-tabs="on"] .admin-panel:not(.admin-panel-active) {
 .admin-section,
 .admin-section h2 {
   scroll-margin-top: 76px;
-}
-
-/* The class sets display, so the hidden attribute needs saying out loud
-   (the recurring trap — see the weather view's loading hint). This is the
-   fourth place in the project that needed it; a global
-   `[hidden] { display: none !important }` would end the whole class of
-   bug, but that is a sweeping change and belongs in its own step. */
-.add-source-kinds[hidden],
-.action-button[hidden] {
-  display: none;
 }
 
 /* Etappe 51, Schritt 4 — the same <nav> as a left column from 900px up.
@@ -433,12 +441,6 @@ body[data-tabs="on"] .admin-panel:not(.admin-panel-active) {
   font-weight: var(--fw-strong, 600);
 }
 
-/* The class sets display:flex, so the hidden attribute needs saying
-   explicitly — the same trap as the weather view's loading hint. */
-.source-controls[hidden] {
-  display: none;
-}
-
 /* Shortcode and precedence belong to the subscription switch and are
    indented under it, which is also where they stop being a mystery. */
 .source-feed-block {
@@ -450,10 +452,6 @@ body[data-tabs="on"] .admin-panel:not(.admin-panel-active) {
 
 .feed-detail {
   margin-left: 26px;
-}
-
-.feed-detail[hidden] {
-  display: none;
 }
 
 /* Delete shares its row with nothing and sits below a rule: mis-tapping

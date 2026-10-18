@@ -94,3 +94,33 @@ def test_stylesheet_and_modules_are_served() -> None:
         response = client.get(f"/static/js/{module}.js")
         assert response.status_code == 200, f"{module}.js not served"
         assert "javascript" in response.headers["content-type"]
+
+
+# Every selector ending in [hidden], apart from the bare global rule.
+_HIDDEN_CRUTCH = re.compile(r"(?m)^\s*\.[^\n{]*\[hidden\]")
+
+
+def test_hidden_attribute_wins_everywhere_through_one_global_rule() -> None:
+    """`[hidden]` must hide, full stop — in one place, not per class.
+
+    The UA stylesheet gives [hidden] only `display: none`, which ANY class
+    rule with its own display beats. That trap cost real bugs four times:
+    the weather loading hint stayed over the finished map, the groundwater
+    hint likewise, the slideshow's operating icons would not go away, and
+    the three "add a source" buttons showed through their own fold. Each
+    was fixed locally with a `.thing[hidden]` crutch — a fix that has to be
+    remembered every single time something gets both a class with display
+    and the hidden attribute.
+
+    One global rule with !important ends the class of bug instead. This
+    test holds the rule in place AND forbids the crutches, so nobody
+    re-introduces the per-class habit the rule replaced.
+    """
+    for name in ("calendar.css", "admin.css"):
+        css = (STATIC_DIR / "css" / name).read_text(encoding="utf-8")
+        # Matched loosely on purpose: the formatter owns the whitespace
+        # and a suppression comment lives inside the block.
+        assert re.search(r"(?m)^\[hidden\]\s*\{", css), name
+        assert "display: none !important;" in css, name
+        crutches = _HIDDEN_CRUTCH.findall(css)
+        assert crutches == [], (name, crutches)
