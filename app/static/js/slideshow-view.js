@@ -43,6 +43,7 @@ import {
   rotationStyle,
   SLIDE_INTERVAL_MS,
 } from "./slideshow-media.js";
+import { startTransit, stopTransit } from "./transit-view.js";
 
 // Fade duration; kept in sync with the CSS transition on .slideshow-layer.
 const FADE_MS = 800;
@@ -598,6 +599,9 @@ export function startSlideshow(container) {
   overlay = built.node;
   context = built;
   container.append(overlay);
+  // The departure board lives inside the overlay (see transit-view.js):
+  // it shares the slideshow's lifetime and is never rotated with a photo.
+  startTransit(overlay);
   showNext(built);
 }
 
@@ -613,6 +617,7 @@ export function stopSlideshow() {
   // Detach the video listeners and pause before the overlay goes away, so no
   // handler can fire (and no decoding can continue) after the teardown.
   releaseCurrentVideo();
+  stopTransit();
   if (overlay !== null) {
     overlay.remove();
     overlay = null;

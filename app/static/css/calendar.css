@@ -1946,6 +1946,89 @@ body.mode-groundwater .status-badge {
   max-height: calc(50% - 24px);
 }
 
+/* -- departure board (Etappe 52) ----------------------------------------- */
+
+/* Two narrow panels at the screen edges, vertically centred so they sit
+   in the black letterbox bars of a portrait photo — where Roland asked
+   for them — without colliding with the vertical text overlays, which
+   are anchored at the top and bottom corners (Etappe 34).
+
+   A landscape photo fills the width and leaves no bars, so the panels
+   carry their own translucent backing and stay readable on the picture.
+   pointer-events: none keeps them out of the way of the operating icons
+   and of the tap that ends the slideshow. */
+.slideshow-transit {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 210px;
+  padding: 12px 10px;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.95);
+  pointer-events: none;
+}
+
+.slideshow-transit-left {
+  left: 10px;
+}
+
+.slideshow-transit-right {
+  right: 10px;
+}
+
+.transit-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.transit-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The badge keeps the height the SVG was drawn for; the width comes from
+   the element's own style so "143" is not squeezed into "S3". */
+.transit-badge {
+  height: 24px;
+  flex: none;
+}
+
+.transit-dest {
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The times are the point of the whole panel — biggest thing in it. */
+.transit-times {
+  display: flex;
+  flex-direction: column;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.transit-cancelled {
+  text-decoration: line-through;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.transit-none,
+.transit-error {
+  margin: 0;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
 /* -- operating icons (Etappe 49) ---------------------------------------- */
 
 /* A transparent full-screen layer above both the photos and the vertical

@@ -70,16 +70,21 @@ class Block:
     label: str  # the line as it is printed: "56", "143", "S3"
     direction: str  # "H" or "R", the lineId marker
     kind: str  # "bus" or "sbahn" — picks the badge in the frontend
+    # Short human direction. Deliberately NOT the payload's destination:
+    # one block can end at different terminals (the S3 towards town runs
+    # to Holzkirchen or Deisenhofen), and from two metres the useful word
+    # is where it is heading, not which siding it finishes in.
+    towards: str
 
 
 # Fixed configuration, not admin-editable: Roland named these four exactly.
 # Keeping it in code means the direction letters stay next to the comment
 # that explains them.
 BLOCKS: tuple[Block, ...] = (
-    Block("bus56_pasing", "left", STOP_ALTE_ALLEE, "Alte Allee", "56", "H", "bus"),
-    Block("s3_pasing", "left", STOP_LANGWIED, "Langwied", "S3", "H", "sbahn"),
-    Block("bus56_back", "right", STOP_ALTE_ALLEE, "Alte Allee", "56", "R", "bus"),
-    Block("bus143_back", "right", STOP_ALTE_ALLEE, "Alte Allee", "143", "H", "bus"),
+    Block("bus56_pasing", "left", STOP_ALTE_ALLEE, "Alte Allee", "56", "H", "bus", "Pasing"),
+    Block("s3_pasing", "left", STOP_LANGWIED, "Langwied", "S3", "H", "sbahn", "Pasing"),
+    Block("bus56_back", "right", STOP_ALTE_ALLEE, "Alte Allee", "56", "R", "bus", "Blutenburg"),
+    Block("bus143_back", "right", STOP_ALTE_ALLEE, "Alte Allee", "143", "H", "bus", "Olympia-EKZ"),
 )
 
 
@@ -252,6 +257,7 @@ async def _build_board() -> dict:
                 "label": block.label,
                 "kind": block.kind,
                 "stop": block.stop_name,
+                "towards": block.towards,
                 "departures": select_departures(by_stop[block.stop_id], block),
             }
             for block in BLOCKS

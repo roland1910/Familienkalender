@@ -231,3 +231,13 @@ export async function putDayTags(dateISO, emojis) {
   const payload = await response.json();
   return payload.emojis;
 }
+
+// Live departure board for the slideshow (Etappe 52). A failure here is
+// never fatal — the caller shows a hint and the photos keep running.
+export async function fetchDepartures() {
+  const response = await fetch("api/transit/departures");
+  if (!response.ok) {
+    throw new Error(`Abfahrten laden fehlgeschlagen: HTTP ${response.status}`);
+  }
+  return response.json();
+}

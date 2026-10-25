@@ -8,6 +8,7 @@ the real three minutes.
 """
 
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -698,6 +699,116 @@ def test_the_whole_sequence_works_with_a_finger(touch_page: Page, server_url: st
     page.touchscreen.tap(x, y)
     expect(overlay).to_have_count(0)
     expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def _mock_departures(page: Page, fail: bool = False) -> None:
+    if fail:
+        page.route(
+            "**/api/transit/departures",
+            lambda route: route.fulfill(status=502, json={"detail": "MVG weg"}),
+        )
+        return
+    page.route(
+        "**/api/transit/departures",
+        lambda route: route.fulfill(
+            json={
+                "groups": [
+                    {
+                        "key": "bus56_pasing", "side": "left", "label": "56",
+                        "kind": "bus", "stop": "Alte Allee", "towards": "Pasing",
+                        "departures": [
+                            {"time": 1, "planned": 1, "delay": None,
+                             "cancelled": False, "realtime": True,
+                             "destination": "Fürstenried West"},
+                        ],
+                    },
+                    {
+                        "key": "s3_pasing", "side": "left", "label": "S3",
+                        "kind": "sbahn", "stop": "Langwied", "towards": "Pasing",
+                        "departures": [
+                            {"time": 2, "planned": 1, "delay": 3,
+                             "cancelled": False, "realtime": True,
+                             "destination": "Holzkirchen"},
+                        ],
+                    },
+                    {
+                        "key": "bus56_back", "side": "right", "label": "56",
+                        "kind": "bus", "stop": "Alte Allee", "towards": "Blutenburg",
+                        "departures": [
+                            {"time": 3, "planned": 3, "delay": None,
+                             "cancelled": True, "realtime": True,
+                             "destination": "Schloss Blutenburg"},
+                        ],
+                    },
+                    {
+                        "key": "bus143_back", "side": "right", "label": "143",
+                        "kind": "bus", "stop": "Alte Allee", "towards": "Olympia-EKZ",
+                        "departures": [],
+                    },
+                ]
+            }
+        ),
+    )
+
+
+def test_the_departure_board_shows_both_sides_inside_the_slideshow(
+    page: Page, server_url: str
+) -> None:
+    """Etappe 52: the board belongs to the slideshow — it appears with the
+    photos, sits at both screen edges and goes away with them."""
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    _mock_departures(page)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    _start_slideshow(page, server_url)
+
+    left = page.locator(".slideshow-transit-left")
+    right = page.locator(".slideshow-transit-right")
+    expect(left).to_be_visible()
+    expect(right).to_be_visible()
+    # Inside the overlay, so a photo rotation never carries them along.
+    assert page.locator(".slideshow-overlay .slideshow-transit").count() == 2
+
+    # Left: towards Pasing, with the delay spelled out.
+    expect(left).to_contain_text("Pasing")
+    # Asserted as a shape, not a value: the browser's timezone decides
+    # the digits, and the point here is that a clock is rendered.
+    expect(left.locator(".transit-time").first).to_have_text(re.compile(r"^\d\d:\d\d$"))
+    expect(left).to_contain_text("+3")
+    # Each line carries a drawn badge, never an emoji or an image file.
+    assert left.locator(".transit-badge").count() == 2
+    assert page.locator(".slideshow-transit img").count() == 0
+
+    # Right: a cancelled run says so in words, and an empty block says so too.
+    expect(right).to_contain_text("entfällt")
+    expect(right).to_contain_text("keine Abfahrt")
+
+    # Really at the edges, left of and right of the middle.
+    lbox = left.bounding_box()
+    rbox = right.bounding_box()
+    assert lbox is not None and rbox is not None
+    assert lbox["x"] < 100, lbox
+    assert rbox["x"] + rbox["width"] > 1820, rbox
+
+    # It leaves with the slideshow.
+    _tap_beside_the_icons(page)
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
+    expect(page.locator(".slideshow-transit")).to_have_count(0)
+
+
+def test_a_failing_departure_board_never_stops_the_photos(
+    page: Page, server_url: str
+) -> None:
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    _mock_departures(page, fail=True)
+    _start_slideshow(page, server_url)
+
+    expect(page.locator(".transit-error")).to_contain_text("nicht verfügbar")
+    # The slideshow itself carries on regardless.
+    expect(page.locator(".slideshow-layer-visible")).to_be_visible()
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
 
 
 def test_icons_that_do_not_stay_up_hand_the_tap_back_to_the_calendar(
