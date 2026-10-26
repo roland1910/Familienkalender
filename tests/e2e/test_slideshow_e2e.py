@@ -754,13 +754,16 @@ def _mock_departures(page: Page, fail: bool = False) -> None:
 def test_the_departure_board_shows_both_sides_inside_the_slideshow(
     page: Page, server_url: str
 ) -> None:
-    """Etappe 52: the board belongs to the slideshow — it appears with the
-    photos, sits at both screen edges and goes away with them."""
-    _inject_fast_timings(page)
+    """Etappe 52: the board sits at both screen edges inside the overlay,
+    for as long as the operating icons are up."""
+    # A generous icon window: this test makes many assertions, and the
+    # board is only on screen while the icons are.
+    _inject_fast_timings(page, controls_ms=20000)
     _mock_slideshow(page)
     _mock_departures(page)
     page.set_viewport_size({"width": 1920, "height": 1080})
     _start_slideshow(page, server_url)
+    _tap_beside_the_icons(page)
 
     left = page.locator(".slideshow-transit-left")
     right = page.locator(".slideshow-transit-right")
@@ -790,11 +793,45 @@ def test_the_departure_board_shows_both_sides_inside_the_slideshow(
     assert lbox["x"] < 100, lbox
     assert rbox["x"] + rbox["width"] > 1820, rbox
 
-    # It leaves with the slideshow.
-    _tap_beside_the_icons(page)
+    # And it leaves with the slideshow.
     _tap_beside_the_icons(page)
     expect(page.locator(".slideshow-overlay")).to_have_count(0)
     expect(page.locator(".slideshow-transit")).to_have_count(0)
+
+
+def test_the_departure_board_appears_only_once_the_display_is_touched(
+    page: Page, server_url: str
+) -> None:
+    """Roland, 26.10.2026: the board must share the operating icons' window
+    — an undisturbed photo is the point of the slideshow."""
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    _mock_departures(page)
+    _start_slideshow(page, server_url)
+
+    controls = page.locator(".slideshow-controls")
+    board = page.locator(".slideshow-transit")
+    # Running photos, no icons: not a single panel in the DOM.
+    expect(controls).to_be_hidden()
+    expect(board).to_have_count(0)
+    # Give a stray fetch time to land before believing the absence.
+    page.wait_for_timeout(300)
+    expect(board).to_have_count(0)
+
+    _tap_beside_the_icons(page)
+    expect(controls).to_be_visible()
+    expect(board).to_have_count(2)
+    expect(page.locator(".transit-time").first).to_be_visible()
+
+    # The window runs out: the icons go, and the board goes with them.
+    expect(controls).to_be_hidden(timeout=6000)
+    expect(board).to_have_count(0)
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+
+    # Opening them again brings it back — and exactly once, no leftovers.
+    _tap_beside_the_icons(page)
+    expect(controls).to_be_visible()
+    expect(board).to_have_count(2)
 
 
 def test_a_failing_departure_board_never_stops_the_photos(
@@ -804,6 +841,7 @@ def test_a_failing_departure_board_never_stops_the_photos(
     _mock_slideshow(page)
     _mock_departures(page, fail=True)
     _start_slideshow(page, server_url)
+    _tap_beside_the_icons(page)
 
     expect(page.locator(".transit-error")).to_contain_text("nicht verfügbar")
     # The slideshow itself carries on regardless.

@@ -11,6 +11,14 @@
 // they disappear with the slideshow instead of hanging over the
 // calendar.
 //
+// THE BOARD SHARES THE OPERATING ICONS' WINDOW, not the slideshow's
+// (Roland, 26.10.2026): "die informationen bezüglich bus und sbahn soll
+// nur angezeigt werden wenn auch die icons angezeigt werden … also nach
+// einmaligen touch". An undisturbed photo is the point of the slideshow;
+// a timetable is something you go and look at. So slideshow-view.js calls
+// startTransit() when the icons come up and stopTransit() when they go,
+// and the panels are built and torn down with them.
+//
 // Placement: on a portrait photo the panels sit in the black letterbox
 // bars, which is where Roland asked for them. A landscape photo fills
 // the width and leaves no bars — so they carry their own translucent
@@ -28,6 +36,16 @@ const REFRESH_MS = 30000;
 let panels = null; // { left, right }
 let timer = null;
 let generation = 0;
+
+// The last board we successfully fetched, and when. The server caches a
+// board for 30 s, so inside that window the remembered one IS what a fresh
+// request would answer — drawing it immediately costs nothing in accuracy
+// and spares an empty panel when the icons are opened twice in a row.
+// Anything older is not shown: a departure time that has passed is worse
+// than no board at all.
+const BOARD_FRESH_MS = 30000;
+let lastBoard = null;
+let lastBoardAt = 0;
 
 /**
  * The line badge as inline SVG — never an image file and never an emoji
@@ -116,16 +134,22 @@ async function refresh() {
   try {
     board = await fetchDepartures();
   } catch {
-    // A late answer from a previous slideshow run must not paint over
-    // the current one (same guard as the radar preloads).
+    // Do not resurrect the remembered board on the next open: it was just
+    // painted over by an error, and claiming it again would be a guess.
+    lastBoard = null;
+    // A late answer from a previous run must not paint over the current
+    // one (same guard as the radar preloads).
     if (mine === generation) renderError();
     return;
   }
+  lastBoard = board;
+  lastBoardAt = Date.now();
   if (mine === generation) renderBoard(board);
 }
 
 /** Attach both panels to the slideshow overlay and start polling. */
 export function startTransit(overlay) {
+  if (!overlay) return;
   stopTransit();
   generation += 1;
   const left = el("aside", "slideshow-transit slideshow-transit-left");
@@ -137,16 +161,29 @@ export function startTransit(overlay) {
     overlay.append(panel);
   }
   panels = { left, right };
+  if (lastBoard !== null && Date.now() - lastBoardAt < BOARD_FRESH_MS) {
+    renderBoard(lastBoard);
+  }
   refresh();
   timer = setInterval(refresh, REFRESH_MS);
 }
 
-/** Stop polling and forget the panels (the overlay removes itself). */
+/**
+ * Stop polling and take both panels off the screen.
+ *
+ * The nodes are removed here rather than left to the overlay: since the
+ * board now comes and goes with the operating icons, start/stop run many
+ * times within one slideshow, and panels left behind would pile up.
+ */
 export function stopTransit() {
   generation += 1;
   if (timer !== null) {
     clearInterval(timer);
     timer = null;
   }
-  panels = null;
+  if (panels !== null) {
+    panels.left.remove();
+    panels.right.remove();
+    panels = null;
+  }
 }

@@ -392,12 +392,18 @@ function showControls() {
   clearTimer(); // `pendingAdvance` still holds what was armed
   pauseVideoForControls();
   armControls();
-  return controlsAreVisible();
+  const up = controlsAreVisible();
+  // The departure board belongs to this window, not to the slideshow: an
+  // undisturbed photo is the point, a timetable is something you go and
+  // look at (Roland, 26.10.2026 — see transit-view.js).
+  if (up) startTransit(overlay);
+  return up;
 }
 
 function hideControls() {
   lastOpenAt = 0; // the icons behaved: the next tap may open them again
   if (controlsNode !== null) controlsNode.hidden = true;
+  stopTransit();
   clearControlsTimer();
   resumeAdvance();
 }
@@ -599,9 +605,6 @@ export function startSlideshow(container) {
   overlay = built.node;
   context = built;
   container.append(overlay);
-  // The departure board lives inside the overlay (see transit-view.js):
-  // it shares the slideshow's lifetime and is never rotated with a photo.
-  startTransit(overlay);
   showNext(built);
 }
 
@@ -617,7 +620,7 @@ export function stopSlideshow() {
   // Detach the video listeners and pause before the overlay goes away, so no
   // handler can fire (and no decoding can continue) after the teardown.
   releaseCurrentVideo();
-  stopTransit();
+  stopTransit(); // normally already gone with the icons; cheap and idempotent
   if (overlay !== null) {
     overlay.remove();
     overlay = null;
