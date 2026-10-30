@@ -597,17 +597,35 @@ class Storage:
 
         Called after a filesystem scan. Rebuilds the table wholesale in a
         single transaction: paths that vanished disappear, new ones are
-        added, and the ``shown`` rotation state is reset for everyone (a
-        fresh scan starts a fresh rotation cycle). Returns the number of
-        rows stored. Duplicate paths in the input are collapsed by the
-        UNIQUE constraint via INSERT OR IGNORE.
+        added. Returns the number of rows stored. Duplicate paths in the
+        input are collapsed by the UNIQUE constraint via INSERT OR IGNORE.
+
+        THE ``shown`` ROTATION STATE IS CARRIED OVER BY PATH. Until
+        2026-10-30 the rebuild hard-coded ``shown = 0``, which quietly
+        destroyed the whole point of the shuffle bag: ``periodic_photo_scan``
+        calls this every hour whether anything changed or not, so the
+        "every photo once before any repeat" promise only ever covered one
+        hour - about 120 pictures. Measured on the Pi at the time: 29 of
+        53,460 images marked shown, while a full pass needs some 18 days of
+        continuous running. The key is the PATH and not the id, for the same
+        reason the photo flags use one (see below): the id is reassigned on
+        every rescan. So a new file enters at ``shown = 0`` and joins the
+        cycle already under way, and a file that vanished and came back is a
+        new row and due again.
         """
         with self._connect() as conn:
+            shown = {
+                row["path"]
+                for row in conn.execute("SELECT path FROM photos WHERE shown = 1")
+            }
             conn.execute("DELETE FROM photos")
             conn.executemany(
                 "INSERT OR IGNORE INTO photos (path, mtime, kind, shown)"
-                " VALUES (?, ?, ?, 0)",
-                photos,
+                " VALUES (?, ?, ?, ?)",
+                (
+                    (path, mtime, kind, 1 if path in shown else 0)
+                    for path, mtime, kind in photos
+                ),
             )
             row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()
         return int(row["n"])
@@ -732,9 +750,11 @@ class Storage:
     # WHY A SEPARATE TABLE AND NOT TWO MORE COLUMNS ON ``photos``:
     # ``replace_photos`` rebuilds the whole index with ``DELETE FROM photos``
     # after every scan (hourly, plus every admin save). Anything stored in
-    # that table is gone an hour later — which is exactly what is documented
-    # and intended for the ``shown`` rotation state, and exactly what must
-    # NOT happen to a rotation Roland dialled in or a deletion he requested.
+    # that table is gone an hour later unless the rebuild carries it over by
+    # hand — which is what a rotation Roland dialled in or a deletion he
+    # requested must survive, and what the ``shown`` state needs too (see
+    # ``replace_photos``). Flags get their own table rather than two more
+    # columns, so that neither the scan nor the rotation has to know of them.
     #
     # The key is therefore the PATH, not the photos.id: the id is reassigned
     # on every rescan (AUTOINCREMENT over a freshly emptied table), while the

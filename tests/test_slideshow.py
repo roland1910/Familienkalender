@@ -254,15 +254,67 @@ class TestRotation:
     def test_pick_on_empty_index_returns_none(self, storage: Storage) -> None:
         assert storage.pick_next_photo() is None
 
-    def test_replace_photos_resets_shown(self, storage: Storage) -> None:
+    def test_a_rescan_keeps_the_rotation_progress(self, storage: Storage) -> None:
+        """THE point of the shuffle bag: the hourly scan must not restart it.
+
+        ``replace_photos`` rebuilds the table wholesale, but ``shown`` is
+        carried over by path. Without that the promise "every photo once
+        before any repeat" only ever held for one hour's worth of pictures
+        (measured on the Pi: 29 of 53,460 images marked shown).
+        """
+        always_first = lambda: 0.0  # noqa: E731 - deterministic: lowest id
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        assert storage.pick_next_photo(always_first)["name"] == "a.jpg"
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        # a.jpg is still the lowest id, so only a carried-over `shown`
+        # can make the next pick b.jpg.
+        assert storage.pick_next_photo(always_first)["name"] == "b.jpg"
+
+    def test_a_new_file_joins_the_running_cycle(self, storage: Storage) -> None:
+        """A photo that turns up mid-cycle enters unshown and is handed out
+        before the cycle ends, instead of waiting for the next one."""
         storage.replace_photos([("/media/a.jpg", 1.0, "image")])
         storage.pick_next_photo()  # marks a.jpg shown
         storage.replace_photos(
             [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
         )
-        # After a rescan both are unshown again → two distinct picks.
-        names = {storage.pick_next_photo()["name"], storage.pick_next_photo()["name"]}
-        assert names == {"a.jpg", "b.jpg"}
+        assert storage.pick_next_photo()["name"] == "b.jpg"
+
+    def test_a_file_that_vanished_and_came_back_starts_unshown(
+        self, storage: Storage
+    ) -> None:
+        """The path is the identity. A file that left the index and returned
+        is a new row, so it is due again even though the others are shown."""
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        storage.pick_next_photo()
+        storage.pick_next_photo()  # both shown
+        storage.replace_photos([("/media/a.jpg", 1.0, "image")])  # b.jpg gone
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        assert storage.pick_next_photo()["name"] == "b.jpg"
+
+    def test_a_full_cycle_still_resets_across_rescans(self, storage: Storage) -> None:
+        """Carrying the progress over must not stall the rotation: once
+        every eligible photo is shown, the next pick resets as before."""
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        storage.pick_next_photo()
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        storage.pick_next_photo()  # both shown now
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        assert storage.pick_next_photo() is not None
 
     def test_pick_reports_the_kind(self, storage: Storage) -> None:
         storage.replace_photos([("/media/clip.mp4", 1.0, "video")])
