@@ -84,7 +84,7 @@ BLOCKS: tuple[Block, ...] = (
     Block("bus56_pasing", "left", STOP_ALTE_ALLEE, "Alte Allee", "56", "H", "bus", "Pasing"),
     Block("s3_pasing", "left", STOP_LANGWIED, "Langwied", "S3", "H", "sbahn", "Pasing"),
     Block("bus56_back", "right", STOP_ALTE_ALLEE, "Alte Allee", "56", "R", "bus", "Blutenburg"),
-    Block("bus143_back", "right", STOP_ALTE_ALLEE, "Alte Allee", "143", "H", "bus", "Olympia-EKZ"),
+    Block("bus143_back", "right", STOP_ALTE_ALLEE, "Alte Allee", "143", "H", "bus", "OEZ"),
 )
 
 
