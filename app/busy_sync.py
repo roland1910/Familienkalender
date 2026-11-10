@@ -31,6 +31,7 @@ The sync runs only when it is enabled AND a write token is connected.
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import httpx
 
@@ -222,6 +223,49 @@ def _times_differ(block: BusyBlock, item: StoredEvent) -> bool:
     )
 
 
+def _remote_moment(value: Any) -> str | None:
+    """One Google start/end field, encoded the way the mapping stores it.
+
+    ``{"dateTime": ...}`` is an instant and normalizes to UTC, ``{"date": ...}``
+    is an all-day boundary. Anything unreadable yields None, which the caller
+    reads as "no statement" rather than "wrong".
+    """
+    if not isinstance(value, dict):
+        return None
+    try:
+        if "dateTime" in value:
+            return _encode_moment(datetime.fromisoformat(value["dateTime"]))
+        if "date" in value:
+            return _encode_moment(date.fromisoformat(value["date"]))
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _remote_times(entry: dict[str, Any]) -> tuple[str, str] | None:
+    """Where a block ACTUALLY sits in Google, or None if that is unreadable."""
+    start = _remote_moment(entry.get("start"))
+    end = _remote_moment(entry.get("end"))
+    if start is None or end is None:
+        return None
+    return start, end
+
+
+def _remote_times_differ(remote: tuple[str, str] | None, item: StoredEvent) -> bool:
+    """Whether a block sits somewhere other than its source appointment.
+
+    The mapping row records what the add-on INTENDED to write; it cannot
+    reveal that the block was moved afterwards (Google calls that an update
+    like any other). Comparing the listing's real times closes that blind
+    spot. ``None`` means the entry carried no readable times and is never
+    treated as drift — guessing would move a block for no reason.
+    """
+    if remote is None:
+        return False
+    event = item.event
+    return remote != (_encode_moment(event.start), _encode_moment(event.end))
+
+
 async def _reconcile(
     storage: Storage,
     client: BusyWriteClient,
@@ -257,6 +301,13 @@ async def _reconcile(
         for own in own_blocks
         if own.get("id")
     }
+    # The same listing says WHERE each block actually sits. Without this the
+    # diff is blind to a block that was moved inside Google after we wrote it
+    # (real case, 10.11.2026: one block a day off, mapping and source in
+    # agreement, so nothing ever corrected it).
+    remote_times_by_id: dict[str, tuple[str, str] | None] = {
+        own["id"]: _remote_times(own) for own in own_blocks if own.get("id")
+    }
 
     def _audit(action: str, title: str, event_start: str | None) -> None:
         audit.append(
@@ -285,6 +336,9 @@ async def _reconcile(
         else:
             known_ids.add(existing.google_event_id)
             time_changed = _times_differ(existing, item)
+            moved_in_google = _remote_times_differ(
+                remote_times_by_id.get(existing.google_event_id), item
+            )
             # Correct visibility drift: old blocks were written as "private";
             # patch them back to the current default so they no longer show up
             # flagged private in Xalt. The patch goes through the same event id
@@ -293,7 +347,7 @@ async def _reconcile(
             visibility_drift = (
                 visibility_by_id.get(existing.google_event_id, "default") != "default"
             )
-            if time_changed or visibility_drift:
+            if time_changed or moved_in_google or visibility_drift:
                 await client.patch_block(existing.google_event_id, key, item.event)
                 storage.upsert_busy_block(
                     BusyBlock(
@@ -306,11 +360,11 @@ async def _reconcile(
                     updated_at=now,
                 )
                 updated += 1
-                # A real time change is worth showing in the change log; a
-                # pure visibility-drift correction is one-time internal
-                # housekeeping (~85 old blocks on the first run) and would
-                # flood the log, so it is deliberately not audited.
-                if time_changed:
+                # A real time change and a block pulled back into place are
+                # both worth showing; a pure visibility-drift correction is
+                # one-time internal housekeeping (~85 old blocks on the first
+                # run) and would flood the log, so it stays unaudited.
+                if time_changed or moved_in_google:
                     _audit("updated", item.event.title, _encode_moment(item.event.start))
 
     # 2. Delete mapped blocks whose source event is gone or out of window.

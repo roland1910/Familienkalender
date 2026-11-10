@@ -457,6 +457,140 @@ class TestInvariantAndReconciliation:
 
 
 @pytest.mark.anyio
+class TestRemoteTimeDrift:
+    """A mapped block that was MOVED inside Google is pulled back.
+
+    Real finding (10.11.2026): one of 89 blocks sat a day later than its
+    source appointment. The diff never noticed, because it compared the
+    wanted appointment against the stored mapping row — and those two
+    agreed. What nobody looked at was where the block actually sits. The
+    start-of-run listing already carries that, exactly as it carries the
+    visibility, so the comparison costs no extra request.
+    """
+
+    def _seed_moved_block(
+        self, storage: Storage, backend: RecordingBackend, event_id: str = "gevt-moved"
+    ) -> str:
+        start = datetime(2026, 7, 20, 10, tzinfo=UTC)
+        add_mv_event(storage, 1, "u1", start)
+        end = start + timedelta(hours=1)
+        event = CalendarEvent(
+            uid="u1", title="MoreValue-Meeting", start=start, end=end, all_day=False
+        )
+        key = source_key(1, event)
+        # Mapping and source agree — only Google disagrees.
+        storage.upsert_busy_block(
+            BusyBlock(key, event_id, start, end, False), updated_at=NOW
+        )
+        backend.own_blocks[event_id] = {
+            "id": event_id,
+            "summary": "Busy MV",
+            "start": {"dateTime": (start + timedelta(days=1)).isoformat()},
+            "end": {"dateTime": (end + timedelta(days=1)).isoformat()},
+            "extendedProperties": {"private": {MARKER_KEY: key, OWNER_KEY: OWNER_VALUE}},
+        }
+        return event_id
+
+    async def test_a_block_moved_in_google_is_patched_back(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        event_id = self._seed_moved_block(storage, backend)
+
+        result = await _run(storage, backend)
+        assert result.updated == 1
+        assert result.inserted == 0
+        assert result.deleted == 0
+        # Back on the source appointment's own day.
+        assert backend.own_blocks[event_id]["start"] == {
+            "dateTime": datetime(2026, 7, 20, 10, tzinfo=UTC).isoformat()
+        }
+        assert backend.own_blocks[event_id]["end"] == {
+            "dateTime": datetime(2026, 7, 20, 11, tzinfo=UTC).isoformat()
+        }
+
+    async def test_the_correction_does_not_repeat(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        self._seed_moved_block(storage, backend)
+
+        await _run(storage, backend)
+        second = await _run(storage, backend)
+        assert (second.inserted, second.updated, second.deleted) == (0, 0, 0)
+
+    async def test_moving_a_block_back_is_audited(self, env: Storage) -> None:
+        # Unlike the one-time visibility housekeeping this is a real
+        # correction in Roland's work calendar, and it is rare (1 of 89) —
+        # so it belongs in the change log.
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        self._seed_moved_block(storage, backend)
+
+        await _run(storage, backend)
+        out = [
+            e
+            for e in storage.get_audit_entries("2026-01-01T00:00:00+00:00")
+            if e.direction == "out"
+        ]
+        assert [e.action for e in out] == ["updated"]
+
+    async def test_a_block_sitting_right_is_left_alone(self, env: Storage) -> None:
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        start = datetime(2026, 7, 20, 10, tzinfo=UTC)
+        add_mv_event(storage, 1, "u1", start)
+        end = start + timedelta(hours=1)
+        event = CalendarEvent(
+            uid="u1", title="MoreValue-Meeting", start=start, end=end, all_day=False
+        )
+        key = source_key(1, event)
+        storage.upsert_busy_block(
+            BusyBlock(key, "gevt-ok", start, end, False), updated_at=NOW
+        )
+        # Google reports the same moment in a different zone — same instant,
+        # so this must NOT count as drift.
+        backend.own_blocks["gevt-ok"] = {
+            "id": "gevt-ok",
+            "summary": "Busy MV",
+            "start": {"dateTime": start.astimezone(BERLIN).isoformat()},
+            "end": {"dateTime": end.astimezone(BERLIN).isoformat()},
+            "extendedProperties": {"private": {MARKER_KEY: key, OWNER_KEY: OWNER_VALUE}},
+        }
+
+        result = await _run(storage, backend)
+        assert (result.inserted, result.updated, result.deleted) == (0, 0, 0)
+
+    async def test_a_listing_without_times_claims_no_drift(self, env: Storage) -> None:
+        # Never patch on a guess: an entry we cannot read the times from is
+        # "no statement", not "wrong" (same rule as the declined filter).
+        storage = env
+        settings.set_busy_sync_source_ids(storage, [1])
+        backend = RecordingBackend()
+        start = datetime(2026, 7, 20, 10, tzinfo=UTC)
+        add_mv_event(storage, 1, "u1", start)
+        end = start + timedelta(hours=1)
+        event = CalendarEvent(
+            uid="u1", title="MoreValue-Meeting", start=start, end=end, all_day=False
+        )
+        key = source_key(1, event)
+        storage.upsert_busy_block(
+            BusyBlock(key, "gevt-bare", start, end, False), updated_at=NOW
+        )
+        backend.own_blocks["gevt-bare"] = {
+            "id": "gevt-bare",
+            "summary": "Busy MV",
+            "start": {"dateTime": "nicht lesbar"},
+            "extendedProperties": {"private": {MARKER_KEY: key, OWNER_KEY: OWNER_VALUE}},
+        }
+
+        result = await _run(storage, backend)
+        assert (result.inserted, result.updated, result.deleted) == (0, 0, 0)
+
+
+@pytest.mark.anyio
 class TestVisibilityDrift:
     """Old blocks were written with visibility "private"; a plain event_body
     change would not touch them (the diff only patches on time changes). The
