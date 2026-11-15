@@ -12,17 +12,31 @@ function pad2(number) {
 }
 
 /**
- * "As of" timestamp for a power value, from the HA state's last_updated
- * (the moment the state was last written -- the freshness of the reading;
- * last_changed would only track value *changes* and look stale under a
- * constant load).
+ * How long a power value has been standing, from the HA state's
+ * last_updated -- rendered as "seit ...", NOT as an as-of time.
+ *
+ * THE WORDING IS THE POINT (15.11.2026). An earlier comment here claimed
+ * last_updated was "the moment the state was last written", unlike
+ * last_changed which "only tracks value changes and looks stale under a
+ * constant load". That is wrong, and it made working tiles look dead:
+ * Home Assistant writes a state only when it actually CHANGES. Measured on
+ * the Pi across every plug, last_changed, last_updated and last_reported
+ * held the exact same instant. A washing machine that is merely switched
+ * off therefore keeps the 0 W it last reported -- Roland saw "gestern
+ * 20:33" under a reading that was perfectly current, while the same plug's
+ * voltage sensor had reported 229.6 V minutes earlier.
+ *
+ * There is no field that would tell us the true freshness, so the honest
+ * line is the one we can actually back up: this value has not moved since
+ * then. That also happens to be the more useful statement -- "0 W seit
+ * gestern 20:33" says the machine has been off since yesterday evening.
  *
  * `iso` is an ISO-8601 string with timezone; `now` is the reference moment
  * (injected for testability). The result is local time (Europe/Berlin on
  * the kiosk, matching the rest of the frontend which also uses getHours()):
- *   - today      -> "HH:MM"
- *   - yesterday  -> "gestern HH:MM"
- *   - older      -> "TT.MM. HH:MM"
+ *   - today      -> "seit HH:MM"
+ *   - yesterday  -> "seit gestern HH:MM"
+ *   - older      -> "seit TT.MM. HH:MM"
  * Missing/unparseable input returns "" so the caller renders nothing.
  */
 export function formatLastUpdated(iso, now) {
@@ -33,9 +47,9 @@ export function formatLastUpdated(iso, now) {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfMoment = new Date(moment.getFullYear(), moment.getMonth(), moment.getDate());
   const dayDiff = Math.round((startOfToday - startOfMoment) / 86400000);
-  if (dayDiff <= 0) return time;
-  if (dayDiff === 1) return `gestern ${time}`;
-  return `${pad2(moment.getDate())}.${pad2(moment.getMonth() + 1)}. ${time}`;
+  if (dayDiff <= 0) return `seit ${time}`;
+  if (dayDiff === 1) return `seit gestern ${time}`;
+  return `seit ${pad2(moment.getDate())}.${pad2(moment.getMonth() + 1)}. ${time}`;
 }
 
 /**

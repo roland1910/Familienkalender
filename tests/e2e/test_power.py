@@ -117,8 +117,10 @@ def test_switch_to_power_view_and_back(page: Page, server_url: str) -> None:
     expect(segments.nth(2)).to_have_class(re.compile("power-summary-grid"))
     expect(segments.nth(2)).to_contain_text("Netzbezug")
     expect(segments.nth(2)).to_contain_text("137 W")
-    # One muted freshness stamp for the whole line (today → HH:MM).
-    expect(page.locator(".power-summary-time")).to_have_text("11:20")
+    # One muted stamp for the whole line, and it says how long the value has
+    # stood -- not when it was measured. HA writes a state only on change, so
+    # an unchanged reading is current, not stale (see formatLastUpdated).
+    expect(page.locator(".power-summary-time")).to_have_text("seit 11:20")
 
     # Device list with watt values; the unavailable plug is marked.
     devices = page.locator(".power-device")

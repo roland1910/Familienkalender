@@ -105,8 +105,10 @@ async function loadHistory() {
   }
 }
 
-// Small, muted "as of" time for a value; nothing rendered when the state
-// carries no last_updated.
+// Small, muted "seit ..." line under a value -- how long it has been
+// standing, not when it was measured (see formatLastUpdated: HA only writes
+// a state on change, so an unchanged reading is current, not stale).
+// Nothing is rendered when the state carries no last_updated.
 function lastUpdatedNote(metric, now, className) {
   const text = formatLastUpdated(metric.last_updated, now);
   if (text === "") return null;
