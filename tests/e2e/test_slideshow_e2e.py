@@ -519,6 +519,75 @@ def test_first_touch_opens_the_icons_and_keeps_the_slideshow(
         assert button.inner_text().strip() == "", selector
 
 
+def test_the_toolbar_button_starts_the_slideshow_without_waiting(
+    page: Page, server_url: str
+) -> None:
+    """Roland, 16.11.2026: a button in the vertical toolbar that continues
+    the slideshow right away.
+
+    It deliberately works while the screensaver toggle is OFF -- skipping
+    the idle wait is the whole point of it, and the toggle answers a
+    different question ("does the slideshow come up by itself?"). Two
+    controls writing one state is how an interface starts lying about it,
+    so this one is an ACTION and leaves the toggle alone.
+    """
+    _mock_slideshow(page)
+    goto_calendar(page, server_url)
+    toggle = page.locator("#btn-screensaver")
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+
+    page.locator("#btn-slideshow-now").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+    expect(page.locator(".slideshow-layer-visible")).to_be_visible()
+    # Still an action, not a state: the toggle beside it has not moved.
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+
+
+def test_the_button_carries_an_icon_and_no_word(page: Page, server_url: str) -> None:
+    # Same rule as every other control in the bar: SVG, never an emoji
+    # (the kiosk has no font for those), and no text beside it.
+    goto_calendar(page, server_url)
+    button = page.locator("#btn-slideshow-now")
+    expect(button).to_be_visible()
+    assert button.locator("svg").count() == 1
+    assert button.inner_text().strip() == ""
+    box = button.bounding_box()
+    assert box is not None
+    assert box["width"] >= 44 and box["height"] >= 44, box
+
+
+def test_a_slideshow_started_by_the_button_ends_like_any_other(
+    page: Page, server_url: str
+) -> None:
+    # However it was started, the display must behave the same: first tap
+    # brings up the operating icons, the second returns to the calendar.
+    _inject_fast_timings(page)
+    _mock_slideshow(page)
+    goto_calendar(page, server_url)
+    page.locator("#btn-slideshow-now").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
+    expect(page.locator("#calendar .month-view")).to_be_visible()
+
+
+def test_pressing_the_button_twice_does_not_stack_slideshows(
+    page: Page, server_url: str
+) -> None:
+    # The second press lands on a running slideshow; starting a second one
+    # would leave two overlays fighting over the screen.
+    _mock_slideshow(page)
+    goto_calendar(page, server_url)
+    button = page.locator("#btn-slideshow-now")
+    button.click()
+    expect(page.locator(".slideshow-overlay")).to_have_count(1, timeout=5000)
+    button.click(force=True)
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+
+
 def test_second_touch_beside_the_icons_ends_the_slideshow(
     page: Page, server_url: str
 ) -> None:

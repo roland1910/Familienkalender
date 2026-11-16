@@ -129,6 +129,18 @@
                 title="Diashow als Bildschirmschoner">
           <span class="btn-icon" data-icon="picture" aria-hidden="true"></span>
         </button>
+        <!-- Diashow sofort fortsetzen (Roland, 16.11.2026). Steht bewusst
+             NEBEN dem Bilderrahmen und sieht anders aus als er: der Rahmen
+             ist ein Schalter fuer "kommt die Diashow von allein?", dieser
+             Knopf ist eine Handlung ("jetzt weiter"). Er laesst den
+             Schalter deshalb unberuehrt — zwei Bedienelemente, die
+             denselben Zustand schreiben, sind der Anfang einer Anzeige,
+             die luegt. Das Play-Dreieck ist dieselbe Form, die das
+             Regenradar fuer "laeuft" benutzt. -->
+        <button id="btn-slideshow-now" class="icon-button" type="button"
+                aria-label="Diashow fortsetzen" title="Diashow fortsetzen">
+          <span class="btn-icon" data-icon="play" aria-hidden="true"></span>
+        </button>
         <!-- Standardmäßig versteckt; main.js blendet das Zahnrad nur für
              HA-Admins ein (GET api/me). Der Server schützt /admin zusätzlich. -->
         <a class="nav-button admin-link" href="admin" aria-label="Verwaltung" title="Verwaltung"

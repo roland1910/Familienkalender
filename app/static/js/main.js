@@ -405,6 +405,19 @@ function toggleScreensaver() {
   lastInteractionAt = Date.now();
 }
 
+// Start the slideshow now instead of waiting out IDLE_TIMEOUT_MS
+// (Roland, 16.11.2026). Deliberately an ACTION, not a second switch: it
+// leaves the screensaver toggle beside it untouched, because that toggle
+// owns a different question — whether the slideshow comes up by itself —
+// and two controls writing one state is how an interface starts lying
+// about it. Pressing it again while the slideshow runs does nothing; a
+// second overlay would fight the first for the screen.
+function startSlideshowNow() {
+  lastInteractionAt = Date.now();
+  if (isSlideshowRunning()) return;
+  startSlideshow(document.body);
+}
+
 function initScreensaver() {
   screensaverChoice = loadScreensaverChoice();
   // No server default yet — a missing choice starts OFF until /api/config
@@ -412,6 +425,7 @@ function initScreensaver() {
   screensaverEnabled = resolveScreensaverEnabled(screensaverChoice, null);
   applyScreensaverButton();
   document.getElementById("btn-screensaver").addEventListener("click", toggleScreensaver);
+  document.getElementById("btn-slideshow-now").addEventListener("click", startSlideshowNow);
   // Interaction listeners bump the idle timestamp and dismiss the slideshow.
   // Capture phase so the very touch that wakes the display is counted even
   // if a child stops propagation.

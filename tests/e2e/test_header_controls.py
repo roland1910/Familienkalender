@@ -38,6 +38,7 @@ ICON_BUTTONS = [
     "#btn-mode-weather",
     "#btn-theme",
     "#btn-screensaver",
+    "#btn-slideshow-now",
 ]
 
 
@@ -153,6 +154,7 @@ def test_control_bar_holds_every_control_stacked(page: Page, server_url: str) ->
         "#btn-mode-weather",
         "#btn-theme",
         "#btn-screensaver",
+        "#btn-slideshow-now",
     ]
     boxes = []
     for selector in ordered:
@@ -343,7 +345,7 @@ def test_header_controls_stay_touch_sized_on_kiosk_and_phone(
     selectors = [
         "#btn-prev", "#btn-today", "#btn-next", "#btn-month", "#btn-week",
         "#btn-mode-calendar", "#btn-mode-power", "#btn-mode-weather",
-        "#btn-theme", "#btn-screensaver",
+        "#btn-theme", "#btn-screensaver", "#btn-slideshow-now",
     ]
     for width, height in ((1920, 1080), (390, 844)):
         page.set_viewport_size({"width": width, "height": height})
