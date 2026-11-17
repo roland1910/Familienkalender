@@ -392,6 +392,73 @@ class TestRotation:
         assert Storage(db_path).count_photos() == 1
 
 
+class TestStableIds:
+    """A photo's id has to survive the hourly rescan.
+
+    Until 2026-11-17 ``replace_photos`` deleted every row and inserted the
+    lot again, so AUTOINCREMENT handed out 54,627 brand-new ids on every
+    scan. The browser holds the id of the picture on screen (the slide's 30
+    seconds, plus however long the control icons stay up), so for roughly
+    half a minute after each scan EVERY tap on the trash or a rotation arrow
+    hit a 404. Measured on the Pi: the rebuild ran at 16:59:38 and the tap
+    just after it reported "Vormerken fehlgeschlagen".
+
+    The index is therefore reconciled instead of rebuilt: a known path keeps
+    its row -- and with it its id and its ``shown`` flag -- a new one is
+    inserted, a vanished one deleted.
+    """
+
+    @staticmethod
+    def _ids(storage: Storage) -> dict[str, int]:
+        with storage._connect() as conn:
+            rows = conn.execute("SELECT id, path FROM photos").fetchall()
+        return {row["path"]: row["id"] for row in rows}
+
+    def test_a_rescan_keeps_the_id_of_every_surviving_photo(
+        self, storage: Storage
+    ) -> None:
+        files = [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        storage.replace_photos(files)
+        before = self._ids(storage)
+        storage.replace_photos(files)
+        assert self._ids(storage) == before
+
+    def test_a_new_file_does_not_disturb_the_ids_already_handed_out(
+        self, storage: Storage
+    ) -> None:
+        storage.replace_photos([("/media/a.jpg", 1.0, "image")])
+        before = self._ids(storage)
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        after = self._ids(storage)
+        assert after["/media/a.jpg"] == before["/media/a.jpg"]
+        assert after["/media/b.jpg"] != before["/media/a.jpg"]
+
+    def test_a_vanished_file_loses_its_row(self, storage: Storage) -> None:
+        storage.replace_photos(
+            [("/media/a.jpg", 1.0, "image"), ("/media/b.jpg", 2.0, "image")]
+        )
+        storage.replace_photos([("/media/a.jpg", 1.0, "image")])
+        assert list(self._ids(storage)) == ["/media/a.jpg"]
+
+    def test_a_known_path_takes_over_a_changed_mtime_and_kind(
+        self, storage: Storage
+    ) -> None:
+        """Keeping the row must not mean keeping stale facts about it."""
+        storage.replace_photos([("/media/a.mp4", 1.0, "image")])
+        storage.replace_photos([("/media/a.mp4", 99.0, "video")])
+        assert storage.list_photo_entries() == [("/media/a.mp4", 99.0, "video")]
+
+    def test_a_duplicate_path_in_one_scan_is_collapsed(self, storage: Storage) -> None:
+        assert (
+            storage.replace_photos(
+                [("/media/a.jpg", 1.0, "image"), ("/media/a.jpg", 2.0, "image")]
+            )
+            == 1
+        )
+
+
 class TestAdminApi:
     def test_get_defaults_empty(self, client: TestClient) -> None:
         response = client.get("/api/admin/slideshow")

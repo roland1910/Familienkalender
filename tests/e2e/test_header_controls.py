@@ -29,13 +29,23 @@ pytestmark = pytest.mark.e2e
 MIN_TOUCH_TARGET_PX = 44
 
 # Words that must NOT appear on the redesigned icon-only controls.
-FORBIDDEN_WORDS = ["Kalender", "Strom", "Wetter", "Auto", "Hell", "Dunkel", "Diashow"]
+FORBIDDEN_WORDS = [
+    "Kalender",
+    "Strom",
+    "Wetter",
+    "Grundwasser",
+    "Auto",
+    "Hell",
+    "Dunkel",
+    "Diashow",
+]
 
 # Every icon-carrying control in the header.
 ICON_BUTTONS = [
     "#btn-mode-calendar",
     "#btn-mode-power",
     "#btn-mode-weather",
+    "#btn-mode-groundwater",
     "#btn-theme",
     "#btn-screensaver",
     "#btn-slideshow-now",
@@ -53,7 +63,12 @@ def test_mode_buttons_are_icon_only_and_highlight_the_active_one(
 
     # No visible words on the mode buttons — only their symbol (an emoji,
     # which carries no A-Z/German letters).
-    for selector in ["#btn-mode-calendar", "#btn-mode-power", "#btn-mode-weather"]:
+    for selector in [
+        "#btn-mode-calendar",
+        "#btn-mode-power",
+        "#btn-mode-weather",
+        "#btn-mode-groundwater",
+    ]:
         text = page.locator(selector).inner_text()
         assert not any(ch.isalpha() for ch in text), (selector, text)
 
@@ -61,6 +76,9 @@ def test_mode_buttons_are_icon_only_and_highlight_the_active_one(
     expect(page.locator("#btn-mode-calendar")).to_have_attribute("aria-label", "Kalender")
     expect(page.locator("#btn-mode-power")).to_have_attribute("aria-label", "Strom")
     expect(page.locator("#btn-mode-weather")).to_have_attribute("aria-label", "Wetter")
+    expect(page.locator("#btn-mode-groundwater")).to_have_attribute(
+        "aria-label", "Grundwasser"
+    )
 
     # The active option is marked for sighted users (class -> accent fill)
     # and for assistive technology (aria-pressed).
@@ -152,6 +170,7 @@ def test_control_bar_holds_every_control_stacked(page: Page, server_url: str) ->
         "#btn-mode-calendar",
         "#btn-mode-power",
         "#btn-mode-weather",
+        "#btn-mode-groundwater",
         "#btn-theme",
         "#btn-screensaver",
         "#btn-slideshow-now",
@@ -334,7 +353,12 @@ def test_dark_mode_controls_stay_dark_not_white(page: Page, server_url: str) -> 
         return float(rgb)
 
     # Inactive controls sit on the dark surface; a white box would be ~255.
-    for selector in ["#btn-mode-power", "#btn-theme", "#btn-screensaver"]:
+    for selector in [
+        "#btn-mode-power",
+        "#btn-mode-groundwater",
+        "#btn-theme",
+        "#btn-screensaver",
+    ]:
         assert luminance(selector) < 80, (selector, luminance(selector))
 
 
@@ -345,7 +369,8 @@ def test_header_controls_stay_touch_sized_on_kiosk_and_phone(
     selectors = [
         "#btn-prev", "#btn-today", "#btn-next", "#btn-month", "#btn-week",
         "#btn-mode-calendar", "#btn-mode-power", "#btn-mode-weather",
-        "#btn-theme", "#btn-screensaver", "#btn-slideshow-now",
+        "#btn-mode-groundwater", "#btn-theme", "#btn-screensaver",
+        "#btn-slideshow-now",
     ]
     for width, height in ((1920, 1080), (390, 844)):
         page.set_viewport_size({"width": width, "height": height})

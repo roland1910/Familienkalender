@@ -8,9 +8,10 @@ Home Assistant's media source API — the add-on has no write access to the
 share itself.
 
 The guard this whole feature hangs on is that the flags live in their own
-table keyed by PATH: ``replace_photos`` wipes and rebuilds ``photos`` on
-every hourly scan, so anything stored there would be gone within the hour.
-``test_flags_survive_a_rescan`` is the test that matters most here.
+table keyed by PATH: a photo's row in ``photos`` is the scan's to keep or
+drop, so anything stored there is only as durable as the file's presence
+in the last scan. ``test_flags_survive_a_rescan`` is the test that matters
+most here.
 
 Every Home Assistant WebSocket call is faked — no test touches the network.
 """
@@ -177,17 +178,15 @@ class TestFlagsSurviveARescan:
     def test_flags_survive_a_rescan(self, storage: Storage) -> None:
         """THE core test of this stage.
 
-        ``replace_photos`` deletes every row of ``photos`` — a rotation or a
-        delete request stored there would be gone after the next hourly
-        scan. Keyed by path in their own table, they survive, even though
-        the photo's id changes.
+        A rotation or a delete request stored on the ``photos`` row would
+        not survive the hourly scan. Keyed by path in their own table, they
+        do.
         """
         storage.replace_photos([("/media/a.jpg", 1.0, "image")])
-        old_id = storage.pick_next_photo()["id"]
         storage.set_photo_rotation("/media/a.jpg", 90)
         storage.mark_photo_for_deletion("/media/a.jpg")
 
-        # A rescan that finds a second file: the table is rebuilt wholesale.
+        # A rescan that finds a second file.
         storage.replace_photos(
             [("/media/b.jpg", 2.0, "image"), ("/media/a.jpg", 1.0, "image")]
         )
@@ -196,8 +195,28 @@ class TestFlagsSurviveARescan:
         flags = storage.list_photo_flags()
         assert [flag["path"] for flag in flags] == ["/media/a.jpg"]
         assert flags[0]["delete_requested_at"] is not None
-        # The id really was reassigned — which is why the path is the key.
-        assert flags[0]["photo_id"] != old_id or old_id is None
+
+    def test_flags_survive_a_file_that_went_away_and_came_back(
+        self, storage: Storage
+    ) -> None:
+        """Why the key is the PATH and not the id.
+
+        Since 2026-11-17 a surviving path keeps its row and therefore its
+        id (see Storage.replace_photos), so that alone no longer makes the
+        case. A file that drops out of the index and returns does: it comes
+        back as a new row under a new id, and its rotation is still there.
+        """
+        storage.replace_photos([("/media/a.jpg", 1.0, "image")])
+        old_id = storage.pick_next_photo()["id"]
+        storage.set_photo_rotation("/media/a.jpg", 90)
+
+        storage.replace_photos([("/media/b.jpg", 2.0, "image")])  # share hiccup
+        storage.replace_photos(
+            [("/media/b.jpg", 2.0, "image"), ("/media/a.jpg", 1.0, "image")]
+        )
+
+        assert storage.get_photo_rotation("/media/a.jpg") == 90
+        assert storage.list_photo_flags()[0]["photo_id"] != old_id
 
 
 class TestPendingDeletesAreNotShown:
@@ -387,6 +406,59 @@ class TestMarkDeleteEndpoint:
     def test_an_unknown_id_is_404(self, client: TestClient, media_root: Path) -> None:
         _configure(client, _album(media_root, "a.jpg"))
         assert client.post("/api/slideshow/mark-delete/999999").status_code == 404
+
+
+class TestTheIdOnScreenStaysValid:
+    """The id the browser is holding must still work after an hourly scan.
+
+    This is the bug Roland hit on 2026-11-17: the index had just been
+    rebuilt (16:59:38 on the Pi), his tap on the trash carried the id the
+    picture had been handed out under, and the endpoint answered 404 ->
+    "Vormerken fehlgeschlagen". Nothing was wrong with the tap, the photo
+    or the share; the id had simply been reassigned underneath him.
+
+    Half a minute of every hour was affected -- the slide's own 30 seconds
+    plus the span the control icons stay up -- for the trash and for both
+    rotation arrows alike.
+    """
+
+    def test_a_photo_handed_out_before_a_rescan_can_still_be_marked(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg", "b.jpg"))
+        on_screen = client.get("/api/slideshow/next").json()
+        # The hourly scan fires while that picture is still on the wall.
+        assert client.post("/api/admin/slideshow/rescan").status_code == 200
+        response = client.post(f"/api/slideshow/mark-delete/{on_screen['id']}")
+        assert response.status_code == 200
+
+    def test_a_photo_handed_out_before_a_rescan_can_still_be_turned(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        _configure(client, _album(media_root, "a.jpg", "b.jpg"))
+        on_screen = client.get("/api/slideshow/next").json()
+        client.post("/api/admin/slideshow/rescan")
+        response = client.post(
+            f"/api/slideshow/rotate/{on_screen['id']}", json={"direction": "cw"}
+        )
+        assert response.status_code == 200
+        assert response.json()["rotation"] == 90
+
+    def test_the_id_still_points_at_the_same_file(
+        self, client: TestClient, media_root: Path
+    ) -> None:
+        """Staying valid is not enough -- it has to mean the same picture.
+
+        A scheme that merely kept ids in range would be worse than the 404:
+        the tap would quietly mark or turn whatever file had inherited the
+        number.
+        """
+        _configure(client, _album(media_root, "a.jpg", "b.jpg"))
+        on_screen = client.get("/api/slideshow/next").json()
+        client.post("/api/admin/slideshow/rescan")
+        client.post(f"/api/slideshow/mark-delete/{on_screen['id']}")
+        marked = client.get("/api/admin/slideshow/pending-deletes").json()["items"]
+        assert [item["name"] for item in marked] == [on_screen["name"]]
 
 
 # -- admin API: preview and final deletion -----------------------------------

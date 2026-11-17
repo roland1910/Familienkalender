@@ -595,39 +595,66 @@ class Storage:
         in SQL and defeat any index. The kind is decided exactly once, by
         the same whitelist that admitted the file during the scan.
 
-        Called after a filesystem scan. Rebuilds the table wholesale in a
-        single transaction: paths that vanished disappear, new ones are
-        added. Returns the number of rows stored. Duplicate paths in the
-        input are collapsed by the UNIQUE constraint via INSERT OR IGNORE.
+        Called after a filesystem scan. The index is RECONCILED against the
+        scan result in a single transaction, not rebuilt: a path already
+        known keeps its row, a new one is inserted, a vanished one is
+        deleted. Returns the number of rows stored. Duplicate paths within
+        one scan are collapsed on the way in.
 
-        THE ``shown`` ROTATION STATE IS CARRIED OVER BY PATH. Until
-        2026-10-30 the rebuild hard-coded ``shown = 0``, which quietly
-        destroyed the whole point of the shuffle bag: ``periodic_photo_scan``
-        calls this every hour whether anything changed or not, so the
-        "every photo once before any repeat" promise only ever covered one
-        hour - about 120 pictures. Measured on the Pi at the time: 29 of
-        53,460 images marked shown, while a full pass needs some 18 days of
-        continuous running. The key is the PATH and not the id, for the same
-        reason the photo flags use one (see below): the id is reassigned on
-        every rescan. So a new file enters at ``shown = 0`` and joins the
-        cycle already under way, and a file that vanished and came back is a
-        new row and due again.
+        KEEPING THE ROW KEEPS THE ID, AND THE ID IS WHAT THE KIOSK HOLDS.
+        Until 2026-11-17 this method deleted every row and inserted the lot
+        again, so AUTOINCREMENT handed out 54,627 brand-new ids on each of
+        the hourly scans. The browser carries the id of the picture on
+        screen for the length of a slide plus however long the control
+        icons stay up, and rotating or flagging it posts that id back - so
+        for about half a minute after every scan each of those taps hit a
+        404. Roland saw it on 2026-11-17: the rebuild ran at 16:59:38 and
+        his tap on the trash came back "Vormerken fehlgeschlagen". Note
+        what AUTOINCREMENT bought us in the meantime: reissued ids were
+        always ABOVE every id ever handed out, so a stale tap failed
+        loudly instead of silently flagging some other family photo.
+
+        KEEPING THE ROW ALSO KEEPS ``shown``, which is the whole point of
+        the shuffle bag. Until 2026-10-30 the rebuild hard-coded
+        ``shown = 0``, so the "every photo once before any repeat" promise
+        only ever covered a single hour - about 120 pictures (measured on
+        the Pi at the time: 29 of 53,460 marked shown, against a full pass
+        of some 18 days of continuous running). That used to need an
+        explicit carry-over by path; with the row surviving, it simply
+        falls out of the upsert, which deliberately leaves ``shown``
+        alone. A new file still enters at ``shown = 0`` and joins the cycle
+        already under way, and a file that vanished and came back is a new
+        row - due again, and with a new id.
+
+        ``photo_flags`` stays keyed by PATH all the same: a path is the
+        durable identity of a picture, an id only the identity of a row.
         """
         with self._connect() as conn:
-            shown = {
-                row["path"]
-                for row in conn.execute("SELECT path FROM photos WHERE shown = 1")
-            }
-            conn.execute("DELETE FROM photos")
-            conn.executemany(
-                "INSERT OR IGNORE INTO photos (path, mtime, kind, shown)"
-                " VALUES (?, ?, ?, ?)",
-                (
-                    (path, mtime, kind, 1 if path in shown else 0)
-                    for path, mtime, kind in photos
-                ),
+            # A temp table rather than a NOT IN over 50k bound parameters.
+            conn.execute(
+                "CREATE TEMP TABLE incoming"
+                " (path TEXT PRIMARY KEY, mtime REAL NOT NULL, kind TEXT NOT NULL)"
             )
-            row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()
+            try:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO incoming (path, mtime, kind)"
+                    " VALUES (?, ?, ?)",
+                    photos,
+                )
+                conn.execute(
+                    "DELETE FROM photos WHERE path NOT IN (SELECT path FROM incoming)"
+                )
+                # "WHERE true" is not decoration: SQLite cannot otherwise tell
+                # an upsert clause from a join constraint after a SELECT.
+                conn.execute(
+                    "INSERT INTO photos (path, mtime, kind, shown)"
+                    " SELECT path, mtime, kind, 0 FROM incoming WHERE true"
+                    " ON CONFLICT(path) DO UPDATE SET"
+                    " mtime = excluded.mtime, kind = excluded.kind"
+                )
+                row = conn.execute("SELECT COUNT(*) AS n FROM photos").fetchone()
+            finally:
+                conn.execute("DROP TABLE incoming")
         return int(row["n"])
 
     def list_photo_entries(self) -> list[tuple[str, float, str]]:
