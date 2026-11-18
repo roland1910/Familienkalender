@@ -448,7 +448,32 @@ def test_undecodable_video_moves_on_to_the_next_item(page: Page, server_url: str
 DELETE_BUTTON = "#slideshow-mark-delete"
 CCW_BUTTON = "#slideshow-rotate-ccw"
 CW_BUTTON = "#slideshow-rotate-cw"
-CONTROL_BUTTONS = (DELETE_BUTTON, CCW_BUTTON, CW_BUTTON)
+BACK_BUTTON = "#slideshow-back"
+CONTROL_BUTTONS = (DELETE_BUTTON, BACK_BUTTON, CCW_BUTTON, CW_BUTTON)
+
+
+def _disc_box(page: Page, selector: str) -> dict:
+    """The VISIBLE disc of a control, not its (larger) finger target.
+
+    Since 17.11.2026 the button is 1.5x the disc so it is easier to hit; the
+    extra area is transparent and drawn by nothing, so questions about what
+    the icons cover have to be asked of the disc. It is a ::before
+    pseudo-element, which Playwright cannot measure, so it is derived from
+    the button's centre and the --control-size custom property.
+    """
+    box = page.locator(selector).bounding_box()
+    assert box is not None, selector
+    size = page.evaluate(
+        "() => parseFloat(getComputedStyle(document.querySelector('.slideshow-controls'))"
+        ".getPropertyValue('--control-size'))"
+    )
+    assert size > 0, size
+    return {
+        "x": box["x"] + (box["width"] - size) / 2,
+        "y": box["y"] + (box["height"] - size) / 2,
+        "width": size,
+        "height": size,
+    }
 
 
 def _mock_sequence(page: Page, names: list[str]) -> None:
@@ -1084,6 +1109,150 @@ def test_marking_for_deletion_moves_on_to_the_next_item(
     expect(page.locator(".slideshow-overlay")).to_have_count(1)
 
 
+# -- a bigger finger target and stepping back (17.11.2026) -------------------
+#
+# Roland, after using the icons at the display: "vergrößere den bereich um
+# die icons für bild drehen und bild löschen um das 1,5 fache der größe des
+# icons, so das man die icons leichter trifft" and "ergänze links unten über
+# dem drehen icon noch ein weiters icon mit bild zurück. dies soll auch
+# funktionieren wenn man aus einem bild in den kalender gewechselt hat und
+# dann über den play button die diashow fortsetzt".
+
+
+def test_the_finger_target_is_half_again_the_visible_disc(
+    page: Page, server_url: str
+) -> None:
+    _inject_fast_timings(page, controls_ms=20000)
+    _mock_slideshow(page)
+    _start_slideshow(page, server_url)
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+
+    for selector in CONTROL_BUTTONS:
+        box = page.locator(selector).bounding_box()
+        disc = _disc_box(page, selector)
+        assert box is not None, selector
+        assert box["width"] == pytest.approx(disc["width"] * 1.5, abs=1), (selector, box)
+        assert box["height"] == pytest.approx(disc["height"] * 1.5, abs=1), (selector, box)
+        # Centred on the disc: the extra area grows evenly outwards, so the
+        # icon stays where the eye learned it.
+        assert box["x"] + box["width"] / 2 == pytest.approx(
+            disc["x"] + disc["width"] / 2, abs=1
+        ), selector
+        assert box["y"] + box["height"] / 2 == pytest.approx(
+            disc["y"] + disc["height"] / 2, abs=1
+        ), selector
+
+
+def test_the_targets_of_two_stacked_icons_do_not_overlap(
+    page: Page, server_url: str
+) -> None:
+    """Back sits above turn-left; one must not steal the other's tap."""
+    _inject_fast_timings(page, controls_ms=20000)
+    _mock_slideshow(page)
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    _start_slideshow(page, server_url)
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+
+    back = page.locator(BACK_BUTTON).bounding_box()
+    ccw = page.locator(CCW_BUTTON).bounding_box()
+    assert back is not None and ccw is not None
+    assert back["y"] + back["height"] <= ccw["y"] + 1, (back, ccw)
+    assert back["x"] == pytest.approx(ccw["x"], abs=1), "same column"
+
+
+def test_back_is_dead_on_the_very_first_picture(page: Page, server_url: str) -> None:
+    """Dimmed rather than removed — a control that comes and goes is harder
+    to learn than one that is plainly inert."""
+    _inject_fast_timings(page, controls_ms=20000, interval_ms=60000)
+    _mock_sequence(page, ["eins.jpg", "zwei.jpg"])
+    _start_slideshow(page, server_url)
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    expect(page.locator(BACK_BUTTON)).to_be_disabled()
+
+
+def test_back_returns_to_the_previous_picture(page: Page, server_url: str) -> None:
+    _inject_fast_timings(page, controls_ms=20000, interval_ms=400)
+    _mock_sequence(page, ["eins.jpg", "zwei.jpg", "drei.jpg"])
+    _start_slideshow(page, server_url)
+    expect(page.locator(".slideshow-caption")).to_have_text("zwei.jpg", timeout=5000)
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    expect(page.locator(BACK_BUTTON)).to_be_enabled()
+    page.locator(BACK_BUTTON).click()
+    expect(page.locator(".slideshow-caption")).to_have_text("eins.jpg")
+    # Tapping an icon never ends the slideshow, and it buys another window.
+    expect(page.locator(".slideshow-overlay")).to_have_count(1)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    # And now there is nothing further back.
+    expect(page.locator(BACK_BUTTON)).to_be_disabled()
+
+
+def test_waiting_after_a_step_back_replays_forward(page: Page, server_url: str) -> None:
+    """The picture that was already on its way comes back, not a new one —
+    otherwise stepping back to look at something would cost you it."""
+    _inject_fast_timings(page, controls_ms=600, interval_ms=400)
+    _mock_sequence(page, ["eins.jpg", "zwei.jpg", "drei.jpg", "vier.jpg"])
+    _start_slideshow(page, server_url)
+    expect(page.locator(".slideshow-caption")).to_have_text("zwei.jpg", timeout=5000)
+
+    _tap_beside_the_icons(page)
+    page.locator(BACK_BUTTON).click()
+    expect(page.locator(".slideshow-caption")).to_have_text("eins.jpg")
+    expect(page.locator(".slideshow-caption")).to_have_text("zwei.jpg", timeout=5000)
+
+
+def test_the_trail_survives_a_trip_through_the_calendar(
+    page: Page, server_url: str
+) -> None:
+    """Roland's case: tap out of a picture into the calendar, resume with the
+    play button, and stepping back still reaches what was on screen before."""
+    _inject_fast_timings(page, controls_ms=600, interval_ms=60000)
+    _mock_sequence(page, ["eins.jpg", "zwei.jpg", "drei.jpg"])
+    _start_slideshow(page, server_url)
+    expect(page.locator(".slideshow-caption")).to_have_text("eins.jpg")
+
+    # Two taps: the first opens the icons, the second beside them ends it.
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-controls")).to_be_visible()
+    _tap_beside_the_icons(page)
+    expect(page.locator(".slideshow-overlay")).to_have_count(0)
+
+    page.locator("#btn-slideshow-now").click()
+    expect(page.locator(".slideshow-overlay")).to_be_visible(timeout=5000)
+    expect(page.locator(".slideshow-caption")).to_have_text("zwei.jpg")
+
+    _tap_beside_the_icons(page)
+    expect(page.locator(BACK_BUTTON)).to_be_enabled()
+    page.locator(BACK_BUTTON).click()
+    expect(page.locator(".slideshow-caption")).to_have_text("eins.jpg")
+
+
+def test_a_picture_marked_for_deletion_cannot_be_stepped_back_onto(
+    page: Page, server_url: str
+) -> None:
+    """The backend stops handing it out; the trail must agree."""
+    _inject_fast_timings(page, controls_ms=20000, interval_ms=400)
+    _mock_sequence(page, ["eins.jpg", "zwei.jpg", "drei.jpg"])
+    page.route(
+        "**/api/slideshow/mark-delete/**",
+        lambda route: route.fulfill(json={"id": 2, "delete_requested": True}),
+    )
+    _start_slideshow(page, server_url)
+    expect(page.locator(".slideshow-caption")).to_have_text("zwei.jpg", timeout=5000)
+
+    _tap_beside_the_icons(page)
+    page.locator(DELETE_BUTTON).click()
+    expect(page.locator(".slideshow-caption")).to_have_text("drei.jpg", timeout=5000)
+
+    _tap_beside_the_icons(page)
+    page.locator(BACK_BUTTON).click()
+    expect(page.locator(".slideshow-caption")).to_have_text("eins.jpg")
+
+
 def test_the_icons_do_not_cover_the_vertical_edge_overlays(
     page: Page, server_url: str
 ) -> None:
@@ -1113,6 +1282,9 @@ def test_the_icons_do_not_cover_the_vertical_edge_overlays(
             and b["y"] < a["y"] + a["height"]
         )
 
+    # The DISCS must stay clear of the badges. The enlarged finger target
+    # around them may overlap: it paints nothing, and the badges carry
+    # `pointer-events: none`, so it can neither hide a word nor eat a tap.
     for badge in (".slideshow-folders", ".slideshow-taken", ".slideshow-caption"):
         for control in CONTROL_BUTTONS:
-            assert not overlaps(box(badge), box(control)), (badge, control)
+            assert not overlaps(box(badge), _disc_box(page, control)), (badge, control)

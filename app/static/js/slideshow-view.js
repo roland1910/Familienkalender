@@ -43,6 +43,7 @@ import {
   rotationStyle,
   SLIDE_INTERVAL_MS,
 } from "./slideshow-media.js";
+import { createTrail } from "./slideshow-trail.js";
 import { startTransit, stopTransit } from "./transit-view.js";
 
 // Fade duration; kept in sync with the CSS transition on .slideshow-layer.
@@ -88,8 +89,17 @@ let pendingAdvance = null;
 let pausedVideo = null;
 // Resolvers of showNext() calls that are waiting for the icons to go away.
 let controlsWaiters = [];
-// The item currently on screen: what the icons act on.
+// The item currently on screen: what the icons act on. It is the very
+// object the server handed us and the very object the trail holds, so a
+// rotation applied here is still there when the viewer steps back to it.
 let currentMedia = null;
+
+// The trail behind the "Bild zurück" icon. Created ONCE per page load and
+// deliberately NOT cleared by stopSlideshow: Roland asked for stepping back
+// to keep working "wenn man aus einem bild in den kalender gewechselt hat
+// und dann über den play button die diashow fortsetzt" — to the viewer that
+// is one continuous viewing session, whatever the overlay did in between.
+const trail = createTrail();
 
 function clearTimer() {
   if (timer !== null) {
@@ -205,7 +215,8 @@ function buildControls() {
   const node = el("div", "slideshow-controls");
   node.hidden = true;
   // Positions are Roland's: bin top right, turn left bottom left, turn right
-  // bottom right — the two turns mirror the direction they stand for.
+  // bottom right — the two turns mirror the direction they stand for — and
+  // "picture back" directly above the turn-left icon.
   node.append(
     buildControl(
       "slideshow-mark-delete",
@@ -213,6 +224,7 @@ function buildControls() {
       "Dieses Bild zum Löschen vormerken",
       "slideshow-control-delete",
     ),
+    buildControl("slideshow-back", "previous", "Vorheriges Bild", "slideshow-control-back"),
     buildControl(
       "slideshow-rotate-ccw",
       "rotate-ccw",
@@ -229,6 +241,9 @@ function buildControls() {
   node.querySelector("#slideshow-mark-delete").addEventListener("click", () => {
     markCurrentForDeletion();
   });
+  node.querySelector("#slideshow-back").addEventListener("click", () => {
+    showPreviousPicture();
+  });
   node.querySelector("#slideshow-rotate-ccw").addEventListener("click", () => {
     turnCurrent("ccw");
   });
@@ -236,6 +251,17 @@ function buildControls() {
     turnCurrent("cw");
   });
   return node;
+}
+
+/**
+ * Keep the back icon's enabled state in step with the trail. Called every
+ * time the icons come up, which is the only moment it can be seen — so
+ * there is no state to keep in sync anywhere else.
+ */
+function updateBackControl() {
+  const button = controlsNode?.querySelector("#slideshow-back");
+  if (button === null || button === undefined) return;
+  button.disabled = !trail.canGoBack();
 }
 
 function buildOverlay() {
@@ -391,6 +417,7 @@ function showControls() {
   controlsNode.hidden = false;
   clearTimer(); // `pendingAdvance` still holds what was armed
   pauseVideoForControls();
+  updateBackControl();
   armControls();
   const up = controlsAreVisible();
   // The departure board belongs to this window, not to the slideshow: an
@@ -526,6 +553,9 @@ async function markCurrentForDeletion() {
     return;
   }
   if (!running) return;
+  // The backend stops handing it out, so stepping back onto it would
+  // contradict the tap just as much as leaving it on screen would.
+  trail.forget(media.id);
   showNotice("Zum Löschen vorgemerkt.");
   // The backend stops handing a marked photo out, so leaving it on screen
   // would contradict the tap — move on at once. Hiding the icons first
@@ -536,9 +566,17 @@ async function markCurrentForDeletion() {
   if (context !== null) scheduleNext(context, 0);
 }
 
+/**
+ * Show the item that follows the one on screen: replayed from the trail
+ * when the viewer has stepped back, otherwise freshly drawn.
+ */
 async function showNext(built) {
   if (!running) return;
-  const { caption, takenAt, folderTrail } = built;
+  const replayed = trail.replayNext();
+  if (replayed !== null) {
+    await present(replayed, built, { waitForControls: true });
+    return;
+  }
   let media;
   try {
     media = await fetchNextPhoto();
@@ -548,6 +586,44 @@ async function showNext(built) {
     return;
   }
   if (!running) return;
+  trail.record(media);
+  await present(media, built, { waitForControls: true });
+}
+
+/**
+ * Step back to the previous picture (the "Bild zurück" icon).
+ *
+ * The cursor is only moved back for good once the picture is actually on
+ * screen: a file that vanished since it was shown must not cost the viewer
+ * their place in the trail.
+ */
+async function showPreviousPicture() {
+  armControls(); // tapping an icon buys another window, like the others
+  if (!running || context === null) return;
+  const previous = trail.back();
+  if (previous === null) return; // nothing behind; the icon is disabled too
+  // Deliberately NOT waiting for the icons to go away: that rule exists so
+  // the picture never changes UNDER a finger, and here the finger is what
+  // asked for the change.
+  const shown = await present(previous, context, { waitForControls: false });
+  if (!shown) {
+    trail.replayNext(); // undo the step; we are still on the old picture
+    showNotice("Vorheriges Bild nicht mehr verfügbar.");
+  }
+  updateBackControl();
+}
+
+/**
+ * Put `media` on screen. Returns whether it got there — the caller decides
+ * what a failure means (skip ahead, or stay where we are).
+ *
+ * `waitForControls` holds a finished swap back while the operating icons are
+ * up, so an automatic advance cannot change the picture mid-tap; an
+ * explicitly requested change passes false.
+ */
+async function present(media, built, { waitForControls }) {
+  if (!running) return false;
+  const { caption, takenAt, folderTrail } = built;
 
   const isVideo = isVideoMedia(media);
   const url = photoImageUrl(media.id);
@@ -559,15 +635,15 @@ async function showNext(built) {
   } catch {
     // Broken, vanished or undecodable file — skip it. A bad video is retried
     // quickly so the screen never sits still on it.
-    if (running) scheduleNext(built, errorDelayMs(media));
-    return;
+    if (running && waitForControls) scheduleNext(built, errorDelayMs(media));
+    return false;
   }
-  if (!running) return;
+  if (!running) return false;
   // The icons may have come up while this item was loading. Swapping now
   // would change the picture under the finger that is aiming at them, so
   // the already-loaded item waits in the invisible layer until they go.
-  await whenControlsHidden();
-  if (!running) return;
+  if (waitForControls) await whenControlsHidden();
+  if (!running) return false;
 
   // The previous video (if any) is done the moment the new layer takes over.
   releaseCurrentVideo();
@@ -579,7 +655,9 @@ async function showNext(built) {
   // The stored rotation belongs to this item; apply it before the fade so
   // the picture never appears upright for a frame and then jumps.
   applyRotation(element, media.rotation);
-  currentMedia = { id: media.id, rotation: media.rotation };
+  // The very object from the trail, so a turn applied now is still applied
+  // when the viewer steps back to this picture later.
+  currentMedia = media;
   layers[next].classList.add("slideshow-layer-visible");
   layers[activeLayer].classList.remove("slideshow-layer-visible");
   activeLayer = next;
@@ -592,9 +670,13 @@ async function showNext(built) {
 
   if (isVideo) {
     playVideo(element, media, built);
+    // Stepping back onto a clip while the icons are up must not start it
+    // playing behind them; resumeAdvance picks it up when they go.
+    if (controlsAreVisible()) pauseVideoForControls();
   } else {
     scheduleNext(built, advanceDelayMs(media));
   }
+  return true;
 }
 
 /** Start the slideshow inside `container` (idempotent). */

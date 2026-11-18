@@ -2041,51 +2041,93 @@ body.mode-groundwater .status-badge {
   inset: 0;
   z-index: 2;
   pointer-events: none;
+
+  /* The visible disc: 72px instead of the usual 48px, because these are
+     aimed at in the dark, from two metres, on a photo of unknown
+     brightness — hence the dark disc and the light ring, which stay visible
+     on a white beach and on a night shot. */
+  --control-size: 72px;
+  /* The INVISIBLE finger target around it (Roland, 17.11.2026: "vergrößere
+     den bereich um die icons ... so das man die icons leichter trifft auf
+     dem touch display"). Same idea as DOT_HIT_SIZE on the groundwater map:
+     what the eye needs and what a finger needs are different sizes, and
+     growing the disc itself would just put more paint over the photo. */
+  --control-hit-size: calc(var(--control-size) * 1.5);
+  /* The target is centred on the disc, so it overhangs by half the growth
+     on every side. The offsets below subtract that, which keeps the DISC
+     exactly where it was — clear of the vertical filename, date and folder
+     overlays that hug those edges (Etappe 34). */
+  --control-overhang: calc((var(--control-hit-size) - var(--control-size)) / 2);
+  --control-edge-block: calc(24px - var(--control-overhang));
+  --control-edge-inline: calc(72px - var(--control-overhang));
 }
 
-/* 72px instead of the usual 48px: these are aimed at in the dark, from two
-   metres, on a photo of unknown brightness — hence the dark disc and the
-   light ring, which stay visible on a white beach and on a night shot. */
 .slideshow-control {
   position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
+  width: var(--control-hit-size);
+  height: var(--control-hit-size);
   padding: 0;
   pointer-events: auto;
-  /* Stops WebKitGTK (the kiosk browser) from painting its native, light
-     control background over the deliberate translucent disc. */
+  /* The button itself is the (transparent) target; ::before paints the disc.
+     `appearance: none` stops WebKitGTK (the kiosk browser) from painting its
+     native, light control background over it. */
   appearance: none;
   color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  border: 2px solid rgba(255, 255, 255, 0.8);
+  background: none;
+  border: none;
   border-radius: 50%;
   cursor: pointer;
 }
 
+.slideshow-control::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--control-size);
+  height: var(--control-size);
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
 .slideshow-control svg {
+  position: relative; /* above the disc drawn by ::before */
   width: 40px;
   height: 40px;
 }
 
-/* Inset from the right/left edge far enough to clear the vertical filename,
-   date and folder overlays that hug those edges (Etappe 34) — the overlays
-   stay where they are, the icons step aside. */
+/* Nothing to step back to yet: dimmed rather than removed. A control that
+   comes and goes is harder to learn than one that is plainly inert. */
+.slideshow-control:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .slideshow-control-delete {
-  top: 24px;
-  right: 72px;
+  top: var(--control-edge-block);
+  right: var(--control-edge-inline);
 }
 
 .slideshow-control-ccw {
-  bottom: 24px;
-  left: 72px;
+  bottom: var(--control-edge-block);
+  left: var(--control-edge-inline);
 }
 
 .slideshow-control-cw {
-  bottom: 24px;
-  right: 72px;
+  bottom: var(--control-edge-block);
+  right: var(--control-edge-inline);
+}
+
+/* Directly above the turn-left icon, one full target higher: the two finger
+   targets meet without overlapping, so neither can steal the other's tap. */
+.slideshow-control-back {
+  bottom: calc(var(--control-edge-block) + var(--control-hit-size));
+  left: var(--control-edge-inline);
 }
 
 /* Short confirmation after a tap ("Zum Löschen vorgemerkt."). Centred at the

@@ -191,6 +191,16 @@ const ICONS = {
   // and the counter-clockwise one mirrors it.
   "rotate-cw": [...turnArrow(true)],
   "rotate-ccw": [...turnArrow(false)],
+  // Step back to the previous picture. The usual "skip back" shape: a bar
+  // and a triangle pointing at it. Deliberately NOT another arrow — it sits
+  // right above rotate-ccw, and two curved arrows beside each other would
+  // be a coin toss from two metres. It is the mirror of the `play` triangle
+  // used by the radar and by the toolbar's resume button, which is the
+  // association we want: that one goes on, this one goes back.
+  previous: [
+    filled("rect", { x: 5, y: 4.5, width: 3.2, height: 15, rx: 1.2 }),
+    filled("polygon", { points: "19.5 4.5 19.5 19.5 9.5 12" }),
+  ],
 };
 
 /** The names `createIcon` accepts (exported for tests). */
